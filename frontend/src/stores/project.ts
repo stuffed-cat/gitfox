@@ -18,11 +18,21 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
-  async function fetchProject(slug: string) {
+  // 支持两种方式：slug 或 owner/repo
+  async function fetchProject(ownerOrSlug: string, repo?: string) {
     loading.value = true
     try {
-      currentProject.value = await api.projects.get(slug)
-      projectStats.value = await api.projects.getStats(slug)
+      if (repo) {
+        // owner/repo 格式
+        currentProject.value = await api.projects.getByPath(ownerOrSlug, repo)
+        if (currentProject.value) {
+          projectStats.value = await api.projects.getStats(currentProject.value.slug)
+        }
+      } else {
+        // slug 格式（兼容旧代码）
+        currentProject.value = await api.projects.get(ownerOrSlug)
+        projectStats.value = await api.projects.getStats(ownerOrSlug)
+      }
     } finally {
       loading.value = false
     }

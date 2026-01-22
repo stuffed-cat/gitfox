@@ -39,7 +39,7 @@
         </div>
         <div class="branch-actions">
           <router-link
-            :to="`/projects/${project?.slug}/files?ref=${branch.name}`"
+            :to="`/${project?.owner_name}/${project?.slug}/-/tree/${branch.name}`"
             class="btn btn-outline btn-sm"
           >
             浏览

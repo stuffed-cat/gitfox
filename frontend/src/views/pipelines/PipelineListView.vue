@@ -20,7 +20,7 @@
       <router-link
         v-for="pipeline in pipelines"
         :key="pipeline.id"
-        :to="`/projects/${project?.slug}/pipelines/${pipeline.id}`"
+        :to="`/${project?.owner_name}/${project?.slug}/-/pipelines/${pipeline.id}`"
         class="pipeline-item"
       >
         <div class="pipeline-status">

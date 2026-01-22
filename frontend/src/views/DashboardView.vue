@@ -198,7 +198,7 @@
               <router-link 
                 v-for="project in recentProjects" 
                 :key="project.id" 
-                :to="`/projects/${project.slug}`"
+                :to="`/${project.owner_name || 'unknown'}/${project.slug}`"
                 class="quick-access-item"
               >
                 <span class="project-avatar">{{ project.name.charAt(0) }}</span>

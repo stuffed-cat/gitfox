@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::models::{
     AddMemberRequest, CreateProjectRequest, MemberRole, Project, ProjectMember,
-    ProjectStats, ProjectVisibility, UpdateProjectRequest,
+    ProjectStats, ProjectVisibility, UpdateProjectRequest, ProjectWithOwner,
 };
 
 pub struct ProjectService;
@@ -67,12 +67,36 @@ impl ProjectService {
             .ok_or_else(|| AppError::NotFound("Project not found".to_string()))
     }
 
-    pub async fn get_project_by_slug(pool: &PgPool, slug: &str) -> AppResult<Project> {
-        sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE slug = $1")
-            .bind(slug)
-            .fetch_optional(pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Project not found".to_string()))
+    pub async fn get_project_by_slug(pool: &PgPool, slug: &str) -> AppResult<ProjectWithOwner> {
+        sqlx::query_as::<_, ProjectWithOwner>(
+            r#"
+            SELECT p.*, u.username as owner_name, u.avatar_url as owner_avatar
+            FROM projects p
+            JOIN users u ON p.owner_id = u.id
+            WHERE p.slug = $1
+            "#
+        )
+        .bind(slug)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Project not found".to_string()))
+    }
+
+    /// GitLab/GitHub 风格：通过 owner/repo 获取项目
+    pub async fn get_project_by_owner_and_slug(pool: &PgPool, owner: &str, repo: &str) -> AppResult<ProjectWithOwner> {
+        sqlx::query_as::<_, ProjectWithOwner>(
+            r#"
+            SELECT p.*, u.username as owner_name, u.avatar_url as owner_avatar
+            FROM projects p
+            JOIN users u ON p.owner_id = u.id
+            WHERE LOWER(u.username) = LOWER($1) AND LOWER(p.slug) = LOWER($2)
+            "#
+        )
+        .bind(owner)
+        .bind(repo)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Project '{}/{}' not found", owner, repo)))
     }
 
     pub async fn list_projects(
@@ -80,16 +104,18 @@ impl ProjectService {
         user_id: Option<Uuid>,
         page: u32,
         per_page: u32,
-    ) -> AppResult<Vec<Project>> {
+    ) -> AppResult<Vec<ProjectWithOwner>> {
         let offset = (page.saturating_sub(1)) * per_page;
 
         let projects = if let Some(uid) = user_id {
-            sqlx::query_as::<_, Project>(
+            sqlx::query_as::<_, ProjectWithOwner>(
                 r#"
-                SELECT p.* FROM projects p
+                SELECT p.*, u.username as owner_name, u.avatar_url as owner_avatar
+                FROM projects p
+                JOIN users u ON p.owner_id = u.id
                 LEFT JOIN project_members pm ON p.id = pm.project_id
                 WHERE p.visibility = 'public' OR pm.user_id = $1
-                GROUP BY p.id
+                GROUP BY p.id, u.username, u.avatar_url
                 ORDER BY p.updated_at DESC
                 LIMIT $2 OFFSET $3
                 "#
@@ -100,8 +126,15 @@ impl ProjectService {
             .fetch_all(pool)
             .await?
         } else {
-            sqlx::query_as::<_, Project>(
-                "SELECT * FROM projects WHERE visibility = 'public' ORDER BY updated_at DESC LIMIT $1 OFFSET $2"
+            sqlx::query_as::<_, ProjectWithOwner>(
+                r#"
+                SELECT p.*, u.username as owner_name, u.avatar_url as owner_avatar
+                FROM projects p
+                JOIN users u ON p.owner_id = u.id
+                WHERE visibility = 'public'
+                ORDER BY updated_at DESC
+                LIMIT $1 OFFSET $2
+                "#
             )
             .bind(per_page as i64)
             .bind(offset as i64)

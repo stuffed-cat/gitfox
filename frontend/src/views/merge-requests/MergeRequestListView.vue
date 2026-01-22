@@ -24,7 +24,7 @@
           </button>
         </div>
         <router-link
-          :to="`/projects/${project?.slug}/merge-requests/new`"
+          :to="`/${project?.owner_name}/${project?.slug}/-/merge_requests/new`"
           class="btn btn-primary"
         >
           + 新建合并请求
@@ -45,7 +45,7 @@
       <router-link
         v-for="mr in filteredMRs"
         :key="mr.id"
-        :to="`/projects/${project?.slug}/merge-requests/${mr.iid}`"
+        :to="`/${project?.owner_name}/${project?.slug}/-/merge_requests/${mr.iid}`"
         class="mr-item"
       >
         <div class="mr-main">

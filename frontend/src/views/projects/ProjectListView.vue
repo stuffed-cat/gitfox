@@ -107,7 +107,7 @@
         <router-link
           v-for="project in filteredProjects"
           :key="project.id"
-          :to="`/projects/${project.slug}`"
+          :to="`/${project.owner_name || 'unknown'}/${project.slug}`"
           class="project-card"
         >
           <div class="project-card-header">
@@ -116,7 +116,7 @@
             </div>
             <div class="project-title">
               <h3>{{ project.name }}</h3>
-              <span class="project-path">{{ project.slug }}</span>
+              <span class="project-path">{{ project.owner_name }}/{{ project.slug }}</span>
             </div>
           </div>
           
@@ -170,7 +170,7 @@
         <router-link
           v-for="project in filteredProjects"
           :key="project.id"
-          :to="`/projects/${project.slug}`"
+          :to="`/${project.owner_name || 'unknown'}/${project.slug}`"
           class="list-item"
         >
           <div class="col-name">

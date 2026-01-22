@@ -18,28 +18,28 @@
       </div>
       
       <nav class="project-nav">
-        <router-link :to="`/projects/${project.slug}`" exact-active-class="active">
+        <router-link :to="projectPath" exact-active-class="active">
           概览
         </router-link>
-        <router-link :to="`/projects/${project.slug}/files`" active-class="active">
+        <router-link :to="`${projectPath}/-/tree/${project.default_branch}`" active-class="active">
           文件
         </router-link>
-        <router-link :to="`/projects/${project.slug}/commits`" active-class="active">
+        <router-link :to="`${projectPath}/-/commits/${project.default_branch}`" active-class="active">
           提交
         </router-link>
-        <router-link :to="`/projects/${project.slug}/branches`" active-class="active">
+        <router-link :to="`${projectPath}/-/branches`" active-class="active">
           分支
         </router-link>
-        <router-link :to="`/projects/${project.slug}/tags`" active-class="active">
+        <router-link :to="`${projectPath}/-/tags`" active-class="active">
           标签
         </router-link>
-        <router-link :to="`/projects/${project.slug}/merge-requests`" active-class="active">
+        <router-link :to="`${projectPath}/-/merge_requests`" active-class="active">
           合并请求
         </router-link>
-        <router-link :to="`/projects/${project.slug}/pipelines`" active-class="active">
+        <router-link :to="`${projectPath}/-/pipelines`" active-class="active">
           流水线
         </router-link>
-        <router-link :to="`/projects/${project.slug}/settings`" active-class="active">
+        <router-link :to="`${projectPath}/-/settings`" active-class="active">
           设置
         </router-link>
       </nav>
@@ -51,7 +51,7 @@
     
     <div v-else class="empty-state">
       <h3>项目不存在</h3>
-      <router-link to="/projects" class="btn btn-primary">返回项目列表</router-link>
+      <router-link to="/" class="btn btn-primary">返回首页</router-link>
     </div>
   </div>
 </template>
@@ -67,6 +67,12 @@ const projectStore = useProjectStore()
 const project = computed(() => projectStore.currentProject)
 const stats = computed(() => projectStore.projectStats)
 const loading = computed(() => projectStore.loading)
+
+// GitLab 风格的项目路径: /{owner}/{repo}
+const projectPath = computed(() => {
+  if (!project.value) return ''
+  return `/${project.value.owner_name}/${project.value.slug}`
+})
 
 function visibilityClass(visibility: string) {
   return {
@@ -85,11 +91,12 @@ function visibilityText(visibility: string) {
   return map[visibility] || visibility
 }
 
+// 监听路由参数变化，通过 owner/repo 获取项目
 watch(
-  () => route.params.slug,
-  (slug) => {
-    if (slug && typeof slug === 'string') {
-      projectStore.fetchProject(slug)
+  () => [route.params.owner, route.params.repo],
+  ([owner, repo]) => {
+    if (owner && repo && typeof owner === 'string' && typeof repo === 'string') {
+      projectStore.fetchProject(owner, repo)
     }
   },
   { immediate: true }

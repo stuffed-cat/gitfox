@@ -54,6 +54,16 @@ pub async fn get_project(
     Ok(HttpResponse::Ok().json(project))
 }
 
+/// GitLab/GitHub 风格: GET /api/v1/repos/{owner}/{repo}
+pub async fn get_project_by_path(
+    pool: web::Data<PgPool>,
+    path: web::Path<(String, String)>,
+) -> AppResult<HttpResponse> {
+    let (owner, repo) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_slug(pool.get_ref(), &owner, &repo).await?;
+    Ok(HttpResponse::Ok().json(project))
+}
+
 pub async fn update_project(
     pool: web::Data<PgPool>,
     path: web::Path<String>,

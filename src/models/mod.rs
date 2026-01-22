@@ -7,6 +7,7 @@ pub mod tag;
 pub mod merge_request;
 pub mod pipeline;
 pub mod webhook;
+pub mod namespace;
 
 pub use user::*;
 pub use project::*;
@@ -17,3 +18,4 @@ pub use tag::*;
 pub use merge_request::*;
 pub use pipeline::*;
 pub use webhook::*;
+pub use namespace::*;

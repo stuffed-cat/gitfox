@@ -8,10 +8,15 @@ pub mod tag;
 pub mod merge_request;
 pub mod pipeline;
 pub mod webhook;
+pub mod git_http;
+pub mod namespace;
 
 use actix_web::web;
 
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
+    // Git HTTP Smart Protocol routes (must be before API routes)
+    git_http::configure_git_routes(cfg);
+    
     cfg.service(
         web::scope("/api/v1")
             // Auth routes
@@ -85,5 +90,24 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{slug}/webhooks/{id}", web::put().to(webhook::update_webhook))
             .route("/projects/{slug}/webhooks/{id}", web::delete().to(webhook::delete_webhook))
             .route("/projects/{slug}/webhooks/{id}/test", web::post().to(webhook::test_webhook))
+            
+            // GitLab/GitHub style: /repos/{owner}/{repo}
+            .route("/repos/{owner}/{repo}", web::get().to(project::get_project_by_path))
+            
+            // Namespace/Group routes
+            .route("/groups", web::get().to(namespace::list_groups))
+            .route("/groups", web::post().to(namespace::create_group))
+            .route("/groups/{path:.*}", web::get().to(namespace::get_group))
+            .route("/groups/{path:.*}", web::put().to(namespace::update_group))
+            .route("/groups/{path:.*}", web::delete().to(namespace::delete_group))
+            .route("/groups/{path:.*}/members", web::get().to(namespace::list_group_members))
+            .route("/groups/{path:.*}/members", web::post().to(namespace::add_group_member))
+            .route("/groups/{path:.*}/members/{user_id}", web::delete().to(namespace::remove_group_member))
+            .route("/groups/{path:.*}/projects", web::get().to(namespace::list_group_projects))
+            .route("/groups/{path:.*}/subgroups", web::get().to(namespace::list_subgroups))
+            
+            // Namespaces (users + groups unified listing)
+            .route("/namespaces", web::get().to(namespace::list_namespaces))
+            .route("/namespaces/{path:.*}", web::get().to(namespace::get_namespace))
     );
 }

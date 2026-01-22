@@ -31,6 +31,8 @@ export interface Project {
   description?: string
   visibility: 'public' | 'private' | 'internal'
   owner_id: string
+  owner_name?: string
+  owner_avatar?: string
   default_branch: string
   created_at: string
   updated_at: string

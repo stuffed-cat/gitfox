@@ -198,7 +198,8 @@ async function handleSubmit() {
       visibility: form.visibility,
       default_branch: form.default_branch
     })
-    router.push(`/projects/${project.slug}`)
+    // 使用 owner/repo 格式跳转
+    router.push(`/${project.owner_name || 'unknown'}/${project.slug}`)
   } catch (e: any) {
     error.value = e.response?.data?.message || '创建项目失败，请重试'
   } finally {

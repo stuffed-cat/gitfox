@@ -76,3 +76,19 @@ pub struct ProjectStats {
     pub merge_requests_count: i64,
     pub members_count: i64,
 }
+
+/// Project with owner info for API responses
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ProjectWithOwner {
+    pub id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub description: Option<String>,
+    pub visibility: ProjectVisibility,
+    pub owner_id: Uuid,
+    pub default_branch: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub owner_name: String,
+    pub owner_avatar: Option<String>,
+}

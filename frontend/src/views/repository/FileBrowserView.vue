@@ -9,13 +9,13 @@
         </select>
       </div>
       <div class="path-breadcrumb">
-        <router-link :to="`/projects/${project?.slug}/files`" @click="navigateTo('')">
+        <router-link :to="`${projectPath}/-/tree/${currentBranch}`" @click="navigateTo('')">
           {{ project?.name }}
         </router-link>
         <template v-for="(segment, index) in pathSegments" :key="index">
           <span class="separator">/</span>
           <router-link
-            :to="`/projects/${project?.slug}/files/${currentBranch}/${pathSegments.slice(0, index + 1).join('/')}`"
+            :to="`${projectPath}/-/tree/${currentBranch}/${pathSegments.slice(0, index + 1).join('/')}`"
             @click="navigateTo(pathSegments.slice(0, index + 1).join('/'))"
           >
             {{ segment }}
@@ -99,6 +99,12 @@ const currentPath = ref('')
 const treeItems = ref<TreeItem[]>([])
 const fileContent = ref<string | null>(null)
 const viewingFile = ref(false)
+
+// GitLab 风格的项目路径
+const projectPath = computed(() => {
+  if (!props.project?.owner_name) return ''
+  return `/${props.project.owner_name}/${props.project.slug}`
+})
 
 const pathSegments = computed(() => {
   return currentPath.value ? currentPath.value.split('/').filter(Boolean) : []

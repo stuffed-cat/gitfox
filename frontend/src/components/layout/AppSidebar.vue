@@ -4,20 +4,20 @@
       <!-- 你的工作 Section -->
       <div class="nav-section">
         <div class="nav-section-title">你的工作</div>
-        <router-link to="/" class="nav-item">
+        <router-link to="/" class="nav-item" exact-active-class="active">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <path d="M8 1L1 6v8a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1V6L8 1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          <span class="nav-label">首页</span>
+          <span class="nav-label">Home</span>
         </router-link>
-        <router-link to="/projects" class="nav-item">
+        <router-link to="/dashboard/projects" class="nav-item" active-class="active">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <rect x="2" y="2" width="12" height="12" rx="1" stroke="currentColor" stroke-width="1.5"/>
             <path d="M5 6h6M5 9h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
           <span class="nav-label">项目</span>
         </router-link>
-        <router-link to="/groups" class="nav-item">
+        <router-link to="/dashboard/groups" class="nav-item" active-class="active">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <rect x="1" y="3" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
             <rect x="9" y="3" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
@@ -25,20 +25,14 @@
           </svg>
           <span class="nav-label">群组</span>
         </router-link>
-      </div>
-      
-      <!-- 议题与合并请求 Section -->
-      <div class="nav-section">
-        <div class="nav-section-title">议题与合并请求</div>
-        <router-link to="/issues" class="nav-item">
+        <router-link to="/dashboard/issues" class="nav-item" active-class="active">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
             <circle cx="8" cy="8" r="2" fill="currentColor"/>
           </svg>
           <span class="nav-label">议题</span>
-          <span class="nav-badge">0</span>
         </router-link>
-        <router-link to="/merge-requests" class="nav-item">
+        <router-link to="/dashboard/merge-requests" class="nav-item" active-class="active">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <circle cx="4" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/>
             <circle cx="12" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/>
@@ -46,34 +40,15 @@
             <path d="M4 6v2a4 4 0 004 4m4-6v2a4 4 0 01-4 4" stroke="currentColor" stroke-width="1.5"/>
           </svg>
           <span class="nav-label">合并请求</span>
-          <span class="nav-badge">2</span>
         </router-link>
-      </div>
-      
-      <!-- 待办事项 Section -->
-      <div class="nav-section">
-        <div class="nav-section-title">其他</div>
-        <router-link to="/todos" class="nav-item">
+        <router-link to="/dashboard/todos" class="nav-item" active-class="active">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <path d="M3 4h10M3 8h10M3 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
           <span class="nav-label">待办事项列表</span>
           <span class="nav-badge warning">2</span>
         </router-link>
-        <router-link to="/milestones" class="nav-item">
-          <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
-            <path d="M3 8h10M8 3v10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
-          </svg>
-          <span class="nav-label">里程碑</span>
-        </router-link>
-        <router-link to="/snippets" class="nav-item">
-          <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
-            <path d="M5 4l-3 4 3 4M11 4l3 4-3 4M9 2l-2 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          <span class="nav-label">代码片段</span>
-        </router-link>
-        <router-link to="/activity" class="nav-item">
+        <router-link to="/dashboard/activity" class="nav-item" active-class="active">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <path d="M1 8h3l2-5 2 10 2-5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -84,14 +59,14 @@
       <!-- Explore Section -->
       <div class="nav-section">
         <div class="nav-section-title">探索</div>
-        <router-link to="/explore/projects" class="nav-item">
+        <router-link to="/explore/projects" class="nav-item" active-class="active">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
             <path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
           <span class="nav-label">项目</span>
         </router-link>
-        <router-link to="/explore/groups" class="nav-item">
+        <router-link to="/explore/groups" class="nav-item" active-class="active">
           <svg class="nav-icon" viewBox="0 0 16 16" fill="none">
             <circle cx="5" cy="6" r="2" stroke="currentColor" stroke-width="1.5"/>
             <circle cx="11" cy="6" r="2" stroke="currentColor" stroke-width="1.5"/>

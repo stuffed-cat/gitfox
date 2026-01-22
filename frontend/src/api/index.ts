@@ -83,6 +83,11 @@ class ApiClient {
       const response = await this.client.get(`/projects/${slug}`)
       return response.data
     },
+    // GitLab/GitHub 风格：通过 owner/repo 获取项目
+    getByPath: async (owner: string, repo: string): Promise<Project> => {
+      const response = await this.client.get(`/repos/${owner}/${repo}`)
+      return response.data
+    },
     create: async (data: CreateProjectRequest): Promise<Project> => {
       const response = await this.client.post('/projects', data)
       return response.data

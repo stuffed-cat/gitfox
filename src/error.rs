@@ -90,4 +90,31 @@ impl From<actix_web::Error> for AppError {
     }
 }
 
+// Convenience constructors
+impl AppError {
+    pub fn internal<S: Into<String>>(msg: S) -> Self {
+        AppError::InternalError(msg.into())
+    }
+    
+    pub fn not_found<S: Into<String>>(msg: S) -> Self {
+        AppError::NotFound(msg.into())
+    }
+    
+    pub fn bad_request<S: Into<String>>(msg: S) -> Self {
+        AppError::BadRequest(msg.into())
+    }
+    
+    pub fn unauthorized<S: Into<String>>(msg: S) -> Self {
+        AppError::Unauthorized(msg.into())
+    }
+    
+    pub fn forbidden<S: Into<String>>(msg: S) -> Self {
+        AppError::Forbidden(msg.into())
+    }
+    
+    pub fn conflict<S: Into<String>>(msg: S) -> Self {
+        AppError::Conflict(msg.into())
+    }
+}
+
 pub type AppResult<T> = Result<T, AppError>;

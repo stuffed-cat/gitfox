@@ -1,6 +1,8 @@
-use actix_web::{dev::ServiceRequest, Error, HttpMessage};
+use actix_web::{dev::ServiceRequest, Error, HttpMessage, HttpRequest, FromRequest};
 use actix_web::error::ErrorUnauthorized;
 use jsonwebtoken::{decode, DecodingKey, Validation};
+use std::future::{Ready, ready};
+use uuid::Uuid;
 
 use crate::config::AppConfig;
 use crate::models::Claims;
@@ -33,4 +35,101 @@ pub async fn validate_token(req: &ServiceRequest, config: &AppConfig) -> Result<
 
 pub fn extract_user_from_request(req: &ServiceRequest) -> Option<Claims> {
     req.extensions().get::<Claims>().cloned()
+}
+
+/// Extractor for authenticated user (required)
+pub struct AuthenticatedUser {
+    pub user_id: Uuid,
+    pub username: String,
+    pub role: String,
+}
+
+impl FromRequest for AuthenticatedUser {
+    type Error = actix_web::Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+
+    fn from_request(req: &HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
+        let auth_header = req.headers().get("Authorization");
+        
+        let result = (|| {
+            let auth_str = auth_header
+                .ok_or_else(|| ErrorUnauthorized("Missing authorization header"))?
+                .to_str()
+                .map_err(|_| ErrorUnauthorized("Invalid authorization header"))?;
+            
+            if !auth_str.starts_with("Bearer ") {
+                return Err(ErrorUnauthorized("Invalid authorization scheme"));
+            }
+            
+            let token = &auth_str[7..];
+            
+            // Get config from app data
+            let config = req.app_data::<actix_web::web::Data<AppConfig>>()
+                .ok_or_else(|| ErrorUnauthorized("Server configuration error"))?;
+            
+            let token_data = decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(config.jwt_secret.as_bytes()),
+                &Validation::default(),
+            )
+            .map_err(|e| ErrorUnauthorized(format!("Invalid token: {}", e)))?;
+            
+            Ok(AuthenticatedUser {
+                user_id: token_data.claims.user_id,
+                username: token_data.claims.sub,
+                role: format!("{:?}", token_data.claims.role),
+            })
+        })();
+        
+        ready(result)
+    }
+}
+
+/// Extractor for optional authentication (not required)
+pub struct OptionalAuth(Option<AuthenticatedUser>);
+
+impl OptionalAuth {
+    pub fn user_id(&self) -> Option<Uuid> {
+        self.0.as_ref().map(|u| u.user_id)
+    }
+    
+    pub fn user(&self) -> Option<&AuthenticatedUser> {
+        self.0.as_ref()
+    }
+}
+
+impl FromRequest for OptionalAuth {
+    type Error = actix_web::Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+
+    fn from_request(req: &HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
+        let auth_header = req.headers().get("Authorization");
+        
+        let user = (|| {
+            let auth_str = auth_header?.to_str().ok()?;
+            
+            if !auth_str.starts_with("Bearer ") {
+                return None;
+            }
+            
+            let token = &auth_str[7..];
+            
+            let config = req.app_data::<actix_web::web::Data<AppConfig>>()?;
+            
+            let token_data = decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(config.jwt_secret.as_bytes()),
+                &Validation::default(),
+            )
+            .ok()?;
+            
+            Some(AuthenticatedUser {
+                user_id: token_data.claims.user_id,
+                username: token_data.claims.sub,
+                role: format!("{:?}", token_data.claims.role),
+            })
+        })();
+        
+        ready(Ok(OptionalAuth(user)))
+    }
 }

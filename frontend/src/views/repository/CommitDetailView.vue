@@ -28,7 +28,7 @@
             </div>
             <div v-if="commit.parent_sha" class="meta-item">
               <span class="label">父提交:</span>
-              <router-link :to="`/projects/${project?.slug}/commits/${commit.parent_sha}`">
+              <router-link :to="`/${project?.owner_name}/${project?.slug}/-/commit/${commit.parent_sha}`">
                 {{ commit.parent_sha.substring(0, 8) }}
               </router-link>
             </div>
@@ -55,7 +55,7 @@
     
     <div v-else class="empty-state">
       <h3>提交不存在</h3>
-      <router-link :to="`/projects/${project?.slug}/commits`" class="btn btn-primary">
+      <router-link :to="`/${project?.owner_name}/${project?.slug}/-/commits`" class="btn btn-primary">
         返回提交列表
       </router-link>
     </div>

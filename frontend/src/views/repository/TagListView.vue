@@ -33,7 +33,7 @@
         </div>
         <div class="tag-actions">
           <router-link
-            :to="`/projects/${project?.slug}/files?ref=${tag.name}`"
+            :to="`/${project?.owner_name}/${project?.slug}/-/tree/${tag.name}`"
             class="btn btn-outline btn-sm"
           >
             浏览

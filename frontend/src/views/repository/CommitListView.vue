@@ -27,7 +27,7 @@
       >
         <div class="commit-main">
           <router-link
-            :to="`/projects/${project?.slug}/commits/${commit.sha}`"
+            :to="`/${project?.owner_name}/${project?.slug}/-/commit/${commit.sha}`"
             class="commit-message"
           >
             {{ commit.message.split('\n')[0] }}

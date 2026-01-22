@@ -153,3 +153,24 @@ $success-color: $color-success;
 $danger-color: $color-danger;
 $warning-color: $color-warning;
 $info-color: $color-info;
+
+// Text size aliases
+$text-xs: $font-size-xs;
+$text-sm: $font-size-sm;
+$text-base: $font-size-base;
+$text-lg: $font-size-lg;
+$text-xl: $font-size-xl;
+$text-2xl: $font-size-2xl;
+$text-3xl: $font-size-3xl;
+$text-4xl: $font-size-4xl;
+
+// Color aliases
+$color-primary: $brand-primary;
+$color-primary-dark: $primary-dark;
+
+// Border radius aliases
+$radius-sm: $border-radius-sm;
+$radius-md: $border-radius;
+$radius-lg: $border-radius-lg;
+$radius-xl: $border-radius-xl;
+$radius-full: $border-radius-full;

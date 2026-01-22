@@ -53,7 +53,7 @@
       </div>
       
       <div class="form-actions">
-        <router-link :to="`/projects/${project?.slug}/merge-requests`" class="btn btn-outline">
+        <router-link :to="`/${project?.owner_name}/${project?.slug}/-/merge_requests`" class="btn btn-outline">
           取消
         </router-link>
         <button type="submit" class="btn btn-primary" :disabled="loading || !canSubmit">
@@ -115,7 +115,7 @@ async function handleSubmit() {
   
   try {
     const response = await api.createMergeRequest(props.project.id, form)
-    router.push(`/projects/${props.project.slug}/merge-requests/${response.data.iid}`)
+    router.push(`/${props.project.owner_name}/${props.project.slug}/-/merge_requests/${response.data.iid}`)
   } catch (e: any) {
     error.value = e.response?.data?.message || '创建合并请求失败'
   } finally {
