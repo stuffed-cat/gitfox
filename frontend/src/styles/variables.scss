@@ -1,58 +1,155 @@
-// Colors
-$primary-color: #4a90d9;
-$primary-dark: #357abd;
-$secondary-color: #6c757d;
-$success-color: #28a745;
-$danger-color: #dc3545;
-$warning-color: #ffc107;
-$info-color: #17a2b8;
+// GitLab-inspired Design System
+// =============================
 
-// Background colors
+// Brand Colors - Purple Theme
+$purple-50: #f4f0ff;
+$purple-100: #e1d8f8;
+$purple-200: #c3b5eb;
+$purple-300: #a491d8;
+$purple-400: #8b76c9;
+$purple-500: #7b68b8;
+$purple-600: #6e5ba7;
+$purple-700: #5e4a96;
+$purple-800: #4a3a7a;
+$purple-900: #2e2457;
+
+// Primary Brand
+$brand-primary: #6366f1;
+$brand-secondary: #8b5cf6;
+$brand-gradient: linear-gradient(135deg, $brand-primary 0%, $brand-secondary 100%);
+
+// Semantic Colors
+$color-success: #22c55e;
+$color-success-light: #dcfce7;
+$color-warning: #f59e0b;
+$color-warning-light: #fef3c7;
+$color-danger: #ef4444;
+$color-danger-light: #fee2e2;
+$color-error: $color-danger;
+$color-error-light: $color-danger-light;
+$color-info: #3b82f6;
+$color-info-light: #dbeafe;
+
+// Gray Scale
+$gray-50: #f9fafb;
+$gray-100: #f3f4f6;
+$gray-200: #e5e7eb;
+$gray-300: #d1d5db;
+$gray-400: #9ca3af;
+$gray-500: #6b7280;
+$gray-600: #4b5563;
+$gray-700: #374151;
+$gray-800: #1f2937;
+$gray-900: #111827;
+
+// Background Colors
 $bg-primary: #ffffff;
-$bg-secondary: #f8f9fa;
-$bg-dark: #1a1a2e;
-$bg-sidebar: #16213e;
+$bg-secondary: #f9fafb;
+$bg-tertiary: #f3f4f6;
+$bg-dark: #1f2937;
+$bg-sidebar: #1f2937;
+$bg-sidebar-hover: #374151;
+$bg-sidebar-active: rgba(99, 102, 241, 0.15);
 
-// Text colors
-$text-primary: #212529;
-$text-secondary: #6c757d;
-$text-muted: #adb5bd;
-$text-light: #f8f9fa;
+// Text Colors
+$text-primary: #1f2937;
+$text-secondary: #6b7280;
+$text-muted: #9ca3af;
+$text-light: #ffffff;
+$text-link: $brand-primary;
 
 // Border
-$border-color: #dee2e6;
+$border-color: #e5e7eb;
+$border-color-light: #f3f4f6;
+$border-color-dark: #d1d5db;
+$border-radius-sm: 4px;
 $border-radius: 6px;
-$border-radius-lg: 12px;
+$border-radius-lg: 8px;
+$border-radius-xl: 12px;
+$border-radius-full: 9999px;
 
-// Spacing
-$spacing-xs: 4px;
-$spacing-sm: 8px;
-$spacing-md: 16px;
-$spacing-lg: 24px;
-$spacing-xl: 32px;
+// Spacing Scale
+$spacing-0: 0;
+$spacing-1: 4px;
+$spacing-2: 8px;
+$spacing-3: 12px;
+$spacing-4: 16px;
+$spacing-5: 20px;
+$spacing-6: 24px;
+$spacing-8: 32px;
+$spacing-10: 40px;
+$spacing-12: 48px;
+$spacing-16: 64px;
 
-// Font sizes
-$font-size-xs: 12px;
-$font-size-sm: 14px;
-$font-size-base: 16px;
-$font-size-lg: 18px;
-$font-size-xl: 24px;
-$font-size-xxl: 32px;
+// Legacy spacing aliases
+$spacing-xs: $spacing-1;
+$spacing-sm: $spacing-2;
+$spacing-md: $spacing-4;
+$spacing-lg: $spacing-6;
+$spacing-xl: $spacing-8;
+
+// Font Sizes
+$font-size-xs: 11px;
+$font-size-sm: 13px;
+$font-size-base: 14px;
+$font-size-md: 15px;
+$font-size-lg: 16px;
+$font-size-xl: 18px;
+$font-size-2xl: 20px;
+$font-size-3xl: 24px;
+$font-size-4xl: 30px;
+$font-size-xxl: 30px;
+
+// Font Weights
+$font-weight-normal: 400;
+$font-weight-medium: 500;
+$font-weight-semibold: 600;
+$font-weight-bold: 700;
+
+// Line Heights
+$line-height-tight: 1.25;
+$line-height-normal: 1.5;
+$line-height-relaxed: 1.75;
 
 // Shadows
-$shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-$shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
-$shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+$shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+$shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+$shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+$shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
+$shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+$shadow-focus: 0 0 0 3px rgba(99, 102, 241, 0.2);
 
 // Transitions
-$transition-fast: 0.15s ease;
-$transition-normal: 0.3s ease;
+$transition-fast: 0.1s ease;
+$transition-normal: 0.2s ease;
+$transition-slow: 0.3s ease;
+
+// Z-Index Scale
+$z-dropdown: 1000;
+$z-sticky: 1020;
+$z-fixed: 1030;
+$z-modal-backdrop: 1040;
+$z-modal: 1050;
+$z-popover: 1060;
+$z-tooltip: 1070;
+
+// Layout
+$header-height: 52px;
+$sidebar-width: 240px;
+$sidebar-collapsed-width: 64px;
 
 // Breakpoints
-$breakpoint-sm: 576px;
+$breakpoint-sm: 640px;
 $breakpoint-md: 768px;
-$breakpoint-lg: 992px;
-$breakpoint-xl: 1200px;
+$breakpoint-lg: 1024px;
+$breakpoint-xl: 1280px;
+$breakpoint-2xl: 1536px;
 
-// Header
-$header-height: 60px;
+// Aliases for compatibility
+$primary-color: $brand-primary;
+$primary-dark: #4f46e5; // Pre-calculated darker shade of brand-primary
+$secondary-color: $gray-500;
+$success-color: $color-success;
+$danger-color: $color-danger;
+$warning-color: $color-warning;
+$info-color: $color-info;
