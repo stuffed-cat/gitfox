@@ -1,0 +1,89 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+use uuid::Uuid;
+use validator::Validate;
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct User {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    #[serde(skip_serializing)]
+    pub password_hash: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub role: UserRole,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "user_role", rename_all = "lowercase")]
+pub enum UserRole {
+    Admin,
+    Developer,
+    Viewer,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct CreateUserRequest {
+    #[validate(length(min = 3, max = 50))]
+    pub username: String,
+    #[validate(email)]
+    pub email: String,
+    #[validate(length(min = 8, max = 128))]
+    pub password: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateUserRequest {
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoginResponse {
+    pub token: String,
+    pub user: UserInfo,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UserInfo {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub role: UserRole,
+}
+
+impl From<User> for UserInfo {
+    fn from(user: User) -> Self {
+        UserInfo {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            display_name: user.display_name,
+            avatar_url: user.avatar_url,
+            role: user.role,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,
+    pub user_id: Uuid,
+    pub role: UserRole,
+    pub exp: i64,
+    pub iat: i64,
+}

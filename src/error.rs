@@ -1,0 +1,93 @@
+use actix_web::{http::StatusCode, HttpResponse, ResponseError};
+use std::fmt;
+
+#[derive(Debug)]
+pub enum AppError {
+    InternalError(String),
+    NotFound(String),
+    BadRequest(String),
+    Unauthorized(String),
+    Forbidden(String),
+    Conflict(String),
+    DatabaseError(String),
+    GitError(String),
+    QueueError(String),
+    ValidationError(String),
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::InternalError(msg) => write!(f, "Internal error: {}", msg),
+            AppError::NotFound(msg) => write!(f, "Not found: {}", msg),
+            AppError::BadRequest(msg) => write!(f, "Bad request: {}", msg),
+            AppError::Unauthorized(msg) => write!(f, "Unauthorized: {}", msg),
+            AppError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
+            AppError::Conflict(msg) => write!(f, "Conflict: {}", msg),
+            AppError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+            AppError::GitError(msg) => write!(f, "Git error: {}", msg),
+            AppError::QueueError(msg) => write!(f, "Queue error: {}", msg),
+            AppError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+        }
+    }
+}
+
+impl ResponseError for AppError {
+    fn error_response(&self) -> HttpResponse {
+        let (status, error_type) = match self {
+            AppError::InternalError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
+            AppError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+            AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+            AppError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "unauthorized"),
+            AppError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden"),
+            AppError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            AppError::DatabaseError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "database_error"),
+            AppError::GitError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "git_error"),
+            AppError::QueueError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "queue_error"),
+            AppError::ValidationError(_) => (StatusCode::BAD_REQUEST, "validation_error"),
+        };
+
+        HttpResponse::build(status).json(serde_json::json!({
+            "error": error_type,
+            "message": self.to_string()
+        }))
+    }
+}
+
+impl From<sqlx::Error> for AppError {
+    fn from(err: sqlx::Error) -> Self {
+        AppError::DatabaseError(err.to_string())
+    }
+}
+
+impl From<git2::Error> for AppError {
+    fn from(err: git2::Error) -> Self {
+        AppError::GitError(err.message().to_string())
+    }
+}
+
+impl From<redis::RedisError> for AppError {
+    fn from(err: redis::RedisError) -> Self {
+        AppError::QueueError(err.to_string())
+    }
+}
+
+impl From<jsonwebtoken::errors::Error> for AppError {
+    fn from(err: jsonwebtoken::errors::Error) -> Self {
+        AppError::Unauthorized(err.to_string())
+    }
+}
+
+impl From<bcrypt::BcryptError> for AppError {
+    fn from(err: bcrypt::BcryptError) -> Self {
+        AppError::InternalError(err.to_string())
+    }
+}
+
+impl From<actix_web::Error> for AppError {
+    fn from(err: actix_web::Error) -> Self {
+        AppError::InternalError(err.to_string())
+    }
+}
+
+pub type AppResult<T> = Result<T, AppError>;

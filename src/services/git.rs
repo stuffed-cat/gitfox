@@ -1,0 +1,450 @@
+use git2::{
+    BranchType, Commit, DiffOptions, ObjectType, Oid, Repository, Signature, Sort,
+};
+use std::path::Path;
+
+use crate::config::AppConfig;
+use crate::error::{AppError, AppResult};
+use crate::models::{
+    BranchInfo, CommitDetail, CommitInfo, CommitStats, DiffInfo, DiffStatus, FileContent,
+    FileEntry, FileEntryType, RepositoryInfo, TagInfo,
+};
+
+pub struct GitService;
+
+impl GitService {
+    fn get_repo_path(config: &AppConfig, project_slug: &str) -> String {
+        format!("{}/{}.git", config.git_repos_path, project_slug)
+    }
+
+    pub fn init_repository(config: &AppConfig, project_slug: &str) -> AppResult<()> {
+        let path = Self::get_repo_path(config, project_slug);
+        Repository::init_bare(&path)?;
+        Ok(())
+    }
+
+    pub fn open_repository(config: &AppConfig, project_slug: &str) -> AppResult<Repository> {
+        let path = Self::get_repo_path(config, project_slug);
+        let repo = Repository::open_bare(&path)?;
+        Ok(repo)
+    }
+
+    pub fn get_repository_info(repo: &Repository, default_branch: &str) -> AppResult<RepositoryInfo> {
+        let branches: Vec<String> = repo
+            .branches(Some(BranchType::Local))?
+            .filter_map(|b| b.ok())
+            .filter_map(|(branch, _)| branch.name().ok().flatten().map(String::from))
+            .collect();
+
+        let tags: Vec<String> = repo
+            .tag_names(None)?
+            .iter()
+            .filter_map(|t| t.map(String::from))
+            .collect();
+
+        let last_commit = Self::get_commit_by_ref(repo, default_branch).ok();
+
+        Ok(RepositoryInfo {
+            default_branch: default_branch.to_string(),
+            branches,
+            tags,
+            size_kb: 0, // Would need to calculate directory size
+            last_commit,
+        })
+    }
+
+    pub fn get_branches(repo: &Repository, default_branch: &str) -> AppResult<Vec<BranchInfo>> {
+        let mut branches = Vec::new();
+
+        for branch_result in repo.branches(Some(BranchType::Local))? {
+            let (branch, _) = branch_result?;
+            let name = branch.name()?.unwrap_or("").to_string();
+            let reference = branch.get();
+            
+            if let Some(target) = reference.target() {
+                let commit = repo.find_commit(target)?;
+                let commit_info = Self::commit_to_info(&commit);
+                
+                branches.push(BranchInfo {
+                    name: name.clone(),
+                    commit: commit_info,
+                    is_protected: false,
+                    is_default: name == default_branch,
+                });
+            }
+        }
+
+        Ok(branches)
+    }
+
+    pub fn create_branch(repo: &Repository, name: &str, ref_name: &str) -> AppResult<()> {
+        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
+        repo.branch(name, &commit, false)?;
+        Ok(())
+    }
+
+    pub fn delete_branch(repo: &Repository, name: &str) -> AppResult<()> {
+        let mut branch = repo.find_branch(name, BranchType::Local)?;
+        branch.delete()?;
+        Ok(())
+    }
+
+    pub fn get_tags(repo: &Repository) -> AppResult<Vec<TagInfo>> {
+        let mut tags = Vec::new();
+
+        for tag_name in repo.tag_names(None)?.iter().flatten() {
+            let reference = repo.find_reference(&format!("refs/tags/{}", tag_name))?;
+            let target = reference.peel(ObjectType::Commit)?;
+            let commit = target.peel_to_commit()?;
+            let commit_info = Self::commit_to_info(&commit);
+
+            // Try to get annotated tag info
+            let (message, tagger_name, tagger_email) = if let Ok(tag) = reference.peel_to_tag() {
+                (
+                    tag.message().map(String::from),
+                    tag.tagger().map(|t| t.name().unwrap_or("").to_string()),
+                    tag.tagger().map(|t| t.email().unwrap_or("").to_string()),
+                )
+            } else {
+                (None, None, None)
+            };
+
+            tags.push(TagInfo {
+                name: tag_name.to_string(),
+                commit: commit_info,
+                message,
+                tagger_name,
+                tagger_email,
+                created_at: chrono::Utc::now(),
+            });
+        }
+
+        Ok(tags)
+    }
+
+    pub fn create_tag(
+        repo: &Repository,
+        name: &str,
+        ref_name: &str,
+        message: Option<&str>,
+        tagger_name: &str,
+        tagger_email: &str,
+    ) -> AppResult<()> {
+        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
+        let object = commit.as_object();
+
+        if let Some(msg) = message {
+            let signature = Signature::now(tagger_name, tagger_email)?;
+            repo.tag(name, object, &signature, msg, false)?;
+        } else {
+            repo.tag_lightweight(name, object, false)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn delete_tag(repo: &Repository, name: &str) -> AppResult<()> {
+        repo.tag_delete(name)?;
+        Ok(())
+    }
+
+    pub fn get_commits(
+        repo: &Repository,
+        ref_name: &str,
+        path: Option<&str>,
+        page: u32,
+        per_page: u32,
+    ) -> AppResult<Vec<CommitInfo>> {
+        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push(commit.id())?;
+        revwalk.set_sorting(Sort::TIME)?;
+
+        let skip = ((page.saturating_sub(1)) * per_page) as usize;
+        let mut commits = Vec::new();
+
+        for oid_result in revwalk.skip(skip).take(per_page as usize) {
+            let oid = oid_result?;
+            let commit = repo.find_commit(oid)?;
+
+            if let Some(p) = path {
+                // Filter commits that affect the given path
+                if !Self::commit_affects_path(repo, &commit, p)? {
+                    continue;
+                }
+            }
+
+            commits.push(Self::commit_to_info(&commit));
+        }
+
+        Ok(commits)
+    }
+
+    pub fn get_commit_detail(repo: &Repository, sha: &str) -> AppResult<CommitDetail> {
+        let oid = Oid::from_str(sha)?;
+        let commit = repo.find_commit(oid)?;
+        
+        let parent = commit.parent(0).ok();
+        let diffs = Self::get_commit_diffs(repo, &commit, parent.as_ref())?;
+        
+        let (additions, deletions) = diffs.iter().fold((0u32, 0u32), |acc, d| {
+            (acc.0 + d.additions, acc.1 + d.deletions)
+        });
+
+        let parent_shas: Vec<String> = commit.parent_ids().map(|id| id.to_string()).collect();
+        
+        // Extract values before building the result to avoid lifetime issues
+        let sha_str = commit.id().to_string();
+        let message = commit.message().unwrap_or("").to_string();
+        let author = commit.author();
+        let author_name = author.name().unwrap_or("").to_string();
+        let author_email = author.email().unwrap_or("").to_string();
+        let authored_at = chrono::DateTime::from_timestamp(author.when().seconds(), 0)
+            .unwrap_or_default();
+        let committer = commit.committer();
+        let committer_name = committer.name().unwrap_or("").to_string();
+        let committer_email = committer.email().unwrap_or("").to_string();
+        let committed_at = chrono::DateTime::from_timestamp(committer.when().seconds(), 0)
+            .unwrap_or_default();
+
+        Ok(CommitDetail {
+            sha: sha_str,
+            message,
+            author_name,
+            author_email,
+            authored_at: authored_at.into(),
+            committer_name,
+            committer_email,
+            committed_at: committed_at.into(),
+            parent_shas,
+            stats: CommitStats {
+                additions,
+                deletions,
+                files_changed: diffs.len() as u32,
+            },
+            diffs,
+        })
+    }
+
+    pub fn browse_tree(
+        repo: &Repository,
+        ref_name: &str,
+        path: Option<&str>,
+    ) -> AppResult<Vec<FileEntry>> {
+        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
+        let tree = commit.tree()?;
+
+        let target_tree = if let Some(p) = path {
+            let entry = tree.get_path(Path::new(p))?;
+            repo.find_tree(entry.id())?
+        } else {
+            tree
+        };
+
+        let mut entries = Vec::new();
+
+        for entry in target_tree.iter() {
+            let name = entry.name().unwrap_or("").to_string();
+            let entry_path = if let Some(p) = path {
+                format!("{}/{}", p, name)
+            } else {
+                name.clone()
+            };
+
+            let entry_type = match entry.kind() {
+                Some(ObjectType::Tree) => FileEntryType::Directory,
+                Some(ObjectType::Blob) => FileEntryType::File,
+                Some(ObjectType::Commit) => FileEntryType::Submodule,
+                _ => continue,
+            };
+
+            let size = if entry_type == FileEntryType::File {
+                repo.find_blob(entry.id()).ok().map(|b| b.size() as u64)
+            } else {
+                None
+            };
+
+            entries.push(FileEntry {
+                name,
+                path: entry_path,
+                entry_type,
+                size,
+                mode: entry.filemode() as u32,
+            });
+        }
+
+        // Sort: directories first, then files
+        entries.sort_by(|a, b| {
+            match (&a.entry_type, &b.entry_type) {
+                (FileEntryType::Directory, FileEntryType::File) => std::cmp::Ordering::Less,
+                (FileEntryType::File, FileEntryType::Directory) => std::cmp::Ordering::Greater,
+                _ => a.name.cmp(&b.name),
+            }
+        });
+
+        Ok(entries)
+    }
+
+    pub fn get_file_content(repo: &Repository, ref_name: &str, path: &str) -> AppResult<FileContent> {
+        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
+        let tree = commit.tree()?;
+        let entry = tree.get_path(Path::new(path))?;
+        let blob = repo.find_blob(entry.id())?;
+
+        let is_binary = blob.is_binary();
+        let content = if is_binary {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(blob.content())
+        } else {
+            String::from_utf8_lossy(blob.content()).to_string()
+        };
+
+        Ok(FileContent {
+            path: path.to_string(),
+            content,
+            size: blob.size() as u64,
+            encoding: if is_binary { "base64" } else { "utf-8" }.to_string(),
+            is_binary,
+        })
+    }
+
+    pub fn compare_refs(repo: &Repository, from: &str, to: &str) -> AppResult<Vec<CommitInfo>> {
+        let from_commit = Self::resolve_ref_to_commit(repo, from)?;
+        let to_commit = Self::resolve_ref_to_commit(repo, to)?;
+
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push(to_commit.id())?;
+        revwalk.hide(from_commit.id())?;
+        revwalk.set_sorting(Sort::REVERSE | Sort::TIME)?;
+
+        let mut commits = Vec::new();
+        for oid_result in revwalk {
+            let oid = oid_result?;
+            let commit = repo.find_commit(oid)?;
+            commits.push(Self::commit_to_info(&commit));
+        }
+
+        Ok(commits)
+    }
+
+    pub fn can_merge(repo: &Repository, source: &str, target: &str) -> AppResult<bool> {
+        let source_commit = Self::resolve_ref_to_commit(repo, source)?;
+        let target_commit = Self::resolve_ref_to_commit(repo, target)?;
+
+        let index = repo.merge_commits(&target_commit, &source_commit, None)?;
+        Ok(!index.has_conflicts())
+    }
+
+    // Helper methods
+
+    fn resolve_ref_to_commit<'a>(repo: &'a Repository, ref_name: &str) -> AppResult<Commit<'a>> {
+        // Try as branch first
+        if let Ok(branch) = repo.find_branch(ref_name, BranchType::Local) {
+            if let Some(target) = branch.get().target() {
+                return Ok(repo.find_commit(target)?);
+            }
+        }
+
+        // Try as tag
+        if let Ok(reference) = repo.find_reference(&format!("refs/tags/{}", ref_name)) {
+            let target = reference.peel(ObjectType::Commit)?;
+            return Ok(target.peel_to_commit()?);
+        }
+
+        // Try as commit SHA
+        if let Ok(oid) = Oid::from_str(ref_name) {
+            return Ok(repo.find_commit(oid)?);
+        }
+
+        Err(AppError::NotFound(format!("Reference '{}' not found", ref_name)))
+    }
+
+    fn get_commit_by_ref(repo: &Repository, ref_name: &str) -> AppResult<CommitInfo> {
+        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
+        Ok(Self::commit_to_info(&commit))
+    }
+
+    fn commit_to_info(commit: &Commit) -> CommitInfo {
+        CommitInfo {
+            sha: commit.id().to_string(),
+            message: commit.message().unwrap_or("").to_string(),
+            author_name: commit.author().name().unwrap_or("").to_string(),
+            author_email: commit.author().email().unwrap_or("").to_string(),
+            authored_date: commit.author().when().seconds(),
+            committer_name: commit.committer().name().unwrap_or("").to_string(),
+            committer_email: commit.committer().email().unwrap_or("").to_string(),
+            committed_date: commit.committer().when().seconds(),
+        }
+    }
+
+    fn get_commit_diffs(
+        repo: &Repository,
+        commit: &Commit,
+        parent: Option<&Commit>,
+    ) -> AppResult<Vec<DiffInfo>> {
+        let tree = commit.tree()?;
+        let parent_tree = parent.map(|p| p.tree()).transpose()?;
+
+        let mut diff_opts = DiffOptions::new();
+        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut diff_opts))?;
+
+        let mut diffs = Vec::new();
+
+        diff.foreach(
+            &mut |delta, _| {
+                let status = match delta.status() {
+                    git2::Delta::Added => DiffStatus::Added,
+                    git2::Delta::Deleted => DiffStatus::Deleted,
+                    git2::Delta::Modified => DiffStatus::Modified,
+                    git2::Delta::Renamed => DiffStatus::Renamed,
+                    git2::Delta::Copied => DiffStatus::Copied,
+                    _ => return true,
+                };
+
+                let old_path = delta.old_file().path()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let new_path = delta.new_file().path()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                diffs.push(DiffInfo {
+                    old_path,
+                    new_path,
+                    diff: String::new(),
+                    status,
+                    additions: 0,
+                    deletions: 0,
+                });
+
+                true
+            },
+            None,
+            None,
+            None,
+        )?;
+
+        Ok(diffs)
+    }
+
+    fn commit_affects_path(repo: &Repository, commit: &Commit, path: &str) -> AppResult<bool> {
+        let tree = commit.tree()?;
+        
+        if let Ok(parent) = commit.parent(0) {
+            let parent_tree = parent.tree()?;
+            let mut diff_opts = DiffOptions::new();
+            diff_opts.pathspec(path);
+            
+            let diff = repo.diff_tree_to_tree(
+                Some(&parent_tree),
+                Some(&tree),
+                Some(&mut diff_opts),
+            )?;
+            
+            Ok(diff.deltas().count() > 0)
+        } else {
+            // First commit - check if path exists in tree
+            Ok(tree.get_path(Path::new(path)).is_ok())
+        }
+    }
+}
