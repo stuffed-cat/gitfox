@@ -8,6 +8,7 @@ pub mod merge_request;
 pub mod pipeline;
 pub mod webhook;
 pub mod namespace;
+pub mod ssh_key;
 
 pub use user::*;
 pub use project::*;
@@ -19,3 +20,4 @@ pub use merge_request::*;
 pub use pipeline::*;
 pub use webhook::*;
 pub use namespace::*;
+pub use ssh_key::*;

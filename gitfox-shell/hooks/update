@@ -1,0 +1,65 @@
+#!/bin/bash
+# GitFox update hook
+#
+# This hook is called once for each ref being updated.
+# Arguments:
+#   $1 - ref name
+#   $2 - old sha
+#   $3 - new sha
+#
+# Environment variables set by gitfox-shell:
+#   GL_ID - User identifier
+#   GL_USERNAME - Username
+#   GL_REPOSITORY - Repository path
+#   GITFOX_USER_ID - User ID
+#   GITFOX_PROJECT_ID - Project ID
+
+set -e
+
+refname="$1"
+oldrev="$2"
+newrev="$3"
+
+# Configuration
+GITFOX_API_URL="${GITFOX_API_URL:-http://localhost:8080}"
+GITFOX_API_SECRET="${GITFOX_API_SECRET:-}"
+
+echo "GitFox: Updating $refname"
+
+# Zero sha indicates creation (old) or deletion (new)
+zero="0000000000000000000000000000000000000000"
+
+# Determine the type of update
+if [ "$oldrev" = "$zero" ]; then
+    change_type="create"
+elif [ "$newrev" = "$zero" ]; then
+    change_type="delete"
+else
+    change_type="update"
+fi
+
+# Check branch/tag protection via API
+if [ -n "$GITFOX_API_SECRET" ]; then
+    response=$(curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -H "X-GitFox-Shell-Token: $GITFOX_API_SECRET" \
+        -d "{
+            \"user_id\": \"$GITFOX_USER_ID\",
+            \"repository\": \"$GL_REPOSITORY\",
+            \"project_id\": \"$GITFOX_PROJECT_ID\",
+            \"ref\": \"$refname\",
+            \"old_sha\": \"$oldrev\",
+            \"new_sha\": \"$newrev\",
+            \"change_type\": \"$change_type\"
+        }" \
+        "$GITFOX_API_URL/api/internal/check-ref-update" 2>/dev/null || echo '{"allowed":true}')
+    
+    allowed=$(echo "$response" | grep -o '"allowed":\s*true' || echo "")
+    if [ -z "$allowed" ]; then
+        message=$(echo "$response" | grep -o '"message":"[^"]*"' | cut -d'"' -f4 || echo "Update not allowed")
+        echo "GitFox: $message"
+        exit 1
+    fi
+fi
+
+exit 0

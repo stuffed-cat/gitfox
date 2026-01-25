@@ -1,0 +1,47 @@
+#!/bin/bash
+# GitFox post-receive hook
+#
+# This hook is called after all refs have been updated.
+# Environment variables set by gitfox-shell:
+#   GL_ID - User identifier
+#   GL_USERNAME - Username
+#   GL_REPOSITORY - Repository path
+#   GITFOX_USER_ID - User ID
+#   GITFOX_PROJECT_ID - Project ID
+
+set -e
+
+# Configuration
+GITFOX_API_URL="${GITFOX_API_URL:-http://localhost:8080}"
+GITFOX_API_SECRET="${GITFOX_API_SECRET:-}"
+
+# Collect all ref changes
+changes="["
+first=true
+while read oldrev newrev refname; do
+    if [ "$first" = true ]; then
+        first=false
+    else
+        changes="$changes,"
+    fi
+    changes="$changes{\"old_sha\":\"$oldrev\",\"new_sha\":\"$newrev\",\"ref\":\"$refname\"}"
+done
+changes="$changes]"
+
+# Notify GitFox API about the push
+if [ -n "$GITFOX_API_SECRET" ]; then
+    curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -H "X-GitFox-Shell-Token: $GITFOX_API_SECRET" \
+        -d "{
+            \"user_id\": \"$GITFOX_USER_ID\",
+            \"repository\": \"$GL_REPOSITORY\",
+            \"project_id\": \"$GITFOX_PROJECT_ID\",
+            \"changes\": $changes
+        }" \
+        "$GITFOX_API_URL/api/internal/post-receive" || true
+fi
+
+echo "GitFox: Push received successfully"
+
+exit 0

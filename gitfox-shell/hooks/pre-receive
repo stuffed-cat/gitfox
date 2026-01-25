@@ -1,0 +1,38 @@
+#!/bin/bash
+# GitFox pre-receive hook
+#
+# This hook is called before any refs are updated.
+# Environment variables set by gitfox-shell:
+#   GL_ID - User identifier
+#   GL_USERNAME - Username
+#   GL_REPOSITORY - Repository path
+#   GITFOX_USER_ID - User ID
+#   GITFOX_PROJECT_ID - Project ID
+
+set -e
+
+# Configuration
+GITFOX_API_URL="${GITFOX_API_URL:-http://localhost:8080}"
+GITFOX_API_SECRET="${GITFOX_API_SECRET:-}"
+
+# Read stdin (old-sha new-sha refname)
+while read oldrev newrev refname; do
+    echo "GitFox: Checking push to $refname"
+    
+    # Check for protected branches
+    # This is a placeholder - implement your protection logic
+    
+    # Example: Prevent force push to main/master
+    if [[ "$refname" =~ ^refs/heads/(main|master)$ ]]; then
+        if [ "$oldrev" != "0000000000000000000000000000000000000000" ]; then
+            # Check if this is a force push
+            merge_base=$(git merge-base "$oldrev" "$newrev" 2>/dev/null || echo "")
+            if [ "$merge_base" != "$oldrev" ]; then
+                echo "GitFox: Force push to $refname is not allowed"
+                exit 1
+            fi
+        fi
+    fi
+done
+
+exit 0

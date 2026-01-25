@@ -1,7 +1,7 @@
 use std::env;
 
 #[derive(Clone, Debug)]
-pub struct AppConfig {
+pub struct Config {
     pub server_host: String,
     pub server_port: u16,
     pub database_url: String,
@@ -9,9 +9,13 @@ pub struct AppConfig {
     pub jwt_secret: String,
     pub jwt_expiration: i64,
     pub git_repos_path: String,
+    /// Secret token for GitFox Shell internal API authentication
+    pub shell_secret: String,
+    /// Base URL for the GitFox instance (used for LFS, webhooks, etc.)
+    pub base_url: String,
 }
 
-impl AppConfig {
+impl Config {
     pub fn from_env() -> Self {
         Self {
             server_host: env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
@@ -31,6 +35,14 @@ impl AppConfig {
                 .expect("Invalid JWT_EXPIRATION"),
             git_repos_path: env::var("GIT_REPOS_PATH")
                 .unwrap_or_else(|_| "./repos".to_string()),
+            shell_secret: env::var("GITFOX_SHELL_SECRET")
+                .unwrap_or_else(|_| env::var("GITFOX_API_SECRET")
+                    .unwrap_or_else(|_| "change-me-in-production".to_string())),
+            base_url: env::var("GITFOX_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
         }
     }
 }
+
+// Type alias for backward compatibility
+pub type AppConfig = Config;

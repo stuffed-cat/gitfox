@@ -10,12 +10,17 @@ pub mod pipeline;
 pub mod webhook;
 pub mod git_http;
 pub mod namespace;
+pub mod ssh_key;
+pub mod internal;
 
 use actix_web::web;
 
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // Git HTTP Smart Protocol routes (must be before API routes)
     git_http::configure_git_routes(cfg);
+    
+    // Internal API routes for GitFox Shell
+    internal::configure_internal_routes(cfg);
     
     cfg.service(
         web::scope("/api/v1")
@@ -29,6 +34,12 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/users/{username}", web::get().to(user::get_user_by_username))
             .route("/users/{id}", web::put().to(user::update_user))
             .route("/users/{id}", web::delete().to(user::delete_user))
+            
+            // SSH Key routes for current user
+            .route("/user/ssh_keys", web::get().to(ssh_key::list_ssh_keys))
+            .route("/user/ssh_keys", web::post().to(ssh_key::create_ssh_key))
+            .route("/user/ssh_keys/{id}", web::get().to(ssh_key::get_ssh_key))
+            .route("/user/ssh_keys/{id}", web::delete().to(ssh_key::delete_ssh_key))
             
             // Project routes (style: /projects/:namespace/:project)
             .route("/projects", web::get().to(project::list_projects))
