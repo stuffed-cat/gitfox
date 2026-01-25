@@ -31,23 +31,6 @@ const project = computed(() => projectStore.currentProject)
 const stats = computed(() => projectStore.projectStats)
 const loading = computed(() => projectStore.loading)
 
-function visibilityClass(visibility: string) {
-  return {
-    'badge-success': visibility === 'public',
-    'badge-secondary': visibility === 'private',
-    'badge-info': visibility === 'internal'
-  }
-}
-
-function visibilityText(visibility: string) {
-  const map: Record<string, string> = {
-    public: '公开',
-    private: '私有',
-    internal: '内部'
-  }
-  return map[visibility] || visibility
-}
-
 // 监听路由参数变化，通过 owner/repo 获取项目
 watch(
   () => [route.params.owner, route.params.repo],
