@@ -24,12 +24,12 @@
             </div>
             <div class="meta-item">
               <span class="label">提交时间:</span>
-              <span>{{ formatDate(commit.committed_at) }}</span>
+              <span>{{ formatCommitDate(commit.committed_date) }}</span>
             </div>
-            <div v-if="commit.parent_sha" class="meta-item">
+            <div v-if="commit.parent_shas?.length" class="meta-item">
               <span class="label">父提交:</span>
-              <router-link :to="`/${project?.owner_name}/${project?.slug}/-/commit/${commit.parent_sha}`">
-                {{ commit.parent_sha.substring(0, 8) }}
+              <router-link :to="`/${project?.owner_name}/${project?.name}/-/commit/${commit.parent_shas[0]}`">
+                {{ commit.parent_shas[0].substring(0, 8) }}
               </router-link>
             </div>
           </div>
@@ -55,7 +55,7 @@
     
     <div v-else class="empty-state">
       <h3>提交不存在</h3>
-      <router-link :to="`/${project?.owner_name}/${project?.slug}/-/commits`" class="btn btn-primary">
+      <router-link :to="`/${project?.owner_name}/${project?.name}/-/commits`" class="btn btn-primary">
         返回提交列表
       </router-link>
     </div>
@@ -67,7 +67,7 @@ import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '@/api'
 import dayjs from 'dayjs'
-import type { Project, Commit } from '@/types'
+import type { Project, CommitDetail } from '@/types'
 
 interface DiffFile {
   file_path: string
@@ -84,11 +84,12 @@ const props = defineProps<{
 const route = useRoute()
 
 const loading = ref(false)
-const commit = ref<Commit | null>(null)
+const commit = ref<CommitDetail | null>(null)
 const diffs = ref<DiffFile[]>([])
 
-function formatDate(date: string) {
-  return dayjs(date).format('YYYY-MM-DD HH:mm:ss')
+function formatCommitDate(timestamp?: number) {
+  if (!timestamp) return '-'
+  return dayjs.unix(timestamp).format('YYYY-MM-DD HH:mm:ss')
 }
 
 function statusText(status: string) {
@@ -129,17 +130,21 @@ function escapeHtml(text: string) {
 
 async function loadCommit() {
   const sha = route.params.sha as string
-  if (!props.project?.id || !sha) return
+  if (!props.project?.owner_name || !props.project?.name || !sha) return
   
   loading.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const [commitRes, diffRes] = await Promise.all([
-      api.getCommit(props.project.id, sha),
-      api.getDiff(props.project.id, sha)
-    ])
-    commit.value = commitRes.data
-    diffs.value = diffRes.data
+    const detail = await api.commits.get(path, sha)
+    commit.value = detail
+    diffs.value = (detail.diffs || []).map(d => ({
+      file_path: d.new_path || d.old_path,
+      status: d.status.toLowerCase(),
+      additions: 0,
+      deletions: 0,
+      diff: d.diff
+    }))
   } catch (error) {
     console.error('Failed to load commit:', error)
     commit.value = null
@@ -148,7 +153,7 @@ async function loadCommit() {
   }
 }
 
-watch([() => props.project?.id, () => route.params.sha], () => {
+watch([() => props.project?.owner_name, () => props.project?.name, () => route.params.sha], () => {
   loadCommit()
 }, { immediate: true })
 </script>

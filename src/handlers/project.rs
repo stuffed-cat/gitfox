@@ -1,6 +1,6 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use sqlx::PgPool;
-use uuid::Uuid;
+
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
@@ -12,6 +12,13 @@ use crate::services::{GitService, ProjectService};
 pub struct ListQuery {
     pub page: Option<u32>,
     pub per_page: Option<u32>,
+}
+
+/// 的路径参数: /{namespace}/{project}
+#[derive(Debug, serde::Deserialize)]
+pub struct ProjectPath {
+    pub namespace: String,
+    pub project: String,
 }
 
 pub async fn list_projects(
@@ -41,72 +48,102 @@ pub async fn create_project(
     ).await?;
     
     // Initialize git repository
-    GitService::init_repository(config.get_ref(), &project.slug)?;
+    GitService::init_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
     Ok(HttpResponse::Created().json(project))
 }
 
+///  GET /projects/:namespace/:project
 pub async fn get_project(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<ProjectPath>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
     Ok(HttpResponse::Ok().json(project))
 }
 
-/// GitLab/GitHub 风格: GET /api/v1/repos/{owner}/{repo}
-pub async fn get_project_by_path(
-    pool: web::Data<PgPool>,
-    path: web::Path<(String, String)>,
-) -> AppResult<HttpResponse> {
-    let (owner, repo) = path.into_inner();
-    let project = ProjectService::get_project_by_owner_and_slug(pool.get_ref(), &owner, &repo).await?;
-    Ok(HttpResponse::Ok().json(project))
-}
-
+///  PUT /projects/:namespace/:project
 pub async fn update_project(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<ProjectPath>,
     body: web::Json<UpdateProjectRequest>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
     let updated = ProjectService::update_project(pool.get_ref(), project.id, body.into_inner()).await?;
     Ok(HttpResponse::Ok().json(updated))
 }
 
+///  DELETE /projects/:namespace/:project
 pub async fn delete_project(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<ProjectPath>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
     ProjectService::delete_project(pool.get_ref(), project.id).await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
 pub async fn get_project_stats(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<ProjectPath>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
     let stats = ProjectService::get_project_stats(pool.get_ref(), project.id).await?;
     Ok(HttpResponse::Ok().json(stats))
 }
 
 pub async fn get_members(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<ProjectPath>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
     let members = ProjectService::get_project_members(pool.get_ref(), project.id).await?;
     Ok(HttpResponse::Ok().json(members))
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct MemberPath {
+    pub namespace: String,
+    pub project: String,
+    pub user_id: i64,
+}
+
 pub async fn add_member(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<ProjectPath>,
     body: web::Json<AddMemberRequest>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
     let member = ProjectService::add_member(
         pool.get_ref(),
         project.id,
@@ -118,10 +155,14 @@ pub async fn add_member(
 
 pub async fn remove_member(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<MemberPath>,
 ) -> AppResult<HttpResponse> {
-    let (slug, user_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
-    ProjectService::remove_member(pool.get_ref(), project.id, user_id).await?;
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+    ProjectService::remove_member(pool.get_ref(), project.id, path.user_id).await?;
     Ok(HttpResponse::NoContent().finish())
 }

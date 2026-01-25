@@ -13,7 +13,7 @@
         <div class="mr-meta">
           <span class="mr-id">#{{ mergeRequest.iid }}</span>
           <span class="separator">·</span>
-          <span>{{ mergeRequest.author_name }} 请求将</span>
+          <span>请求将</span>
           <code>{{ mergeRequest.source_branch }}</code>
           <span>合并到</span>
           <code>{{ mergeRequest.target_branch }}</code>
@@ -59,10 +59,10 @@
           
           <div v-else class="comment-list">
             <div v-for="comment in comments" :key="comment.id" class="comment-item">
-              <div class="comment-avatar">{{ comment.author_name?.charAt(0).toUpperCase() }}</div>
+              <div class="comment-avatar">U</div>
               <div class="comment-body">
                 <div class="comment-header">
-                  <strong>{{ comment.author_name }}</strong>
+                  <strong>用户</strong>
                   <span class="time">{{ formatDate(comment.created_at) }}</span>
                 </div>
                 <div class="comment-content">{{ comment.content }}</div>
@@ -89,12 +89,12 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import api from '@/api'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
-import type { Project, MergeRequest } from '@/types'
+import type { Project, MergeRequest, MergeRequestComment } from '@/types'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
@@ -107,26 +107,18 @@ interface DiffFile {
   diff: string
 }
 
-interface Comment {
-  id: string
-  author_name: string
-  content: string
-  created_at: string
-}
-
 const props = defineProps<{
   project?: Project
 }>()
 
 const route = useRoute()
-const router = useRouter()
 
 const loading = ref(false)
 const merging = ref(false)
 const commenting = ref(false)
 const mergeRequest = ref<MergeRequest | null>(null)
 const diffs = ref<DiffFile[]>([])
-const comments = ref<Comment[]>([])
+const comments = ref<MergeRequestComment[]>([])
 const newComment = ref('')
 
 const statusClass = computed(() => ({
@@ -181,22 +173,22 @@ function escapeHtml(text: string) {
 
 async function loadMergeRequest() {
   const iid = route.params.iid
-  if (!props.project?.id || !iid) return
+  if (!props.project?.owner_name || !props.project?.name || !iid) return
   
   loading.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const [mrRes, commentsRes] = await Promise.all([
-      api.getMergeRequest(props.project.id, Number(iid)),
-      api.getMergeRequestComments(props.project.id, Number(iid))
-    ])
-    mergeRequest.value = mrRes.data
-    comments.value = commentsRes.data
+    const result = await api.mergeRequests.get(path, Number(iid))
+    mergeRequest.value = result.merge_request
+    comments.value = result.comments
     
-    // Load diffs
+    // Load diffs from commit comparison
     if (mergeRequest.value) {
-      const diffRes = await api.getMergeRequestDiff(props.project.id, Number(iid))
-      diffs.value = diffRes.data
+      try {
+        const diffData = await api.commits.compare(path, mergeRequest.value.target_branch, mergeRequest.value.source_branch)
+        diffs.value = diffData.map((c: any) => ({ file_path: c.sha, status: 'modified', additions: 0, deletions: 0, diff: c.message }))
+      } catch { diffs.value = [] }
     }
   } catch (error) {
     console.error('Failed to load merge request:', error)
@@ -206,13 +198,14 @@ async function loadMergeRequest() {
 }
 
 async function handleMerge() {
-  if (!props.project?.id || !mergeRequest.value) return
+  if (!props.project?.owner_name || !props.project?.name || !mergeRequest.value) return
   if (!confirm('确定要合并此合并请求吗？')) return
   
   merging.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.mergeMergeRequest(props.project.id, mergeRequest.value.iid)
+    await api.mergeRequests.merge(path, mergeRequest.value.iid)
     loadMergeRequest()
   } catch (error) {
     console.error('Failed to merge:', error)
@@ -222,11 +215,12 @@ async function handleMerge() {
 }
 
 async function handleClose() {
-  if (!props.project?.id || !mergeRequest.value) return
+  if (!props.project?.owner_name || !props.project?.name || !mergeRequest.value) return
   if (!confirm('确定要关闭此合并请求吗？')) return
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.closeMergeRequest(props.project.id, mergeRequest.value.iid)
+    await api.mergeRequests.update(path, mergeRequest.value.iid, { status: 'closed' } as any)
     loadMergeRequest()
   } catch (error) {
     console.error('Failed to close:', error)
@@ -234,14 +228,13 @@ async function handleClose() {
 }
 
 async function submitComment() {
-  if (!props.project?.id || !mergeRequest.value || !newComment.value.trim()) return
+  if (!props.project?.owner_name || !props.project?.name || !mergeRequest.value || !newComment.value.trim()) return
   
   commenting.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.createMergeRequestComment(props.project.id, mergeRequest.value.iid, {
-      content: newComment.value
-    })
+    await api.mergeRequests.addComment(path, mergeRequest.value.iid, newComment.value)
     newComment.value = ''
     loadMergeRequest()
   } catch (error) {
@@ -251,7 +244,7 @@ async function submitComment() {
   }
 }
 
-watch([() => props.project?.id, () => route.params.iid], () => {
+watch([() => props.project?.owner_name, () => props.project?.name, () => route.params.iid], () => {
   loadMergeRequest()
 }, { immediate: true })
 </script>

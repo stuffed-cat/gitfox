@@ -18,21 +18,19 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
-  // 支持两种方式：slug 或 owner/repo
-  async function fetchProject(ownerOrSlug: string, repo?: string) {
+  // 通过 namespace/name 获取项目
+  async function fetchProject(namespace: string, name: string) {
     loading.value = true
     try {
-      if (repo) {
-        // owner/repo 格式
-        currentProject.value = await api.projects.getByPath(ownerOrSlug, repo)
-        if (currentProject.value) {
-          projectStats.value = await api.projects.getStats(currentProject.value.slug)
-        }
-      } else {
-        // slug 格式（兼容旧代码）
-        currentProject.value = await api.projects.get(ownerOrSlug)
-        projectStats.value = await api.projects.getStats(ownerOrSlug)
+      const path = { namespace, project: name }
+      currentProject.value = await api.projects.get(path)
+      if (currentProject.value) {
+        projectStats.value = await api.projects.getStats(path)
       }
+    } catch (error) {
+      currentProject.value = null
+      projectStats.value = null
+      console.error('Failed to fetch project:', error)
     } finally {
       loading.value = false
     }
@@ -44,20 +42,20 @@ export const useProjectStore = defineStore('project', () => {
     return project
   }
 
-  async function updateProject(slug: string, data: Partial<CreateProjectRequest>) {
-    const project = await api.projects.update(slug, data)
+  async function updateProject(namespace: string, name: string, data: Partial<CreateProjectRequest>) {
+    const project = await api.projects.update({ namespace, project: name }, data)
     currentProject.value = project
-    const index = projects.value.findIndex(p => p.slug === slug)
+    const index = projects.value.findIndex(p => p.name === name && p.owner_name === namespace)
     if (index !== -1) {
       projects.value[index] = project
     }
     return project
   }
 
-  async function deleteProject(slug: string) {
-    await api.projects.delete(slug)
-    projects.value = projects.value.filter(p => p.slug !== slug)
-    if (currentProject.value?.slug === slug) {
+  async function deleteProject(namespace: string, name: string) {
+    await api.projects.delete({ namespace, project: name })
+    projects.value = projects.value.filter(p => !(p.name === name && p.owner_name === namespace))
+    if (currentProject.value?.name === name && currentProject.value?.owner_name === namespace) {
       currentProject.value = null
     }
   }

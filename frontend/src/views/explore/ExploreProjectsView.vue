@@ -27,12 +27,12 @@
       <router-link
         v-for="project in filteredProjects"
         :key="project.id"
-        :to="`/${project.owner_name}/${project.slug}`"
+        :to="`/${project.owner_name}/${project.name}`"
         class="project-item"
       >
         <div class="project-avatar">{{ project.name.charAt(0).toUpperCase() }}</div>
         <div class="project-info">
-          <h3>{{ project.owner_name }} / {{ project.slug }}</h3>
+          <h3>{{ project.owner_name }} / {{ project.name }}</h3>
           <p>{{ project.description || '暂无描述' }}</p>
         </div>
       </router-link>
@@ -57,7 +57,7 @@ const filteredProjects = computed(() => {
   const query = searchQuery.value.toLowerCase()
   return projects.value.filter(p => 
     p.name.toLowerCase().includes(query) || 
-    p.slug.toLowerCase().includes(query)
+    p.name.toLowerCase().includes(query)
   )
 })
 

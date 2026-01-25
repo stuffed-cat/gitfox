@@ -26,6 +26,15 @@ pub struct FileContent {
     pub is_binary: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BlobContent {
+    pub sha: String,
+    pub content: String,
+    pub size: u64,
+    pub encoding: String,
+    pub is_binary: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct BrowseQuery {
     pub path: Option<String>,
@@ -40,7 +49,7 @@ pub struct FileQuery {
 
 #[derive(Debug, Serialize)]
 pub struct RepositoryInfo {
-    pub default_branch: String,
+    pub default_branch: Option<String>,
     pub branches: Vec<String>,
     pub tags: Vec<String>,
     pub size_kb: u64,

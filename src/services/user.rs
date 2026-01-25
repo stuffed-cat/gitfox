@@ -2,7 +2,7 @@ use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use sqlx::PgPool;
-use uuid::Uuid;
+
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
@@ -26,17 +26,15 @@ impl UserService {
         }
 
         let password_hash = hash(&req.password, DEFAULT_COST)?;
-        let id = Uuid::new_v4();
         let now = Utc::now();
 
         let user = sqlx::query_as::<_, User>(
             r#"
-            INSERT INTO users (id, username, email, password_hash, display_name, role, is_active, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, true, $7, $7)
+            INSERT INTO users (username, email, password_hash, display_name, role, is_active, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, true, $6, $6)
             RETURNING *
             "#
         )
-        .bind(id)
         .bind(&req.username)
         .bind(&req.email)
         .bind(&password_hash)
@@ -85,7 +83,7 @@ impl UserService {
         })
     }
 
-    pub async fn get_user_by_id(pool: &PgPool, id: Uuid) -> AppResult<User> {
+    pub async fn get_user_by_id(pool: &PgPool, id: i64) -> AppResult<User> {
         sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
             .bind(id)
             .fetch_optional(pool)
@@ -117,7 +115,7 @@ impl UserService {
 
     pub async fn update_user(
         pool: &PgPool,
-        id: Uuid,
+        id: i64,
         display_name: Option<String>,
         avatar_url: Option<String>,
     ) -> AppResult<User> {
@@ -143,7 +141,7 @@ impl UserService {
 
     pub async fn change_password(
         pool: &PgPool,
-        id: Uuid,
+        id: i64,
         old_password: &str,
         new_password: &str,
     ) -> AppResult<()> {
@@ -164,7 +162,7 @@ impl UserService {
         Ok(())
     }
 
-    pub async fn delete_user(pool: &PgPool, id: Uuid) -> AppResult<()> {
+    pub async fn delete_user(pool: &PgPool, id: i64) -> AppResult<()> {
         let result = sqlx::query("DELETE FROM users WHERE id = $1")
             .bind(id)
             .execute(pool)

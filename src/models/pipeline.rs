@@ -1,17 +1,17 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Pipeline {
-    pub id: Uuid,
-    pub project_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
     pub ref_name: String,
     pub commit_sha: String,
     pub status: PipelineStatus,
     pub trigger_type: PipelineTriggerType,
-    pub triggered_by: Option<Uuid>,
+    pub triggered_by: Option<i64>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub duration_seconds: Option<i32>,
@@ -43,12 +43,12 @@ pub enum PipelineTriggerType {
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PipelineJob {
-    pub id: Uuid,
-    pub pipeline_id: Uuid,
+    pub id: i64,
+    pub pipeline_id: i64,
     pub name: String,
     pub stage: String,
     pub status: PipelineStatus,
-    pub runner_id: Option<Uuid>,
+    pub runner_id: Option<i64>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub duration_seconds: Option<i32>,
@@ -59,8 +59,8 @@ pub struct PipelineJob {
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PipelineJobLog {
-    pub id: Uuid,
-    pub job_id: Uuid,
+    pub id: i64,
+    pub job_id: i64,
     pub content: String,
     pub created_at: DateTime<Utc>,
 }
@@ -87,8 +87,8 @@ pub struct PipelineDetail {
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PipelineConfig {
-    pub id: Uuid,
-    pub project_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
     pub content: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

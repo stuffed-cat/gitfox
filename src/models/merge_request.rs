@@ -1,23 +1,23 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct MergeRequest {
-    pub id: Uuid,
-    pub project_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
     pub iid: i64,
     pub title: String,
     pub description: Option<String>,
     pub source_branch: String,
     pub target_branch: String,
     pub status: MergeRequestStatus,
-    pub author_id: Uuid,
-    pub assignee_id: Option<Uuid>,
-    pub merged_by: Option<Uuid>,
+    pub author_id: i64,
+    pub assignee_id: Option<i64>,
+    pub merged_by: Option<i64>,
     pub merged_at: Option<DateTime<Utc>>,
-    pub closed_by: Option<Uuid>,
+    pub closed_by: Option<i64>,
     pub closed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -38,7 +38,7 @@ pub struct CreateMergeRequestRequest {
     pub description: Option<String>,
     pub source_branch: String,
     pub target_branch: String,
-    pub assignee_id: Option<Uuid>,
+    pub assignee_id: Option<i64>,
     pub is_draft: Option<bool>,
 }
 
@@ -47,18 +47,18 @@ pub struct UpdateMergeRequestRequest {
     pub title: Option<String>,
     pub description: Option<String>,
     pub target_branch: Option<String>,
-    pub assignee_id: Option<Uuid>,
+    pub assignee_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct MergeRequestComment {
-    pub id: Uuid,
-    pub merge_request_id: Uuid,
-    pub author_id: Uuid,
+    pub id: i64,
+    pub merge_request_id: i64,
+    pub author_id: i64,
     pub content: String,
     pub line_number: Option<i32>,
     pub file_path: Option<String>,
-    pub parent_id: Option<Uuid>,
+    pub parent_id: Option<i64>,
     pub is_resolved: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -69,14 +69,14 @@ pub struct CreateCommentRequest {
     pub content: String,
     pub line_number: Option<i32>,
     pub file_path: Option<String>,
-    pub parent_id: Option<Uuid>,
+    pub parent_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct MergeRequestReview {
-    pub id: Uuid,
-    pub merge_request_id: Uuid,
-    pub reviewer_id: Uuid,
+    pub id: i64,
+    pub merge_request_id: i64,
+    pub reviewer_id: i64,
     pub status: ReviewStatus,
     pub comment: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -110,8 +110,8 @@ pub struct MergeRequestDetail {
 #[derive(Debug, Deserialize)]
 pub struct MergeRequestListQuery {
     pub status: Option<MergeRequestStatus>,
-    pub author_id: Option<Uuid>,
-    pub assignee_id: Option<Uuid>,
+    pub author_id: Option<i64>,
+    pub assignee_id: Option<i64>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,
 }

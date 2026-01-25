@@ -1,14 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
+
 
 use super::repository::DiffInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Commit {
-    pub id: Uuid,
-    pub project_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
     pub sha: String,
     pub message: String,
     pub author_name: String,

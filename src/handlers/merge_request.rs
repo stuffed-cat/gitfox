@@ -1,7 +1,7 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use chrono::Utc;
 use sqlx::PgPool;
-use uuid::Uuid;
+
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
@@ -15,10 +15,11 @@ use crate::services::{GitService, ProjectService};
 
 pub async fn list_merge_requests(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<(String, String)>,
     query: web::Query<MergeRequestListQuery>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let (namespace, project_name) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(20);
@@ -29,8 +30,8 @@ pub async fn list_merge_requests(
         SELECT * FROM merge_requests 
         WHERE project_id = $1
         AND ($2::merge_request_status IS NULL OR status = $2)
-        AND ($3::uuid IS NULL OR author_id = $3)
-        AND ($4::uuid IS NULL OR assignee_id = $4)
+        AND ($3::bigint IS NULL OR author_id = $3)
+        AND ($4::bigint IS NULL OR assignee_id = $4)
         ORDER BY updated_at DESC
         LIMIT $5 OFFSET $6
         "#
@@ -51,13 +52,14 @@ pub async fn create_merge_request(
     req: HttpRequest,
     pool: web::Data<PgPool>,
     config: web::Data<AppConfig>,
-    path: web::Path<String>,
+    path: web::Path<(String, String)>,
     body: web::Json<CreateMergeRequestRequest>,
 ) -> AppResult<HttpResponse> {
     let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
     let claims = validate_token(&service_req, config.get_ref()).await?;
     
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let (namespace, project_name) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     // Get next IID for this project
     let next_iid: i64 = sqlx::query_scalar(
@@ -67,7 +69,6 @@ pub async fn create_merge_request(
     .fetch_one(pool.get_ref())
     .await?;
     
-    let id = Uuid::new_v4();
     let now = Utc::now();
     let status = if body.is_draft.unwrap_or(false) {
         MergeRequestStatus::Draft
@@ -78,12 +79,11 @@ pub async fn create_merge_request(
     let mr = sqlx::query_as::<_, MergeRequest>(
         r#"
         INSERT INTO merge_requests 
-        (id, project_id, iid, title, description, source_branch, target_branch, status, author_id, assignee_id, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+        (project_id, iid, title, description, source_branch, target_branch, status, author_id, assignee_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
         RETURNING *
         "#
     )
-    .bind(id)
     .bind(project.id)
     .bind(next_iid)
     .bind(&body.title)
@@ -103,10 +103,10 @@ pub async fn create_merge_request(
 pub async fn get_merge_request(
     pool: web::Data<PgPool>,
     config: web::Data<AppConfig>,
-    path: web::Path<(String, i64)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
-    let (slug, iid) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, iid) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let mr = sqlx::query_as::<_, MergeRequest>(
         "SELECT * FROM merge_requests WHERE project_id = $1 AND iid = $2"
@@ -132,7 +132,7 @@ pub async fn get_merge_request(
     .await?;
     
     // Check if can merge
-    let repo = GitService::open_repository(config.get_ref(), &project.slug)?;
+    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     let can_merge = GitService::can_merge(&repo, &mr.source_branch, &mr.target_branch).unwrap_or(false);
     let has_conflicts = !can_merge;
     
@@ -147,11 +147,11 @@ pub async fn get_merge_request(
 
 pub async fn update_merge_request(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, i64)>,
+    path: web::Path<(String, String, i64)>,
     body: web::Json<UpdateMergeRequestRequest>,
 ) -> AppResult<HttpResponse> {
-    let (slug, iid) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, iid) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let mr = sqlx::query_as::<_, MergeRequest>(
         r#"
@@ -182,14 +182,14 @@ pub async fn merge(
     req: HttpRequest,
     pool: web::Data<PgPool>,
     config: web::Data<AppConfig>,
-    path: web::Path<(String, i64)>,
+    path: web::Path<(String, String, i64)>,
     body: web::Json<MergeOptions>,
 ) -> AppResult<HttpResponse> {
     let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
     let claims = validate_token(&service_req, config.get_ref()).await?;
     
-    let (slug, iid) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, iid) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let mr = sqlx::query_as::<_, MergeRequest>(
         "SELECT * FROM merge_requests WHERE project_id = $1 AND iid = $2"
@@ -205,7 +205,7 @@ pub async fn merge(
     }
     
     // Check if can merge
-    let repo = GitService::open_repository(config.get_ref(), &project.slug)?;
+    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     if !GitService::can_merge(&repo, &mr.source_branch, &mr.target_branch)? {
         return Err(AppError::Conflict("Cannot merge due to conflicts".to_string()));
     }
@@ -234,13 +234,13 @@ pub async fn close(
     req: HttpRequest,
     pool: web::Data<PgPool>,
     config: web::Data<AppConfig>,
-    path: web::Path<(String, i64)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
     let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
     let claims = validate_token(&service_req, config.get_ref()).await?;
     
-    let (slug, iid) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, iid) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let now = Utc::now();
     let mr = sqlx::query_as::<_, MergeRequest>(
@@ -264,10 +264,10 @@ pub async fn close(
 
 pub async fn list_comments(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, i64)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
-    let (slug, iid) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, iid) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let mr = sqlx::query_as::<_, MergeRequest>(
         "SELECT * FROM merge_requests WHERE project_id = $1 AND iid = $2"
@@ -292,14 +292,14 @@ pub async fn add_comment(
     req: HttpRequest,
     pool: web::Data<PgPool>,
     config: web::Data<AppConfig>,
-    path: web::Path<(String, i64)>,
+    path: web::Path<(String, String, i64)>,
     body: web::Json<CreateCommentRequest>,
 ) -> AppResult<HttpResponse> {
     let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
     let claims = validate_token(&service_req, config.get_ref()).await?;
     
-    let (slug, iid) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, iid) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let mr = sqlx::query_as::<_, MergeRequest>(
         "SELECT * FROM merge_requests WHERE project_id = $1 AND iid = $2"
@@ -310,18 +310,16 @@ pub async fn add_comment(
     .await?
     .ok_or_else(|| AppError::NotFound("Merge request not found".to_string()))?;
     
-    let id = Uuid::new_v4();
     let now = Utc::now();
     
     let comment = sqlx::query_as::<_, MergeRequestComment>(
         r#"
         INSERT INTO merge_request_comments 
-        (id, merge_request_id, author_id, content, line_number, file_path, parent_id, is_resolved, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, false, $8, $8)
+        (merge_request_id, author_id, content, line_number, file_path, parent_id, is_resolved, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, false, $7, $7)
         RETURNING *
         "#
     )
-    .bind(id)
     .bind(mr.id)
     .bind(claims.user_id)
     .bind(&body.content)
@@ -339,14 +337,14 @@ pub async fn add_review(
     req: HttpRequest,
     pool: web::Data<PgPool>,
     config: web::Data<AppConfig>,
-    path: web::Path<(String, i64)>,
+    path: web::Path<(String, String, i64)>,
     body: web::Json<CreateReviewRequest>,
 ) -> AppResult<HttpResponse> {
     let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
     let claims = validate_token(&service_req, config.get_ref()).await?;
     
-    let (slug, iid) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, iid) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let mr = sqlx::query_as::<_, MergeRequest>(
         "SELECT * FROM merge_requests WHERE project_id = $1 AND iid = $2"
@@ -357,20 +355,18 @@ pub async fn add_review(
     .await?
     .ok_or_else(|| AppError::NotFound("Merge request not found".to_string()))?;
     
-    let id = Uuid::new_v4();
     let now = Utc::now();
     
     let review = sqlx::query_as::<_, MergeRequestReview>(
         r#"
         INSERT INTO merge_request_reviews 
-        (id, merge_request_id, reviewer_id, status, comment, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $6)
+        (merge_request_id, reviewer_id, status, comment, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $5)
         ON CONFLICT (merge_request_id, reviewer_id) 
-        DO UPDATE SET status = $4, comment = $5, updated_at = $6
+        DO UPDATE SET status = $3, comment = $4, updated_at = $5
         RETURNING *
         "#
     )
-    .bind(id)
     .bind(mr.id)
     .bind(claims.user_id)
     .bind(&body.status)

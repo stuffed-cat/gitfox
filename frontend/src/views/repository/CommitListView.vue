@@ -27,7 +27,7 @@
       >
         <div class="commit-main">
           <router-link
-            :to="`/${project?.owner_name}/${project?.slug}/-/commit/${commit.sha}`"
+            :to="`/${project?.owner_name}/${project?.name}/-/commit/${commit.sha}`"
             class="commit-message"
           >
             {{ commit.message.split('\n')[0] }}
@@ -35,7 +35,7 @@
           <div class="commit-meta">
             <span class="author">{{ commit.author_name }}</span>
             <span class="separator">·</span>
-            <span class="time">{{ formatDate(commit.committed_at) }}</span>
+            <span class="time">{{ formatCommitDate(commit.committed_date) }}</span>
           </div>
         </div>
         <div class="commit-actions">
@@ -61,7 +61,7 @@ import api from '@/api'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
-import type { Project, Branch, Commit } from '@/types'
+import type { Project, BranchInfo, CommitInfo } from '@/types'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
@@ -72,14 +72,15 @@ const props = defineProps<{
 
 const loading = ref(false)
 const loadingMore = ref(false)
-const branches = ref<Branch[]>([])
+const branches = ref<BranchInfo[]>([])
 const currentBranch = ref('')
-const commits = ref<Commit[]>([])
+const commits = ref<CommitInfo[]>([])
 const page = ref(1)
 const hasMore = ref(false)
 
-function formatDate(date: string) {
-  return dayjs(date).fromNow()
+function formatCommitDate(timestamp?: number) {
+  if (!timestamp) return '-'
+  return dayjs.unix(timestamp).fromNow()
 }
 
 function copyCommit(sha: string) {
@@ -87,10 +88,10 @@ function copyCommit(sha: string) {
 }
 
 async function loadBranches() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   try {
-    const response = await api.getBranches(props.project.id)
-    branches.value = response.data
+    branches.value = await api.branches.list(path)
     if (branches.value.length > 0 && !currentBranch.value) {
       currentBranch.value = props.project.default_branch || branches.value[0].name
     }
@@ -100,18 +101,14 @@ async function loadBranches() {
 }
 
 async function loadCommits() {
-  if (!props.project?.id || !currentBranch.value) return
+  if (!props.project?.owner_name || !props.project?.name || !currentBranch.value) return
   loading.value = true
   page.value = 1
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const response = await api.getCommits(props.project.id, {
-      ref: currentBranch.value,
-      page: 1,
-      per_page: 20
-    })
-    commits.value = response.data
-    hasMore.value = response.data.length === 20
+    commits.value = await api.commits.list(path, currentBranch.value, undefined, 1, 20)
+    hasMore.value = commits.value.length === 20
   } catch (error) {
     console.error('Failed to load commits:', error)
     commits.value = []
@@ -121,18 +118,15 @@ async function loadCommits() {
 }
 
 async function loadMore() {
-  if (!props.project?.id || !currentBranch.value) return
+  if (!props.project?.owner_name || !props.project?.name || !currentBranch.value) return
   loadingMore.value = true
   page.value++
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const response = await api.getCommits(props.project.id, {
-      ref: currentBranch.value,
-      page: page.value,
-      per_page: 20
-    })
-    commits.value.push(...response.data)
-    hasMore.value = response.data.length === 20
+    const moreCommits = await api.commits.list(path, currentBranch.value, undefined, page.value, 20)
+    commits.value.push(...moreCommits)
+    hasMore.value = moreCommits.length === 20
   } catch (error) {
     console.error('Failed to load more commits:', error)
   } finally {
@@ -140,7 +134,7 @@ async function loadMore() {
   }
 }
 
-watch(() => props.project?.id, () => {
+watch([() => props.project?.owner_name, () => props.project?.name], () => {
   loadBranches().then(() => loadCommits())
 }, { immediate: true })
 </script>

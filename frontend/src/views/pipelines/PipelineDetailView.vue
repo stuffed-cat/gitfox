@@ -12,13 +12,13 @@
             流水线 #{{ pipeline.id.substring(0, 8) }}
           </h2>
           <div class="pipeline-meta">
-            <span class="ref">{{ pipeline.ref }}</span>
+            <span class="ref">{{ pipeline.ref_name }}</span>
             <span class="separator">·</span>
             <code>{{ pipeline.commit_sha?.substring(0, 8) }}</code>
             <span class="separator">·</span>
             <span>{{ formatDate(pipeline.created_at) }}</span>
-            <span v-if="pipeline.duration" class="separator">·</span>
-            <span v-if="pipeline.duration">耗时 {{ formatDuration(pipeline.duration) }}</span>
+            <span v-if="pipeline.duration_seconds" class="separator">·</span>
+            <span v-if="pipeline.duration_seconds">耗时 {{ formatDuration(pipeline.duration_seconds) }}</span>
           </div>
         </div>
         <div class="header-actions">
@@ -37,10 +37,6 @@
             重试
           </button>
         </div>
-      </div>
-      
-      <div class="commit-info" v-if="pipeline.commit_message">
-        <strong>提交信息:</strong> {{ pipeline.commit_message }}
       </div>
       
       <div class="jobs-section">
@@ -146,12 +142,13 @@ async function toggleJob(jobId: string) {
 }
 
 async function loadJobLogs(jobId: string) {
-  if (!props.project?.id || !pipeline.value) return
+  if (!props.project?.owner_name || !props.project?.name || !pipeline.value) return
   loadingLogs.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const response = await api.getPipelineJobLogs(props.project.id, pipeline.value.id, jobId)
-    jobLogs.value[jobId] = response.data
+    const result = await api.pipelines.getJobLog(path, pipeline.value.id, jobId)
+    jobLogs.value[jobId] = result.log
   } catch (error) {
     console.error('Failed to load job logs:', error)
     jobLogs.value[jobId] = '加载日志失败'
@@ -162,17 +159,15 @@ async function loadJobLogs(jobId: string) {
 
 async function loadPipeline() {
   const pipelineId = route.params.pipelineId as string
-  if (!props.project?.id || !pipelineId) return
+  if (!props.project?.owner_name || !props.project?.name || !pipelineId) return
   
   loading.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const [pipelineRes, jobsRes] = await Promise.all([
-      api.getPipeline(props.project.id, pipelineId),
-      api.getPipelineJobs(props.project.id, pipelineId)
-    ])
-    pipeline.value = pipelineRes.data
-    jobs.value = jobsRes.data
+    const result = await api.pipelines.get(path, pipelineId)
+    pipeline.value = result.pipeline
+    jobs.value = result.jobs
   } catch (error) {
     console.error('Failed to load pipeline:', error)
   } finally {
@@ -181,11 +176,12 @@ async function loadPipeline() {
 }
 
 async function cancelPipeline() {
-  if (!props.project?.id || !pipeline.value) return
+  if (!props.project?.owner_name || !props.project?.name || !pipeline.value) return
   if (!confirm('确定要取消此流水线吗？')) return
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.cancelPipeline(props.project.id, pipeline.value.id)
+    await api.pipelines.cancel(path, pipeline.value.id)
     loadPipeline()
   } catch (error) {
     console.error('Failed to cancel pipeline:', error)
@@ -193,17 +189,18 @@ async function cancelPipeline() {
 }
 
 async function retryPipeline() {
-  if (!props.project?.id || !pipeline.value) return
+  if (!props.project?.owner_name || !props.project?.name || !pipeline.value) return
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.retryPipeline(props.project.id, pipeline.value.id)
+    await api.pipelines.retry(path, pipeline.value.id)
     loadPipeline()
   } catch (error) {
     console.error('Failed to retry pipeline:', error)
   }
 }
 
-watch([() => props.project?.id, () => route.params.pipelineId], () => {
+watch([() => props.project?.owner_name, () => props.project?.name, () => route.params.pipelineId], () => {
   loadPipeline()
 }, { immediate: true })
 </script>

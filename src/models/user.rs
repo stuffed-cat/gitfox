@@ -1,12 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
 use validator::Validate;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
-    pub id: Uuid,
+    pub id: i64,
     pub username: String,
     pub email: String,
     #[serde(skip_serializing)]
@@ -58,7 +57,7 @@ pub struct LoginResponse {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct UserInfo {
-    pub id: Uuid,
+    pub id: i64,
     pub username: String,
     pub email: String,
     pub display_name: Option<String>,
@@ -82,7 +81,7 @@ impl From<User> for UserInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
-    pub user_id: Uuid,
+    pub user_id: i64,
     pub role: UserRole,
     pub exp: i64,
     pub iat: i64,

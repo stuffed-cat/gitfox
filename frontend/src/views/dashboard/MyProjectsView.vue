@@ -77,7 +77,7 @@
       <router-link
         v-for="project in filteredProjects"
         :key="project.id"
-        :to="`/${project.owner_name}/${project.slug}`"
+        :to="`/${project.owner_name}/${project.name}`"
         class="project-item"
       >
         <div class="project-avatar">
@@ -87,7 +87,7 @@
           <div class="project-name">
             <span class="namespace">{{ project.owner_name }}</span>
             <span class="separator">/</span>
-            <span class="name">{{ project.slug }}</span>
+            <span class="name">{{ project.name }}</span>
             <span v-if="project.visibility === 'private'" class="visibility-badge">
               <svg viewBox="0 0 16 16" fill="none">
                 <rect x="4" y="7" width="8" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
@@ -168,7 +168,7 @@ const filteredProjects = computed(() => {
     const query = searchQuery.value.toLowerCase()
     result = result.filter(p => 
       p.name.toLowerCase().includes(query) || 
-      p.slug.toLowerCase().includes(query) ||
+      p.name.toLowerCase().includes(query) ||
       p.description?.toLowerCase().includes(query)
     )
   }

@@ -20,7 +20,7 @@
       <router-link
         v-for="pipeline in pipelines"
         :key="pipeline.id"
-        :to="`/${project?.owner_name}/${project?.slug}/-/pipelines/${pipeline.id}`"
+        :to="`/${project?.owner_name}/${project?.name}/-/pipelines/${pipeline.id}`"
         class="pipeline-item"
       >
         <div class="pipeline-status">
@@ -31,18 +31,16 @@
         <div class="pipeline-info">
           <div class="pipeline-title">
             流水线 #{{ pipeline.id.substring(0, 8) }}
-            <span class="ref">{{ pipeline.ref }}</span>
+            <span class="ref">{{ pipeline.ref_name }}</span>
           </div>
           <div class="pipeline-meta">
-            <span>{{ pipeline.commit_message?.substring(0, 50) }}</span>
-            <span class="separator">·</span>
             <code>{{ pipeline.commit_sha?.substring(0, 8) }}</code>
             <span class="separator">·</span>
             <span>{{ formatDate(pipeline.created_at) }}</span>
           </div>
         </div>
-        <div class="pipeline-duration" v-if="pipeline.duration">
-          ⏱ {{ formatDuration(pipeline.duration) }}
+        <div class="pipeline-duration" v-if="pipeline.duration_seconds">
+          ⏱ {{ formatDuration(pipeline.duration_seconds) }}
         </div>
       </router-link>
     </div>
@@ -92,12 +90,12 @@ function statusIcon(status: string) {
 }
 
 async function loadPipelines() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   loading.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const response = await api.getPipelines(props.project.id)
-    pipelines.value = response.data
+    pipelines.value = await api.pipelines.list(path)
   } catch (error) {
     console.error('Failed to load pipelines:', error)
   } finally {
@@ -106,13 +104,14 @@ async function loadPipelines() {
 }
 
 async function triggerPipeline() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   
-  const ref = prompt('请输入分支或标签名称', props.project.default_branch)
-  if (!ref) return
+  const refName = prompt('请输入分支或标签名称', props.project.default_branch)
+  if (!refName) return
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.triggerPipeline(props.project.id, { ref })
+    await api.pipelines.trigger(path, refName)
     loadPipelines()
   } catch (error) {
     console.error('Failed to trigger pipeline:', error)
@@ -120,7 +119,7 @@ async function triggerPipeline() {
   }
 }
 
-watch(() => props.project?.id, () => {
+watch([() => props.project?.owner_name, () => props.project?.name], () => {
   loadPipelines()
 }, { immediate: true })
 </script>

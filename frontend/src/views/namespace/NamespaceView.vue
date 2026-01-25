@@ -41,12 +41,12 @@
           <router-link
             v-for="project in projects"
             :key="project.id"
-            :to="`/${route.params.namespace}/${project.slug}`"
+            :to="`/${route.params.namespace}/${project.name}`"
             class="project-item"
           >
             <div class="project-avatar">{{ project.name.charAt(0).toUpperCase() }}</div>
             <div class="project-info">
-              <h3>{{ project.slug }}</h3>
+              <h3>{{ project.name }}</h3>
               <p>{{ project.description || '暂无描述' }}</p>
             </div>
           </router-link>
@@ -82,12 +82,12 @@ async function loadNamespace() {
   
   try {
     // 尝试获取用户或群组信息
-    const response = await api.get(`/users/${route.params.namespace}`)
-    namespace.value = response.data
+    const response = await api.users.get(route.params.namespace as string)
+    namespace.value = response
     
     // 获取该用户的项目
-    const projectsRes = await api.get(`/users/${route.params.namespace}/projects`)
-    projects.value = projectsRes.data
+    const projectsRes = await api.projects.list()
+    projects.value = projectsRes.filter((p: any) => p.owner_name === route.params.namespace)
   } catch (error: any) {
     if (error.response?.status === 404) {
       notFound.value = true

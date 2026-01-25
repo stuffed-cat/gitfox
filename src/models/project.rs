@@ -1,17 +1,16 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
+
 use validator::Validate;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Project {
-    pub id: Uuid,
+    pub id: i64,
     pub name: String,
-    pub slug: String,
     pub description: Option<String>,
     pub visibility: ProjectVisibility,
-    pub owner_id: Uuid,
+    pub owner_id: i64,
     pub default_branch: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -45,9 +44,9 @@ pub struct UpdateProjectRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ProjectMember {
-    pub id: Uuid,
-    pub project_id: Uuid,
-    pub user_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
+    pub user_id: i64,
     pub role: MemberRole,
     pub created_at: DateTime<Utc>,
 }
@@ -64,7 +63,7 @@ pub enum MemberRole {
 
 #[derive(Debug, Deserialize)]
 pub struct AddMemberRequest {
-    pub user_id: Uuid,
+    pub user_id: i64,
     pub role: MemberRole,
 }
 
@@ -80,12 +79,11 @@ pub struct ProjectStats {
 /// Project with owner info for API responses
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ProjectWithOwner {
-    pub id: Uuid,
+    pub id: i64,
     pub name: String,
-    pub slug: String,
     pub description: Option<String>,
     pub visibility: ProjectVisibility,
-    pub owner_id: Uuid,
+    pub owner_id: i64,
     pub default_branch: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

@@ -53,7 +53,7 @@
       </div>
       
       <div class="form-actions">
-        <router-link :to="`/${project?.owner_name}/${project?.slug}/-/merge_requests`" class="btn btn-outline">
+        <router-link :to="`/${project?.owner_name}/${project?.name}/-/merge_requests`" class="btn btn-outline">
           取消
         </router-link>
         <button type="submit" class="btn btn-primary" :disabled="loading || !canSubmit">
@@ -68,7 +68,7 @@
 import { ref, reactive, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
-import type { Project, Branch } from '@/types'
+import type { Project, BranchInfo } from '@/types'
 
 const props = defineProps<{
   project?: Project
@@ -78,7 +78,7 @@ const router = useRouter()
 
 const loading = ref(false)
 const error = ref('')
-const branches = ref<Branch[]>([])
+const branches = ref<BranchInfo[]>([])
 
 const form = reactive({
   source_branch: '',
@@ -95,11 +95,11 @@ const canSubmit = computed(() => {
 })
 
 async function loadBranches() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   
   try {
-    const response = await api.getBranches(props.project.id)
-    branches.value = response.data
+    const path = { namespace: props.project.owner_name, project: props.project.name }
+    branches.value = await api.branches.list(path)
     if (branches.value.length > 0 && !form.target_branch) {
       form.target_branch = props.project.default_branch || branches.value[0].name
     }
@@ -109,13 +109,14 @@ async function loadBranches() {
 }
 
 async function handleSubmit() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   loading.value = true
   error.value = ''
   
   try {
-    const response = await api.createMergeRequest(props.project.id, form)
-    router.push(`/${props.project.owner_name}/${props.project.slug}/-/merge_requests/${response.data.iid}`)
+    const path = { namespace: props.project.owner_name, project: props.project.name }
+    const mr = await api.mergeRequests.create(path, form)
+    router.push(`/${props.project.owner_name}/${props.project.name}/-/merge_requests/${mr.iid}`)
   } catch (e: any) {
     error.value = e.response?.data?.message || '创建合并请求失败'
   } finally {
@@ -123,7 +124,7 @@ async function handleSubmit() {
   }
 }
 
-watch(() => props.project?.id, () => {
+watch([() => props.project?.owner_name, () => props.project?.name], () => {
   loadBranches()
 }, { immediate: true })
 </script>

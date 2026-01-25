@@ -28,12 +28,12 @@
             <span class="separator" v-if="tag.message">·</span>
             <span>{{ formatDate(tag.created_at) }}</span>
             <span class="separator">·</span>
-            <code>{{ tag.commit_sha?.substring(0, 8) }}</code>
+            <code>{{ tag.commit?.sha?.substring(0, 8) }}</code>
           </div>
         </div>
         <div class="tag-actions">
           <router-link
-            :to="`/${project?.owner_name}/${project?.slug}/-/tree/${tag.name}`"
+            :to="`/${project?.owner_name}/${project?.name}/-/tree/${tag.name}`"
             class="btn btn-outline btn-sm"
           >
             浏览
@@ -102,7 +102,7 @@ import api from '@/api'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
-import type { Project, Branch, Tag } from '@/types'
+import type { Project, BranchInfo, TagInfo } from '@/types'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
@@ -112,8 +112,8 @@ const props = defineProps<{
 }>()
 
 const loading = ref(false)
-const tags = ref<Tag[]>([])
-const branches = ref<Branch[]>([])
+const tags = ref<TagInfo[]>([])
+const branches = ref<BranchInfo[]>([])
 const showCreateModal = ref(false)
 const creating = ref(false)
 const newTag = reactive({
@@ -127,12 +127,12 @@ function formatDate(date: string) {
 }
 
 async function loadTags() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   loading.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const response = await api.getTags(props.project.id)
-    tags.value = response.data
+    tags.value = await api.tags.list(path)
   } catch (error) {
     console.error('Failed to load tags:', error)
   } finally {
@@ -141,11 +141,11 @@ async function loadTags() {
 }
 
 async function loadBranches() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const response = await api.getBranches(props.project.id)
-    branches.value = response.data
+    branches.value = await api.branches.list(path)
     if (branches.value.length > 0 && !newTag.ref) {
       newTag.ref = props.project.default_branch || branches.value[0].name
     }
@@ -155,15 +155,12 @@ async function loadBranches() {
 }
 
 async function handleCreate() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   creating.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.createTag(props.project.id, {
-      name: newTag.name,
-      ref: newTag.ref,
-      message: newTag.message || undefined
-    })
+    await api.tags.create(path, newTag.name, newTag.ref, newTag.message || undefined)
     showCreateModal.value = false
     newTag.name = ''
     newTag.message = ''
@@ -176,18 +173,19 @@ async function handleCreate() {
 }
 
 async function handleDelete(name: string) {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   if (!confirm(`确定要删除标签 "${name}" 吗？此操作不可撤销。`)) return
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.deleteTag(props.project.id, name)
+    await api.tags.delete(path, name)
     loadTags()
   } catch (error) {
     console.error('Failed to delete tag:', error)
   }
 }
 
-watch(() => props.project?.id, () => {
+watch([() => props.project?.owner_name, () => props.project?.name], () => {
   loadTags()
   loadBranches()
 }, { immediate: true })

@@ -2,7 +2,7 @@ use actix_web::{dev::ServiceRequest, Error, HttpMessage, HttpRequest, FromReques
 use actix_web::error::ErrorUnauthorized;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use std::future::{Ready, ready};
-use uuid::Uuid;
+
 
 use crate::config::AppConfig;
 use crate::models::Claims;
@@ -39,7 +39,7 @@ pub fn extract_user_from_request(req: &ServiceRequest) -> Option<Claims> {
 
 /// Extractor for authenticated user (required)
 pub struct AuthenticatedUser {
-    pub user_id: Uuid,
+    pub user_id: i64,
     pub username: String,
     pub role: String,
 }
@@ -89,7 +89,7 @@ impl FromRequest for AuthenticatedUser {
 pub struct OptionalAuth(Option<AuthenticatedUser>);
 
 impl OptionalAuth {
-    pub fn user_id(&self) -> Option<Uuid> {
+    pub fn user_id(&self) -> Option<i64> {
         self.0.as_ref().map(|u| u.user_id)
     }
     

@@ -24,7 +24,7 @@
           </button>
         </div>
         <router-link
-          :to="`/${project?.owner_name}/${project?.slug}/-/merge_requests/new`"
+          :to="`/${project?.owner_name}/${project?.name}/-/merge_requests/new`"
           class="btn btn-primary"
         >
           + 新建合并请求
@@ -45,7 +45,7 @@
       <router-link
         v-for="mr in filteredMRs"
         :key="mr.id"
-        :to="`/${project?.owner_name}/${project?.slug}/-/merge_requests/${mr.iid}`"
+        :to="`/${project?.owner_name}/${project?.name}/-/merge_requests/${mr.iid}`"
         class="mr-item"
       >
         <div class="mr-main">
@@ -58,15 +58,10 @@
             <span class="separator">·</span>
             <span>{{ mr.source_branch }} → {{ mr.target_branch }}</span>
             <span class="separator">·</span>
-            <span>{{ mr.author_name }}</span>
-            <span class="separator">·</span>
             <span>{{ formatDate(mr.created_at) }}</span>
           </div>
         </div>
         <div class="mr-stats">
-          <span v-if="mr.comments_count > 0" class="comments">
-            💬 {{ mr.comments_count }}
-          </span>
         </div>
       </router-link>
     </div>
@@ -119,12 +114,12 @@ function statusIcon(status: string) {
 }
 
 async function loadMergeRequests() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   loading.value = true
   
   try {
-    const response = await api.getMergeRequests(props.project.id)
-    mergeRequests.value = response.data
+    const path = { namespace: props.project.owner_name, project: props.project.name }
+    mergeRequests.value = await api.mergeRequests.list(path)
   } catch (error) {
     console.error('Failed to load merge requests:', error)
   } finally {
@@ -132,7 +127,7 @@ async function loadMergeRequests() {
   }
 }
 
-watch(() => props.project?.id, () => {
+watch([() => props.project?.owner_name, () => props.project?.name], () => {
   loadMergeRequests()
 }, { immediate: true })
 </script>

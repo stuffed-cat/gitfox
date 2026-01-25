@@ -119,20 +119,20 @@ impl RedisMessageQueue {
 // Message types for different operations
 pub mod messages {
     use serde::{Deserialize, Serialize};
-    use uuid::Uuid;
+    
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct PipelineTriggerMessage {
-        pub pipeline_id: Uuid,
-        pub project_id: Uuid,
+        pub pipeline_id: i64,
+        pub project_id: i64,
         pub ref_name: String,
         pub commit_sha: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct WebhookDeliveryMessage {
-        pub webhook_id: Uuid,
-        pub delivery_id: Uuid,
+        pub webhook_id: i64,
+        pub delivery_id: i64,
         pub url: String,
         pub payload: serde_json::Value,
         pub secret: Option<String>,
@@ -141,8 +141,8 @@ pub mod messages {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct GitOperationMessage {
         pub operation: GitOperation,
-        pub project_id: Uuid,
-        pub user_id: Uuid,
+        pub project_id: i64,
+        pub user_id: i64,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,7 +154,7 @@ pub mod messages {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct NotificationMessage {
-        pub user_id: Uuid,
+        pub user_id: i64,
         pub notification_type: NotificationType,
         pub title: String,
         pub content: String,

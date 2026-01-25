@@ -6,30 +6,61 @@ use std::path::Path;
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    BranchInfo, CommitDetail, CommitInfo, CommitStats, DiffInfo, DiffStatus, FileContent,
+    BlobContent, BranchInfo, CommitDetail, CommitInfo, CommitStats, DiffInfo, DiffStatus, FileContent,
     FileEntry, FileEntryType, RepositoryInfo, TagInfo,
 };
 
 pub struct GitService;
 
 impl GitService {
-    fn get_repo_path(config: &AppConfig, project_slug: &str) -> String {
-        format!("{}/{}.git", config.git_repos_path, project_slug)
+    /// Git仓库路径: {repos_path}/{owner_name}/{project_name}.git
+    fn get_repo_path(config: &AppConfig, owner_name: &str, project_name: &str) -> String {
+        format!("{}/{}/{}.git", config.git_repos_path, owner_name, project_name)
     }
 
-    pub fn init_repository(config: &AppConfig, project_slug: &str) -> AppResult<()> {
-        let path = Self::get_repo_path(config, project_slug);
+    /// 获取仓库的默认分支（从HEAD引用读取）
+    pub fn get_default_branch(repo: &Repository) -> AppResult<Option<String>> {
+        // 先检查是否有任何分支
+        let branches: Vec<String> = repo
+            .branches(Some(BranchType::Local))?
+            .filter_map(|b| b.ok())
+            .filter_map(|(branch, _)| branch.name().ok().flatten().map(String::from))
+            .collect();
+        
+        if branches.is_empty() {
+            return Ok(None); // 空仓库
+        }
+        
+        // 尝试从HEAD获取默认分支
+        if let Ok(head) = repo.head() {
+            if let Some(name) = head.shorthand() {
+                return Ok(Some(name.to_string()));
+            }
+        }
+        
+        // 如果HEAD没设置，返回第一个分支
+        Ok(branches.into_iter().next())
+    }
+
+    pub fn init_repository(config: &AppConfig, owner_name: &str, project_name: &str) -> AppResult<()> {
+        let path = Self::get_repo_path(config, owner_name, project_name);
+        // 确保父目录存在
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         Repository::init_bare(&path)?;
         Ok(())
     }
 
-    pub fn open_repository(config: &AppConfig, project_slug: &str) -> AppResult<Repository> {
-        let path = Self::get_repo_path(config, project_slug);
+    pub fn open_repository(config: &AppConfig, owner_name: &str, project_name: &str) -> AppResult<Repository> {
+        let path = Self::get_repo_path(config, owner_name, project_name);
         let repo = Repository::open_bare(&path)?;
         Ok(repo)
     }
 
-    pub fn get_repository_info(repo: &Repository, default_branch: &str) -> AppResult<RepositoryInfo> {
+    pub fn get_repository_info(repo: &Repository) -> AppResult<RepositoryInfo> {
+        let default_branch = Self::get_default_branch(repo)?;
+        
         let branches: Vec<String> = repo
             .branches(Some(BranchType::Local))?
             .filter_map(|b| b.ok())
@@ -42,18 +73,23 @@ impl GitService {
             .filter_map(|t| t.map(String::from))
             .collect();
 
-        let last_commit = Self::get_commit_by_ref(repo, default_branch).ok();
+        let last_commit = if let Some(ref branch) = default_branch {
+            Self::get_commit_by_ref(repo, branch).ok()
+        } else {
+            None
+        };
 
         Ok(RepositoryInfo {
-            default_branch: default_branch.to_string(),
+            default_branch,
             branches,
             tags,
-            size_kb: 0, // Would need to calculate directory size
+            size_kb: 0,
             last_commit,
         })
     }
 
-    pub fn get_branches(repo: &Repository, default_branch: &str) -> AppResult<Vec<BranchInfo>> {
+    pub fn get_branches(repo: &Repository) -> AppResult<Vec<BranchInfo>> {
+        let default_branch = Self::get_default_branch(repo)?;
         let mut branches = Vec::new();
 
         for branch_result in repo.branches(Some(BranchType::Local))? {
@@ -69,7 +105,7 @@ impl GitService {
                     name: name.clone(),
                     commit: commit_info,
                     is_protected: false,
-                    is_default: name == default_branch,
+                    is_default: Some(&name) == default_branch.as_ref(),
                 });
             }
         }
@@ -325,6 +361,29 @@ impl GitService {
         }
 
         Ok(commits)
+    }
+
+    pub fn get_blob(repo: &Repository, sha: &str) -> AppResult<BlobContent> {
+        let oid = Oid::from_str(sha)
+            .map_err(|_| AppError::BadRequest(format!("Invalid blob SHA: {}", sha)))?;
+        let blob = repo.find_blob(oid)
+            .map_err(|_| AppError::NotFound(format!("Blob not found: {}", sha)))?;
+
+        let is_binary = blob.is_binary();
+        let content = if is_binary {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(blob.content())
+        } else {
+            String::from_utf8_lossy(blob.content()).to_string()
+        };
+
+        Ok(BlobContent {
+            sha: sha.to_string(),
+            content,
+            size: blob.size() as u64,
+            encoding: if is_binary { "base64" } else { "utf-8" }.to_string(),
+            is_binary,
+        })
     }
 
     pub fn can_merge(repo: &Repository, source: &str, target: &str) -> AppResult<bool> {

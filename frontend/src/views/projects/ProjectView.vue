@@ -71,7 +71,7 @@ const loading = computed(() => projectStore.loading)
 // GitLab 风格的项目路径: /{owner}/{repo}
 const projectPath = computed(() => {
   if (!project.value) return ''
-  return `/${project.value.owner_name}/${project.value.slug}`
+  return `/${project.value.owner_name}/${project.value.name}`
 })
 
 function visibilityClass(visibility: string) {

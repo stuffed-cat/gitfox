@@ -1,14 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
+
 
 use super::repository::CommitInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Branch {
-    pub id: Uuid,
-    pub project_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
     pub name: String,
     pub commit_sha: String,
     pub is_protected: bool,
@@ -37,8 +37,8 @@ pub struct ProtectBranchRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct BranchProtectionRule {
-    pub id: Uuid,
-    pub project_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
     pub branch_pattern: String,
     pub require_review: bool,
     pub required_reviewers: i32,

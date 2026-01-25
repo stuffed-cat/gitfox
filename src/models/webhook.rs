@@ -1,12 +1,12 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Webhook {
-    pub id: Uuid,
-    pub project_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
     pub url: String,
     pub secret: Option<String>,
     pub events: Vec<String>,
@@ -59,8 +59,8 @@ impl WebhookEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct WebhookDelivery {
-    pub id: Uuid,
-    pub webhook_id: Uuid,
+    pub id: i64,
+    pub webhook_id: i64,
     pub event: String,
     pub payload: serde_json::Value,
     pub response_status: Option<i32>,
@@ -72,7 +72,7 @@ pub struct WebhookDelivery {
 #[derive(Debug, Serialize)]
 pub struct WebhookPayload {
     pub event: String,
-    pub project_id: Uuid,
+    pub project_id: i64,
     pub project_name: String,
     pub timestamp: DateTime<Utc>,
     pub data: serde_json::Value,

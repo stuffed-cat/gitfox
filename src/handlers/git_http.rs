@@ -3,14 +3,70 @@
 // Reference: https://git-scm.com/book/en/v2/Git-Internals-Transfer-Protocols
 
 use actix_web::{web, HttpRequest, HttpResponse};
+use base64::Engine;
+use bcrypt::verify;
 use std::process::Stdio;
 use tokio::process::Command;
 use tokio::io::AsyncWriteExt;
 use log::{info, error};
 
+
 use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::middleware::auth::OptionalAuth;
+use crate::models::User;
+
+/// 验证 Git Basic Auth 认证
+/// Git 客户端发送 "Authorization: Basic base64(username:password)"
+async fn verify_git_basic_auth(
+    req: &HttpRequest,
+    pool: &sqlx::PgPool,
+) -> Option<(i64, String)> {
+    let auth_header = req.headers().get("Authorization")?;
+    let auth_str = auth_header.to_str().ok()?;
+    
+    // 检查是否是 Basic Auth
+    if !auth_str.starts_with("Basic ") {
+        return None;
+    }
+    
+    let encoded = &auth_str[6..];
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let credentials = String::from_utf8(decoded).ok()?;
+    
+    // 格式: "username:password"
+    let parts: Vec<&str> = credentials.splitn(2, ':').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    
+    let username = parts[0];
+    let password = parts[1];
+    
+    info!("Git Basic Auth attempt for user: {}", username);
+    
+    // 从数据库查询用户
+    let user: Option<User> = sqlx::query_as::<_, User>(
+        "SELECT * FROM users WHERE username = $1 AND is_active = true"
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await
+    .ok()?;
+    
+    let user = user?;
+    
+    // 验证密码
+    if verify(password, &user.password_hash).ok()? {
+        info!("Git Basic Auth successful for user: {}", username);
+        Some((user.id, user.username))
+    } else {
+        info!("Git Basic Auth failed: invalid password for user: {}", username);
+        None
+    }
+}
 
 /// GET /{namespace}/{project}.git/info/refs?service=git-upload-pack
 /// GET /{namespace}/{project}.git/info/refs?service=git-receive-pack
@@ -39,7 +95,12 @@ pub async fn get_info_refs(
     
     // For git-receive-pack (push), require authentication
     if service == "git-receive-pack" {
-        if auth.user_id().is_none() {
+        // 首先尝试 Bearer Token (来自 OptionalAuth)
+        let user_authenticated = auth.user_id().is_some() 
+            // 然后尝试 Git Basic Auth
+            || verify_git_basic_auth(&req, &pool).await.is_some();
+        
+        if !user_authenticated {
             return Ok(HttpResponse::Unauthorized()
                 .append_header(("WWW-Authenticate", "Basic realm=\"Git\""))
                 .body("Authentication required"));
@@ -47,7 +108,7 @@ pub async fn get_info_refs(
         // TODO: Check write permission
     }
     
-    let repo_path = format!("{}/{}.git", config.git_repos_path, project.slug);
+    let repo_path = format!("{}/{}/{}.git", config.git_repos_path, namespace, project.name);
     
     // Run git command
     let output = Command::new(service)
@@ -88,7 +149,7 @@ pub async fn git_upload_pack(
     
     let project = get_project_by_path(&pool, &namespace, project_name).await?;
     
-    let repo_path = format!("{}/{}.git", config.git_repos_path, project.slug);
+    let repo_path = format!("{}/{}/{}.git", config.git_repos_path, namespace, project.name);
     
     // Spawn git-upload-pack process
     let mut child = Command::new("git-upload-pack")
@@ -117,6 +178,7 @@ pub async fn git_upload_pack(
 
 /// POST /{namespace}/{project}.git/git-receive-pack
 pub async fn git_receive_pack(
+    req: HttpRequest,
     path: web::Path<(String, String)>,
     body: web::Bytes,
     pool: web::Data<sqlx::PgPool>,
@@ -124,9 +186,21 @@ pub async fn git_receive_pack(
     auth: OptionalAuth,
 ) -> Result<HttpResponse, AppError> {
     // Require authentication for push
-    let _user_id = auth.user_id().ok_or_else(|| {
-        AppError::unauthorized("Authentication required for push")
-    })?;
+    // 首先尝试 Bearer Token, 然后尝试 Git Basic Auth
+    let _user_id = match auth.user_id() {
+        Some(id) => id,
+        None => {
+            // 尝试 Basic Auth
+            match verify_git_basic_auth(&req, &pool).await {
+                Some((id, _username)) => id,
+                None => {
+                    return Ok(HttpResponse::Unauthorized()
+                        .append_header(("WWW-Authenticate", "Basic realm=\"Git\""))
+                        .body("Authentication required for push"));
+                }
+            }
+        }
+    };
     
     let (namespace, project_name) = path.into_inner();
     let project_name = project_name.trim_end_matches(".git");
@@ -135,7 +209,7 @@ pub async fn git_receive_pack(
     
     // TODO: Check write permission for user_id on project
     
-    let repo_path = format!("{}/{}.git", config.git_repos_path, project.slug);
+    let repo_path = format!("{}/{}/{}.git", config.git_repos_path, namespace, project.name);
     
     // Spawn git-receive-pack process
     let mut child = Command::new("git-receive-pack")
@@ -177,26 +251,7 @@ async fn get_project_by_path(
 ) -> Result<crate::models::project::Project, AppError> {
     info!("Looking for project: namespace='{}', project='{}'", namespace, project_name);
     
-    // First try to find by owner username + project slug
-    let project = sqlx::query_as::<_, crate::models::project::Project>(
-        r#"
-        SELECT p.* FROM projects p
-        JOIN users u ON p.owner_id = u.id
-        WHERE LOWER(u.username) = LOWER($1) AND LOWER(p.slug) = LOWER($2)
-        "#
-    )
-    .bind(namespace)
-    .bind(project_name)
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::from)?;
-    
-    if let Some(project) = project {
-        info!("Found project by username/slug: id={}", project.id);
-        return Ok(project);
-    }
-    
-    // Also try matching by project name (not just slug)
+    // 通过 owner username + project name 查找
     let project = sqlx::query_as::<_, crate::models::project::Project>(
         r#"
         SELECT p.* FROM projects p
@@ -211,11 +266,10 @@ async fn get_project_by_path(
     .map_err(AppError::from)?;
     
     if let Some(project) = project {
-        info!("Found project by username/name: id={}", project.id);
+        info!("Found project: id={}", project.id);
         return Ok(project);
     }
     
-    // TODO: Try finding by group path + project slug
     error!("Project not found: namespace='{}', project='{}'", namespace, project_name);
     Err(AppError::not_found(format!("Project '{}/{}' not found", namespace, project_name)))
 }

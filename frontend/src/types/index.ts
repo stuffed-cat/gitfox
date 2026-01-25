@@ -27,7 +27,6 @@ export interface LoginResponse {
 export interface Project {
   id: string
   name: string
-  slug: string
   description?: string
   visibility: 'public' | 'private' | 'internal'
   owner_id: string

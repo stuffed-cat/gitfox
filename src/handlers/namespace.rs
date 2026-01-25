@@ -1,6 +1,6 @@
 use actix_web::{web, HttpResponse};
 use sqlx::PgPool;
-use uuid::Uuid;
+
 
 use crate::error::AppError;
 use crate::middleware::auth::AuthenticatedUser;
@@ -65,36 +65,33 @@ pub async fn create_group(
         return Err(AppError::conflict("Path conflicts with existing username"));
     }
     
-    let group_id = Uuid::new_v4();
-    let namespace_id = Uuid::new_v4();
     let visibility = body.visibility.clone().unwrap_or(NamespaceVisibility::Private);
     
     // Create namespace first
-    sqlx::query(
+    let namespace_id: i64 = sqlx::query_scalar(
         r#"
-        INSERT INTO namespaces (id, name, path, namespace_type, visibility, owner_id, parent_id)
-        VALUES ($1, $2, $3, 'group', $4, $5, $6)
+        INSERT INTO namespaces (name, path, namespace_type, visibility, owner_id, parent_id)
+        VALUES ($1, $2, 'group', $3, $4, $5)
+        RETURNING id
         "#
     )
-    .bind(namespace_id)
     .bind(&body.name)
     .bind(&body.path)
     .bind(&visibility)
     .bind(auth.user_id)
     .bind(&body.parent_id)
-    .execute(pool.get_ref())
+    .fetch_one(pool.get_ref())
     .await
     .map_err(AppError::from)?;
     
     // Create group
     let group = sqlx::query_as::<_, Group>(
         r#"
-        INSERT INTO groups (id, namespace_id, name, path, description, visibility, parent_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO groups (namespace_id, name, path, description, visibility, parent_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING *
         "#
     )
-    .bind(group_id)
     .bind(namespace_id)
     .bind(&body.name)
     .bind(&body.path)
@@ -108,12 +105,11 @@ pub async fn create_group(
     // Add creator as owner
     sqlx::query(
         r#"
-        INSERT INTO group_members (id, group_id, user_id, access_level)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO group_members (group_id, user_id, access_level)
+        VALUES ($1, $2, $3)
         "#
     )
-    .bind(Uuid::new_v4())
-    .bind(group_id)
+    .bind(group.id)
     .bind(auth.user_id)
     .bind(AccessLevel::Owner as i32)
     .execute(pool.get_ref())
@@ -289,15 +285,14 @@ pub async fn add_group_member(
     
     let member = sqlx::query_as::<_, GroupMember>(
         r#"
-        INSERT INTO group_members (id, group_id, user_id, access_level, expires_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO group_members (group_id, user_id, access_level, expires_at)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (group_id, user_id) DO UPDATE SET
-            access_level = $4,
-            expires_at = $5
+            access_level = $3,
+            expires_at = $4
         RETURNING *
         "#
     )
-    .bind(Uuid::new_v4())
     .bind(group.id)
     .bind(body.user_id)
     .bind(body.access_level as i32)
@@ -312,7 +307,7 @@ pub async fn add_group_member(
 /// Remove a member from a group
 pub async fn remove_group_member(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<(String, i64)>,
     auth: AuthenticatedUser,
 ) -> Result<HttpResponse, AppError> {
     let (group_path, user_id) = path.into_inner();
@@ -444,8 +439,8 @@ pub async fn get_namespace(
 // Helper to get user's access level in a group
 async fn get_user_group_access(
     pool: &PgPool,
-    group_id: Uuid,
-    user_id: Uuid,
+    group_id: i64,
+    user_id: i64,
 ) -> Result<AccessLevel, AppError> {
     let access = sqlx::query_scalar::<_, i32>(
         r#"

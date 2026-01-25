@@ -1,6 +1,6 @@
 use actix_web::{web, HttpResponse};
 use sqlx::PgPool;
-use uuid::Uuid;
+
 
 use crate::error::AppResult;
 use crate::models::{UpdateUserRequest, UserInfo};
@@ -27,15 +27,23 @@ pub async fn list_users(
 
 pub async fn get_user(
     pool: web::Data<PgPool>,
-    path: web::Path<Uuid>,
+    path: web::Path<i64>,
 ) -> AppResult<HttpResponse> {
     let user = UserService::get_user_by_id(pool.get_ref(), path.into_inner()).await?;
     Ok(HttpResponse::Ok().json(UserInfo::from(user)))
 }
 
+pub async fn get_user_by_username(
+    pool: web::Data<PgPool>,
+    path: web::Path<String>,
+) -> AppResult<HttpResponse> {
+    let user = UserService::get_user_by_username(pool.get_ref(), &path.into_inner()).await?;
+    Ok(HttpResponse::Ok().json(UserInfo::from(user)))
+}
+
 pub async fn update_user(
     pool: web::Data<PgPool>,
-    path: web::Path<Uuid>,
+    path: web::Path<i64>,
     body: web::Json<UpdateUserRequest>,
 ) -> AppResult<HttpResponse> {
     let user = UserService::update_user(
@@ -50,7 +58,7 @@ pub async fn update_user(
 
 pub async fn delete_user(
     pool: web::Data<PgPool>,
-    path: web::Path<Uuid>,
+    path: web::Path<i64>,
 ) -> AppResult<HttpResponse> {
     UserService::delete_user(pool.get_ref(), path.into_inner()).await?;
     Ok(HttpResponse::NoContent().finish())

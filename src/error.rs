@@ -60,6 +60,12 @@ impl From<sqlx::Error> for AppError {
     }
 }
 
+impl From<std::io::Error> for AppError {
+    fn from(err: std::io::Error) -> Self {
+        AppError::InternalError(err.to_string())
+    }
+}
+
 impl From<git2::Error> for AppError {
     fn from(err: git2::Error) -> Self {
         AppError::GitError(err.message().to_string())

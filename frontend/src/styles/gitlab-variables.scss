@@ -1,0 +1,211 @@
+// GitLab Design System CSS Variables
+// Extracted from GitLab's application CSS
+// =========================================
+
+:root {
+  // =============
+  // COLOR SYSTEM
+  // =============
+  
+  // Neutral Scale (Gray)
+  --gl-color-neutral-0: #fff;
+  --gl-color-neutral-10: #fbfafd;
+  --gl-color-neutral-50: #f0f0f2;
+  --gl-color-neutral-100: #dcdcde;
+  --gl-color-neutral-200: #bfbfc3;
+  --gl-color-neutral-300: #999;
+  --gl-color-neutral-400: #868686;
+  --gl-color-neutral-500: #737278;
+  --gl-color-neutral-600: #626167;
+  --gl-color-neutral-700: #525156;
+  --gl-color-neutral-800: #3d3c40;
+  --gl-color-neutral-900: #1f1e24;
+  --gl-color-neutral-950: #0a090d;
+  
+  // Blue Scale (Primary)
+  --gl-color-blue-50: #e9f3fc;
+  --gl-color-blue-100: #cbe2f9;
+  --gl-color-blue-200: #9dc5f2;
+  --gl-color-blue-300: #63a6e9;
+  --gl-color-blue-400: #428fdc;
+  --gl-color-blue-500: #1f75cb;
+  --gl-color-blue-600: #1068bf;
+  --gl-color-blue-700: #0b5cad;
+  --gl-color-blue-800: #064787;
+  --gl-color-blue-900: #033464;
+  --gl-color-blue-950: #002850;
+  
+  // Green Scale (Success)
+  --gl-color-green-50: #ecf4ee;
+  --gl-color-green-100: #c3e6cd;
+  --gl-color-green-200: #91d4a8;
+  --gl-color-green-300: #52b87a;
+  --gl-color-green-400: #2da160;
+  --gl-color-green-500: #108548;
+  --gl-color-green-600: #217645;
+  --gl-color-green-700: #24663b;
+  --gl-color-green-800: #0d532a;
+  --gl-color-green-900: #0a4020;
+  --gl-color-green-950: #072b15;
+  
+  // Red Scale (Danger)
+  --gl-color-red-50: #fcf1ef;
+  --gl-color-red-100: #fdd4cd;
+  --gl-color-red-200: #fcb5aa;
+  --gl-color-red-300: #f57f6c;
+  --gl-color-red-400: #ec5941;
+  --gl-color-red-500: #dd2b0e;
+  --gl-color-red-600: #c91c00;
+  --gl-color-red-700: #ae1800;
+  --gl-color-red-800: #8d1300;
+  --gl-color-red-900: #660e00;
+  --gl-color-red-950: #4d0a00;
+  
+  // Orange Scale (Warning)
+  --gl-color-orange-50: #fdf1dd;
+  --gl-color-orange-100: #f5d9a8;
+  --gl-color-orange-200: #e9be74;
+  --gl-color-orange-300: #d99530;
+  --gl-color-orange-400: #c17d10;
+  --gl-color-orange-500: #ab6100;
+  --gl-color-orange-600: #9e5a00;
+  --gl-color-orange-700: #8f4700;
+  --gl-color-orange-800: #703800;
+  --gl-color-orange-900: #5c2900;
+  --gl-color-orange-950: #421f00;
+  
+  // =============
+  // FONT SYSTEM
+  // =============
+  
+  // Font Family
+  --gl-font-family-default: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans', Ubuntu, Cantarell, 'Helvetica Neue', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  --gl-font-family-monospace: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  
+  // Font Sizes
+  --gl-font-size-100: 0.75rem;     // 12px
+  --gl-font-size-200: 0.8125rem;   // 13px
+  --gl-font-size-300: 0.875rem;    // 14px
+  --gl-font-size-400: 1rem;        // 16px
+  --gl-font-size-500: 1.125rem;    // 18px
+  --gl-font-size-600: 1.3125rem;   // 21px
+  --gl-font-size-700: 1.5rem;      // 24px
+  --gl-font-size-800: 1.75rem;     // 28px
+  
+  // Font Size Aliases
+  --gl-font-size-sm: var(--gl-font-size-100);    // 12px
+  --gl-font-size-md: var(--gl-font-size-300);    // 14px
+  --gl-font-size-lg: var(--gl-font-size-400);    // 16px
+  
+  // Line Heights
+  --gl-line-height-12: 0.75rem;
+  --gl-line-height-16: 1rem;
+  --gl-line-height-20: 1.25rem;
+  --gl-line-height-24: 1.5rem;
+  --gl-line-height-28: 1.75rem;
+  --gl-line-height-32: 2rem;
+  --gl-line-height-heading: 1.25;
+  
+  // ===============
+  // SPACING SYSTEM
+  // ===============
+  
+  --gl-spacing-0: 0;
+  --gl-spacing-1: 0.125rem;   // 2px
+  --gl-spacing-2: 0.25rem;    // 4px
+  --gl-spacing-3: 0.5rem;     // 8px
+  --gl-spacing-4: 0.75rem;    // 12px
+  --gl-spacing-5: 1rem;       // 16px
+  --gl-spacing-6: 1.5rem;     // 24px
+  --gl-spacing-7: 2rem;       // 32px
+  --gl-spacing-8: 2.5rem;     // 40px
+  --gl-spacing-9: 3rem;       // 48px
+  --gl-spacing-10: 3.5rem;    // 56px
+  --gl-spacing-11: 4rem;      // 64px
+  --gl-spacing-12: 5rem;      // 80px
+  
+  // =================
+  // BORDER SYSTEM
+  // =================
+  
+  --gl-border-radius-none: 0;
+  --gl-border-radius-xs: 1px;
+  --gl-border-radius-sm: 0.125rem;   // 2px
+  --gl-border-radius-md: 0.25rem;    // 4px
+  --gl-border-radius-base: 0.25rem;  // 4px
+  --gl-border-radius-lg: 0.5rem;     // 8px
+  --gl-border-radius-xl: 0.75rem;    // 12px
+  --gl-border-radius-2xl: 1rem;      // 16px
+  --gl-border-radius-full: 9999px;
+  
+  // Border Colors
+  --gl-border-color-default: var(--gl-color-neutral-100);
+  --gl-border-color-subtle: #ececef;
+  --gl-border-color-strong: var(--gl-color-neutral-200);
+  
+  // =================
+  // SHADOW SYSTEM
+  // =================
+  
+  --gl-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --gl-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08), 0 0 2px rgba(0, 0, 0, 0.08);
+  --gl-shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.15);
+  --gl-shadow-xl: 0 8px 16px rgba(0, 0, 0, 0.15);
+  --gl-shadow-focus: 0 0 0 3px rgba(31, 117, 203, 0.25);
+  
+  // =================
+  // COMPONENT TOKENS
+  // =================
+  
+  // Buttons
+  --gl-button-default-background: var(--gl-color-neutral-0);
+  --gl-button-default-background-hover: var(--gl-color-neutral-50);
+  --gl-button-default-background-active: var(--gl-color-neutral-100);
+  --gl-button-default-border: var(--gl-color-neutral-200);
+  --gl-button-default-border-hover: var(--gl-color-neutral-400);
+  
+  --gl-button-confirm-background: var(--gl-color-blue-500);
+  --gl-button-confirm-background-hover: var(--gl-color-blue-600);
+  --gl-button-confirm-background-active: var(--gl-color-blue-700);
+  --gl-button-confirm-border: var(--gl-color-blue-600);
+  
+  // Links
+  --gl-link-color: var(--gl-color-blue-500);
+  --gl-link-color-hover: var(--gl-color-blue-600);
+  
+  // Actions
+  --gl-action-selected-background: var(--gl-color-blue-50);
+  --gl-action-selected-border: var(--gl-color-blue-500);
+  
+  // =================
+  // LAYOUT TOKENS
+  // =================
+  
+  --gl-header-height: 52px;
+  --gl-sidebar-width: 240px;
+  --gl-content-max-width: 1280px;
+  --gl-project-sidebar-width: 290px;
+}
+
+// Dark Mode Support (Optional)
+@media (prefers-color-scheme: dark) {
+  :root.gl-dark,
+  .gl-dark {
+    --gl-color-neutral-0: #1f1e24;
+    --gl-color-neutral-10: #252329;
+    --gl-color-neutral-50: #303030;
+    --gl-color-neutral-100: #404040;
+    --gl-color-neutral-200: #505050;
+    --gl-color-neutral-300: #707070;
+    --gl-color-neutral-400: #909090;
+    --gl-color-neutral-500: #a0a0a0;
+    --gl-color-neutral-600: #b0b0b0;
+    --gl-color-neutral-700: #c0c0c0;
+    --gl-color-neutral-800: #d0d0d0;
+    --gl-color-neutral-900: #e0e0e0;
+    --gl-color-neutral-950: #f0f0f0;
+    
+    --gl-border-color-default: var(--gl-color-neutral-100);
+    --gl-border-color-subtle: #363636;
+  }
+}

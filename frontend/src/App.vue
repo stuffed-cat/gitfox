@@ -107,7 +107,7 @@ onUnmounted(() => {
 
 .app-main {
   flex: 1;
-  margin-left: $sidebar-width;
+  margin-left: 24px;
   transition: margin-left $transition-normal;
   background: $bg-secondary;
   min-height: calc(100vh - $header-height);

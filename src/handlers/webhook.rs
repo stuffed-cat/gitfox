@@ -1,7 +1,7 @@
 use actix_web::{web, HttpResponse};
 use chrono::Utc;
 use sqlx::PgPool;
-use uuid::Uuid;
+
 
 use crate::error::{AppError, AppResult};
 use crate::models::{CreateWebhookRequest, UpdateWebhookRequest, Webhook, WebhookDelivery, WebhookPayload};
@@ -10,9 +10,10 @@ use crate::services::ProjectService;
 
 pub async fn list_webhooks(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<(String, String)>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let (namespace, project_name) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let webhooks = sqlx::query_as::<_, Webhook>(
         "SELECT * FROM webhooks WHERE project_id = $1 ORDER BY created_at"
@@ -26,23 +27,22 @@ pub async fn list_webhooks(
 
 pub async fn create_webhook(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<(String, String)>,
     body: web::Json<CreateWebhookRequest>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let (namespace, project_name) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
-    let id = Uuid::new_v4();
     let now = Utc::now();
     let events: Vec<String> = body.events.iter().map(|e| e.as_str().to_string()).collect();
     
     let webhook = sqlx::query_as::<_, Webhook>(
         r#"
-        INSERT INTO webhooks (id, project_id, url, secret, events, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, true, $6, $6)
+        INSERT INTO webhooks (project_id, url, secret, events, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, true, $5, $5)
         RETURNING *
         "#
     )
-    .bind(id)
     .bind(project.id)
     .bind(&body.url)
     .bind(&body.secret)
@@ -56,10 +56,10 @@ pub async fn create_webhook(
 
 pub async fn get_webhook(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
-    let (slug, webhook_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, webhook_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let webhook = sqlx::query_as::<_, Webhook>(
         "SELECT * FROM webhooks WHERE id = $1 AND project_id = $2"
@@ -85,11 +85,11 @@ pub async fn get_webhook(
 
 pub async fn update_webhook(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<(String, String, i64)>,
     body: web::Json<UpdateWebhookRequest>,
 ) -> AppResult<HttpResponse> {
-    let (slug, webhook_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, webhook_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let events: Option<Vec<String>> = body.events.as_ref().map(|e| {
         e.iter().map(|ev| ev.as_str().to_string()).collect()
@@ -122,10 +122,10 @@ pub async fn update_webhook(
 
 pub async fn delete_webhook(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
-    let (slug, webhook_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, webhook_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let result = sqlx::query("DELETE FROM webhooks WHERE id = $1 AND project_id = $2")
         .bind(webhook_id)
@@ -143,10 +143,10 @@ pub async fn delete_webhook(
 pub async fn test_webhook(
     pool: web::Data<PgPool>,
     queue: web::Data<RedisMessageQueue>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
-    let (slug, webhook_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, webhook_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let webhook = sqlx::query_as::<_, Webhook>(
         "SELECT * FROM webhooks WHERE id = $1 AND project_id = $2"
@@ -158,7 +158,6 @@ pub async fn test_webhook(
     .ok_or_else(|| AppError::NotFound("Webhook not found".to_string()))?;
     
     // Create test delivery record
-    let delivery_id = Uuid::new_v4();
     let now = Utc::now();
     
     let payload = WebhookPayload {
@@ -171,23 +170,23 @@ pub async fn test_webhook(
         }),
     };
     
-    sqlx::query(
+    let delivery: WebhookDelivery = sqlx::query_as(
         r#"
-        INSERT INTO webhook_deliveries (id, webhook_id, event, payload, created_at)
-        VALUES ($1, $2, 'test', $3, $4)
+        INSERT INTO webhook_deliveries (webhook_id, event, payload, created_at)
+        VALUES ($1, 'test', $2, $3)
+        RETURNING *
         "#
     )
-    .bind(delivery_id)
     .bind(webhook.id)
     .bind(serde_json::to_value(&payload).unwrap())
     .bind(now)
-    .execute(pool.get_ref())
+    .fetch_one(pool.get_ref())
     .await?;
     
     // Queue delivery
     let message = WebhookDeliveryMessage {
         webhook_id: webhook.id,
-        delivery_id,
+        delivery_id: delivery.id,
         url: webhook.url.clone(),
         payload: serde_json::to_value(&payload).unwrap(),
         secret: webhook.secret.clone(),
@@ -196,6 +195,6 @@ pub async fn test_webhook(
     
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "message": "Test webhook queued",
-        "delivery_id": delivery_id
+        "delivery_id": delivery.id
     })))
 }

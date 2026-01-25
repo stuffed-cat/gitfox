@@ -1,20 +1,20 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
+
 
 /// Namespace represents either a user or a group
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Namespace {
-    pub id: Uuid,
+    pub id: i64,
     pub name: String,
     pub path: String,
     pub description: Option<String>,
     pub avatar_url: Option<String>,
     pub namespace_type: NamespaceType,
-    pub parent_id: Option<Uuid>,  // For subgroups
+    pub parent_id: Option<i64>,  // For subgroups
     pub visibility: NamespaceVisibility,
-    pub owner_id: Option<Uuid>,   // Only for groups, users own themselves
+    pub owner_id: Option<i64>,   // Only for groups, users own themselves
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -38,23 +38,23 @@ pub enum NamespaceVisibility {
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Group {
-    pub id: Uuid,
-    pub namespace_id: Uuid,
+    pub id: i64,
+    pub namespace_id: i64,
     pub name: String,
     pub path: String,
     pub description: Option<String>,
     pub avatar_url: Option<String>,
     pub visibility: NamespaceVisibility,
-    pub parent_id: Option<Uuid>,
+    pub parent_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct GroupMember {
-    pub id: Uuid,
-    pub group_id: Uuid,
-    pub user_id: Uuid,
+    pub id: i64,
+    pub group_id: i64,
+    pub user_id: i64,
     pub access_level: i32,
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
@@ -77,7 +77,7 @@ pub struct CreateGroupRequest {
     pub path: String,
     pub description: Option<String>,
     pub visibility: Option<NamespaceVisibility>,
-    pub parent_id: Option<Uuid>,
+    pub parent_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,7 +90,7 @@ pub struct UpdateGroupRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct AddGroupMemberRequest {
-    pub user_id: Uuid,
+    pub user_id: i64,
     pub access_level: AccessLevel,
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -107,7 +107,7 @@ pub struct GroupWithDetails {
 
 #[derive(Debug, Serialize, FromRow)]
 pub struct NamespaceInfo {
-    pub id: Uuid,
+    pub id: i64,
     pub name: String,
     pub path: String,
     pub full_path: String,

@@ -1,7 +1,7 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use chrono::Utc;
 use sqlx::PgPool;
-use uuid::Uuid;
+
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
@@ -15,10 +15,11 @@ use crate::services::ProjectService;
 
 pub async fn list_pipelines(
     pool: web::Data<PgPool>,
-    path: web::Path<String>,
+    path: web::Path<(String, String)>,
     query: web::Query<PipelineListQuery>,
 ) -> AppResult<HttpResponse> {
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let (namespace, project_name) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(20);
@@ -50,19 +51,19 @@ pub async fn trigger_pipeline(
     pool: web::Data<PgPool>,
     config: web::Data<AppConfig>,
     queue: web::Data<RedisMessageQueue>,
-    path: web::Path<String>,
+    path: web::Path<(String, String)>,
     body: web::Json<TriggerPipelineRequest>,
 ) -> AppResult<HttpResponse> {
     let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
     let claims = validate_token(&service_req, config.get_ref()).await?;
     
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &path.into_inner()).await?;
+    let (namespace, project_name) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
-    let id = Uuid::new_v4();
     let now = Utc::now();
     
     // Get commit SHA from ref
-    let repo = crate::services::GitService::open_repository(config.get_ref(), &project.slug)?;
+    let repo = crate::services::GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     let commits = crate::services::GitService::get_commits(&repo, &body.ref_name, None, 1, 1)?;
     let commit_sha = commits.first()
         .map(|c| c.sha.clone())
@@ -71,12 +72,11 @@ pub async fn trigger_pipeline(
     let pipeline = sqlx::query_as::<_, Pipeline>(
         r#"
         INSERT INTO pipelines 
-        (id, project_id, ref_name, commit_sha, status, trigger_type, triggered_by, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+        (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
         RETURNING *
         "#
     )
-    .bind(id)
     .bind(project.id)
     .bind(&body.ref_name)
     .bind(&commit_sha)
@@ -101,10 +101,10 @@ pub async fn trigger_pipeline(
 
 pub async fn get_pipeline(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
-    let (slug, pipeline_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, pipeline_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let pipeline = sqlx::query_as::<_, Pipeline>(
         "SELECT * FROM pipelines WHERE id = $1 AND project_id = $2"
@@ -130,10 +130,10 @@ pub async fn get_pipeline(
 
 pub async fn cancel_pipeline(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
-    let (slug, pipeline_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, pipeline_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let pipeline = sqlx::query_as::<_, Pipeline>(
         r#"
@@ -165,13 +165,13 @@ pub async fn retry_pipeline(
     pool: web::Data<PgPool>,
     config: web::Data<AppConfig>,
     queue: web::Data<RedisMessageQueue>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
     let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
     let claims = validate_token(&service_req, config.get_ref()).await?;
     
-    let (slug, pipeline_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, pipeline_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     let old_pipeline = sqlx::query_as::<_, Pipeline>(
         "SELECT * FROM pipelines WHERE id = $1 AND project_id = $2"
@@ -183,18 +183,16 @@ pub async fn retry_pipeline(
     .ok_or_else(|| AppError::NotFound("Pipeline not found".to_string()))?;
     
     // Create new pipeline
-    let id = Uuid::new_v4();
     let now = Utc::now();
     
     let pipeline = sqlx::query_as::<_, Pipeline>(
         r#"
         INSERT INTO pipelines 
-        (id, project_id, ref_name, commit_sha, status, trigger_type, triggered_by, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+        (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
         RETURNING *
         "#
     )
-    .bind(id)
     .bind(project.id)
     .bind(&old_pipeline.ref_name)
     .bind(&old_pipeline.commit_sha)
@@ -219,10 +217,10 @@ pub async fn retry_pipeline(
 
 pub async fn list_jobs(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, Uuid)>,
+    path: web::Path<(String, String, i64)>,
 ) -> AppResult<HttpResponse> {
-    let (slug, pipeline_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, pipeline_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     // Verify pipeline belongs to project
     let _ = sqlx::query_as::<_, Pipeline>(
@@ -246,10 +244,10 @@ pub async fn list_jobs(
 
 pub async fn get_job_log(
     pool: web::Data<PgPool>,
-    path: web::Path<(String, Uuid, Uuid)>,
+    path: web::Path<(String, String, i64, i64)>,
 ) -> AppResult<HttpResponse> {
-    let (slug, pipeline_id, job_id) = path.into_inner();
-    let project = ProjectService::get_project_by_slug(pool.get_ref(), &slug).await?;
+    let (namespace, project_name, pipeline_id, job_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
     // Verify pipeline belongs to project
     let _ = sqlx::query_as::<_, Pipeline>(

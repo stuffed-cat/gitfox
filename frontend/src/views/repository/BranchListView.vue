@@ -30,16 +30,16 @@
             <span v-if="branch.is_protected" class="badge badge-warning">保护</span>
           </div>
           <div class="branch-meta">
-            <span v-if="branch.last_commit_message">
-              {{ branch.last_commit_message.substring(0, 50) }}
+            <span v-if="branch.commit?.message">
+              {{ branch.commit.message.substring(0, 50) }}
             </span>
-            <span class="separator" v-if="branch.last_commit_message">·</span>
-            <span>{{ formatDate(branch.updated_at) }}</span>
+            <span class="separator" v-if="branch.commit?.message">·</span>
+            <span>{{ formatCommitDate(branch.commit?.committed_date) }}</span>
           </div>
         </div>
         <div class="branch-actions">
           <router-link
-            :to="`/${project?.owner_name}/${project?.slug}/-/tree/${branch.name}`"
+            :to="`/${project?.owner_name}/${project?.name}/-/tree/${branch.name}`"
             class="btn btn-outline btn-sm"
           >
             浏览
@@ -102,7 +102,7 @@ import api from '@/api'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
-import type { Project, Branch } from '@/types'
+import type { Project, BranchInfo } from '@/types'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
@@ -112,7 +112,7 @@ const props = defineProps<{
 }>()
 
 const loading = ref(false)
-const branches = ref<Branch[]>([])
+const branches = ref<BranchInfo[]>([])
 const showCreateModal = ref(false)
 const creating = ref(false)
 const newBranch = reactive({
@@ -120,17 +120,18 @@ const newBranch = reactive({
   source: ''
 })
 
-function formatDate(date: string) {
-  return dayjs(date).fromNow()
+function formatCommitDate(timestamp?: number) {
+  if (!timestamp) return '-'
+  return dayjs.unix(timestamp).fromNow()
 }
 
 async function loadBranches() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   loading.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    const response = await api.getBranches(props.project.id)
-    branches.value = response.data
+    branches.value = await api.branches.list(path)
     if (branches.value.length > 0 && !newBranch.source) {
       newBranch.source = props.project.default_branch || branches.value[0].name
     }
@@ -142,14 +143,12 @@ async function loadBranches() {
 }
 
 async function handleCreate() {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   creating.value = true
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.createBranch(props.project.id, {
-      name: newBranch.name,
-      source_branch: newBranch.source
-    })
+    await api.branches.create(path, newBranch.name, newBranch.source)
     showCreateModal.value = false
     newBranch.name = ''
     loadBranches()
@@ -161,18 +160,19 @@ async function handleCreate() {
 }
 
 async function handleDelete(name: string) {
-  if (!props.project?.id) return
+  if (!props.project?.owner_name || !props.project?.name) return
   if (!confirm(`确定要删除分支 "${name}" 吗？此操作不可撤销。`)) return
+  const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
-    await api.deleteBranch(props.project.id, name)
+    await api.branches.delete(path, name)
     loadBranches()
   } catch (error) {
     console.error('Failed to delete branch:', error)
   }
 }
 
-watch(() => props.project?.id, () => {
+watch([() => props.project?.owner_name, () => props.project?.name], () => {
   loadBranches()
 }, { immediate: true })
 </script>

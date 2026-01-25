@@ -1,14 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
+
 
 use super::repository::CommitInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Tag {
-    pub id: Uuid,
-    pub project_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
     pub name: String,
     pub commit_sha: String,
     pub message: Option<String>,
@@ -36,13 +36,13 @@ pub struct CreateTagRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Release {
-    pub id: Uuid,
-    pub project_id: Uuid,
+    pub id: i64,
+    pub project_id: i64,
     pub tag_name: String,
     pub name: String,
     pub description: Option<String>,
     pub is_prerelease: bool,
-    pub created_by: Uuid,
+    pub created_by: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
