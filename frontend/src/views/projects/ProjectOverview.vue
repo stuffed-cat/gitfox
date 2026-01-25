@@ -68,7 +68,7 @@
                         class="dropdown-item" :class="{ active: branch.name === currentRef }"
                         @click="selectRef(branch.name)">
                       {{ branch.name }}
-                      <span v-if="branch.name === project?.default_branch" class="default-badge">默认</span>
+                      <span v-if="branch.is_default" class="default-badge">默认</span>
                       <svg v-if="branch.name === currentRef" class="check-icon" viewBox="0 0 16 16"><path d="M4 8l3 3 5-6" stroke="currentColor" stroke-width="2" fill="none"/></svg>
                     </li>
                     <li v-if="filteredBranches.length === 0" class="dropdown-empty">无匹配分支</li>
@@ -455,7 +455,7 @@ async function loadTree() {
   try {
     if (branches.value.length === 0) { isEmpty.value = true; loading.value = false; return }
     
-    const refToUse = currentRef.value || props.project.default_branch
+    const refToUse = currentRef.value
     if (!refToUse) { isEmpty.value = true; loading.value = false; return }
     
     const data = await apiClient.repository.browseTree(
@@ -480,7 +480,7 @@ async function loadTree() {
 
 async function loadReadme(path: string) {
   if (!props.project?.name || !props.project?.owner_name) return
-  const refToUse = currentRef.value || props.project.default_branch
+  const refToUse = currentRef.value
   if (!refToUse) return
   try {
     const data = await apiClient.repository.getFile(
@@ -493,7 +493,7 @@ async function loadReadme(path: string) {
 
 async function loadLastCommit() {
   if (!props.project?.name || !props.project?.owner_name) return
-  const refToUse = currentRef.value || props.project.default_branch
+  const refToUse = currentRef.value
   if (!refToUse) return
   try {
     const commits = await apiClient.commits.list(
@@ -527,9 +527,9 @@ onMounted(async () => {
     await loadTags()
     // 根据实际分支设置 currentRef，空仓库不设置任何值
     if (branches.value.length > 0) {
-      // 检查 default_branch 是否真实存在，不存在则用第一个分支
-      const defaultExists = branches.value.some(b => b.name === props.project?.default_branch)
-      currentRef.value = defaultExists ? props.project!.default_branch : branches.value[0].name
+      // 使用API返回的is_default标记来确定默认分支
+      const defaultBranch = branches.value.find(b => b.is_default)
+      currentRef.value = defaultBranch?.name || branches.value[0].name
       loadTree()
       loadLastCommit()
     } else {
@@ -546,9 +546,9 @@ watch(() => props.project, async (p) => {
     await loadBranches()
     await loadTags()
     if (branches.value.length > 0) {
-      // 检查 default_branch 是否真实存在，不存在则用第一个分支
-      const defaultExists = branches.value.some(b => b.name === p.default_branch)
-      currentRef.value = defaultExists ? p.default_branch : branches.value[0].name
+      // 使用API返回的is_default标记来确定默认分支
+      const defaultBranch = branches.value.find(b => b.is_default)
+      currentRef.value = defaultBranch?.name || branches.value[0].name
       loadTree()
       loadLastCommit()
     } else {

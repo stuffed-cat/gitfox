@@ -11,7 +11,6 @@ pub struct Project {
     pub description: Option<String>,
     pub visibility: ProjectVisibility,
     pub owner_id: i64,
-    pub default_branch: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -31,7 +30,6 @@ pub struct CreateProjectRequest {
     pub name: String,
     pub description: Option<String>,
     pub visibility: Option<ProjectVisibility>,
-    pub default_branch: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -39,7 +37,6 @@ pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub visibility: Option<ProjectVisibility>,
-    pub default_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -84,7 +81,6 @@ pub struct ProjectWithOwner {
     pub description: Option<String>,
     pub visibility: ProjectVisibility,
     pub owner_id: i64,
-    pub default_branch: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub owner_name: String,

@@ -34,11 +34,16 @@ pub async fn list_commits(
     ).await?;
     let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
-    let ref_name = query.ref_name.as_deref().unwrap_or(&project.default_branch);
+    // 从Git读取默认分支，不是数据库
+    let ref_name = match query.ref_name.as_deref() {
+        Some(r) => r.to_string(),
+        None => GitService::get_default_branch(&repo)?
+            .ok_or_else(|| crate::error::AppError::NotFound("Empty repository".to_string()))?
+    };
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(20);
     
-    let commits = GitService::get_commits(&repo, ref_name, query.path.as_deref(), page, per_page)?;
+    let commits = GitService::get_commits(&repo, &ref_name, query.path.as_deref(), page, per_page)?;
     Ok(HttpResponse::Ok().json(commits))
 }
 

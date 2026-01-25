@@ -5,44 +5,7 @@
     </div>
     
     <template v-else-if="project">
-      <div class="project-header">
-        <div class="project-info">
-          <h1>{{ project.name }}</h1>
-          <p v-if="project.description">{{ project.description }}</p>
-        </div>
-        <div class="project-actions">
-          <span class="badge" :class="visibilityClass(project.visibility)">
-            {{ visibilityText(project.visibility) }}
-          </span>
-        </div>
-      </div>
       
-      <nav class="project-nav">
-        <router-link :to="projectPath" exact-active-class="active">
-          概览
-        </router-link>
-        <router-link :to="`${projectPath}/-/tree/${project.default_branch}`" active-class="active">
-          文件
-        </router-link>
-        <router-link :to="`${projectPath}/-/commits/${project.default_branch}`" active-class="active">
-          提交
-        </router-link>
-        <router-link :to="`${projectPath}/-/branches`" active-class="active">
-          分支
-        </router-link>
-        <router-link :to="`${projectPath}/-/tags`" active-class="active">
-          标签
-        </router-link>
-        <router-link :to="`${projectPath}/-/merge_requests`" active-class="active">
-          合并请求
-        </router-link>
-        <router-link :to="`${projectPath}/-/pipelines`" active-class="active">
-          流水线
-        </router-link>
-        <router-link :to="`${projectPath}/-/settings`" active-class="active">
-          设置
-        </router-link>
-      </nav>
       
       <div class="project-content">
         <router-view :project="project" :stats="stats" />
@@ -67,12 +30,6 @@ const projectStore = useProjectStore()
 const project = computed(() => projectStore.currentProject)
 const stats = computed(() => projectStore.projectStats)
 const loading = computed(() => projectStore.loading)
-
-// GitLab 风格的项目路径: /{owner}/{repo}
-const projectPath = computed(() => {
-  if (!project.value) return ''
-  return `/${project.value.owner_name}/${project.value.name}`
-})
 
 function visibilityClass(visibility: string) {
   return {
@@ -123,31 +80,6 @@ watch(
   }
 }
 
-.project-nav {
-  display: flex;
-  border-bottom: 1px solid $border-color;
-  margin-bottom: $spacing-lg;
-  overflow-x: auto;
-  
-  a {
-    padding: $spacing-sm $spacing-md;
-    color: $text-secondary;
-    text-decoration: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    white-space: nowrap;
-    transition: all $transition-fast;
-    
-    &:hover {
-      color: $text-primary;
-    }
-    
-    &.active {
-      color: $primary-color;
-      border-bottom-color: $primary-color;
-    }
-  }
-}
 
 .project-content {
   background: $bg-primary;

@@ -133,7 +133,9 @@ async function loadBranches() {
   try {
     branches.value = await api.branches.list(path)
     if (branches.value.length > 0 && !newBranch.source) {
-      newBranch.source = props.project.default_branch || branches.value[0].name
+      // 使用API返回的默认分支或第一个分支
+      const defaultBranch = branches.value.find(b => b.is_default)
+      newBranch.source = defaultBranch?.name || branches.value[0].name
     }
   } catch (error) {
     console.error('Failed to load branches:', error)

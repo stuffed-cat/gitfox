@@ -18,7 +18,6 @@ impl ProjectService {
     ) -> AppResult<ProjectWithOwner> {
         let now = Utc::now();
         let visibility = req.visibility.unwrap_or(ProjectVisibility::Private);
-        let default_branch = req.default_branch.unwrap_or_else(|| "main".to_string());
 
         // 检查同一用户下是否已存在同名项目
         let existing = sqlx::query_scalar::<_, i64>(
@@ -35,9 +34,9 @@ impl ProjectService {
 
         let project = sqlx::query_as::<_, ProjectWithOwner>(
             r#"
-            INSERT INTO projects (name, description, visibility, owner_id, default_branch, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $6)
-            RETURNING id, name, description, visibility, owner_id, default_branch, created_at, updated_at,
+            INSERT INTO projects (name, description, visibility, owner_id, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $5)
+            RETURNING id, name, description, visibility, owner_id, created_at, updated_at,
                 (SELECT username FROM users WHERE id = $4) as owner_name,
                 (SELECT avatar_url FROM users WHERE id = $4) as owner_avatar
             "#
@@ -46,10 +45,9 @@ impl ProjectService {
         .bind(&req.description)
         .bind(visibility)
         .bind(owner_id)
-        .bind(&default_branch)
         .bind(now)
         .fetch_one(pool)
-        .await?;
+        .await?;;
 
         // 把 owner 添加为项目成员
         Self::add_member(pool, project.id, owner_id, MemberRole::Owner).await?;
@@ -139,7 +137,6 @@ impl ProjectService {
             SET name = COALESCE($2, name),
                 description = COALESCE($3, description),
                 visibility = COALESCE($4, visibility),
-                default_branch = COALESCE($5, default_branch),
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -149,7 +146,6 @@ impl ProjectService {
         .bind(req.name)
         .bind(req.description)
         .bind(req.visibility)
-        .bind(req.default_branch)
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;

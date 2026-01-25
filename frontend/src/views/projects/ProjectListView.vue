@@ -125,14 +125,6 @@
           <div class="project-stats">
             <div class="stat-item">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <circle cx="4" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/>
-                <circle cx="8" cy="12" r="2" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M4 6v2a4 4 0 004 4" stroke="currentColor" stroke-width="1.5"/>
-              </svg>
-              <span>{{ project.default_branch }}</span>
-            </div>
-            <div class="stat-item">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
                 <path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
               </svg>
@@ -164,7 +156,6 @@
         <div class="list-header">
           <span class="col-name">项目</span>
           <span class="col-visibility">可见性</span>
-          <span class="col-branch">分支</span>
           <span class="col-updated">更新时间</span>
         </div>
         <router-link
@@ -186,9 +177,6 @@
             <span class="badge" :class="'badge-' + visibilityClass(project.visibility)">
               {{ visibilityText(project.visibility) }}
             </span>
-          </div>
-          <div class="col-branch">
-            <code>{{ project.default_branch }}</code>
           </div>
           <div class="col-updated">
             {{ formatDate(project.updated_at) }}

@@ -106,7 +106,7 @@ async function loadPipelines() {
 async function triggerPipeline() {
   if (!props.project?.owner_name || !props.project?.name) return
   
-  const refName = prompt('请输入分支或标签名称', props.project.default_branch)
+  const refName = prompt('请输入分支或标签名称', 'master')
   if (!refName) return
   const path = { namespace: props.project.owner_name, project: props.project.name }
   

@@ -31,7 +31,7 @@
                 @click="selectRef(branch.name)"
               >
                 {{ branch.name }}
-                <span v-if="branch.name === project?.default_branch" class="default-badge">默认</span>
+                <span v-if="branch.is_default" class="default-badge">默认</span>
               </div>
               <div v-if="filteredBranches.length === 0" class="no-results">无匹配分支</div>
             </template>
@@ -108,7 +108,7 @@ cd {{ repo }}
 touch README.md
 git add README.md
 git commit -m "add README"
-git push -u origin {{ project?.default_branch || 'master' }}</code></pre>
+git push -u origin master</code></pre>
         
         <h4>推送已有的文件夹</h4>
         <pre><code>cd existing_folder
@@ -116,7 +116,7 @@ git init
 git remote add origin {{ cloneUrl }}
 git add .
 git commit -m "Initial commit"
-git push -u origin {{ project?.default_branch || 'master' }}</code></pre>
+git push -u origin master</code></pre>
         
         <h4>推送已有的 Git 仓库</h4>
         <pre><code>cd existing_repo
@@ -239,6 +239,7 @@ interface TreeItem {
 interface Branch {
   name: string
   commit?: string
+  is_default?: boolean
 }
 
 interface Tag {
@@ -397,7 +398,7 @@ async function loadBranches() {
   const path = { namespace: project.value.owner_name, project: project.value.name }
   try {
     const data = await apiClient.branches.list(path)
-    branches.value = (data || []).map(b => ({ name: b.name, commit: b.commit?.sha }))
+    branches.value = (data || []).map(b => ({ name: b.name, commit: b.commit?.sha, is_default: b.is_default }))
   } catch (err) {
     console.error('Failed to load branches:', err)
     branches.value = []
@@ -426,7 +427,7 @@ async function loadTree() {
   const path = { namespace: project.value.owner_name, project: project.value.name }
   
   try {
-    const refToUse = currentRef.value || project.value.default_branch
+    const refToUse = currentRef.value
     if (!refToUse) { isEmpty.value = true; loading.value = false; return }
     
     const data = await apiClient.repository.browseTree(
@@ -479,7 +480,7 @@ async function loadFileContent(filePath: string) {
   const path = { namespace: project.value.owner_name, project: project.value.name }
   
   try {
-    const refToUse = currentRef.value || project.value.default_branch
+    const refToUse = currentRef.value
     if (!refToUse) { error.value = '无法加载文件，仓库为空'; loading.value = false; return }
     
     const data = await apiClient.repository.getFile(
@@ -504,7 +505,7 @@ async function loadReadme(readmePath: string) {
   const path = { namespace: project.value.owner_name, project: project.value.name }
   
   try {
-    const refToUse = currentRef.value || project.value.default_branch
+    const refToUse = currentRef.value
     if (!refToUse) return
     
     const data = await apiClient.repository.getFile(
@@ -594,8 +595,9 @@ async function initFromRoute() {
   if (refParam) {
     currentRef.value = refParam
   } else if (branches.value.length > 0) {
-    // 有分支时，使用默认分支或第一个分支
-    currentRef.value = project.value?.default_branch || branches.value[0].name
+    // 有分支时，使用API返回的默认分支或第一个分支
+    const defaultBranch = branches.value.find(b => b.is_default)
+    currentRef.value = defaultBranch?.name || branches.value[0].name
   } else {
     // 空仓库不设置任何 ref
     currentRef.value = ''

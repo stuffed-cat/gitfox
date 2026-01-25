@@ -126,7 +126,6 @@ git push --set-upstream origin main</code></pre>
             class="form-input"
             placeholder="My project"
             required
-            @input="generateSlug"
           />
           <span class="hint">必须以小写或大写字母、数字、表情符号或下划线开头。也可以包含点、加号、破折号或空格。</span>
         </div>
@@ -298,7 +297,6 @@ const form = reactive({
   namespace: currentUser.value?.username || '',
   description: '',
   visibility: 'private' as 'public' | 'private' | 'internal',
-  default_branch: 'master',
   deployTarget: '',
   initializeWithReadme: true,
   enableSAST: false
@@ -316,8 +314,7 @@ async function handleSubmit() {
     const project = await projectStore.createProject({
       name: form.name,
       description: form.description,
-      visibility: form.visibility,
-      default_branch: form.default_branch
+      visibility: form.visibility
     })
     router.push(`/${project.owner_name || currentUser.value?.username}/${project.name}`)
   } catch (e: any) {

@@ -32,7 +32,6 @@ export interface Project {
   owner_id: string
   owner_name?: string
   owner_avatar?: string
-  default_branch: string
   created_at: string
   updated_at: string
 }
@@ -41,7 +40,6 @@ export interface CreateProjectRequest {
   name: string
   description?: string
   visibility?: 'public' | 'private' | 'internal'
-  default_branch?: string
 }
 
 export interface ProjectStats {
@@ -61,7 +59,7 @@ export interface ProjectMember {
 }
 
 export interface RepositoryInfo {
-  default_branch: string
+  default_branch: string | null
   branches: string[]
   tags: string[]
   size_kb: number

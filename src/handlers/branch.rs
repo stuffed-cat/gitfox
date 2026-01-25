@@ -74,7 +74,7 @@ pub async fn get_branch(
         &path.project
     ).await?;
     let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    let branches = GitService::get_branches(&repo, &project.default_branch)?;
+    let branches = GitService::get_branches(&repo)?;
     
     let branch = branches.into_iter()
         .find(|b| b.name == path.branch)

@@ -41,15 +41,6 @@
             </select>
           </div>
           
-          <div class="form-group">
-            <label for="defaultBranch">默认分支</label>
-            <select id="defaultBranch" v-model="basicForm.default_branch" class="form-control">
-              <option v-for="branch in branches" :key="branch.name" :value="branch.name">
-                {{ branch.name }}
-              </option>
-            </select>
-          </div>
-          
           <button type="submit" class="btn btn-primary" :disabled="saving">
             {{ saving ? '保存中...' : '保存更改' }}
           </button>
@@ -180,8 +171,7 @@ const webhooks = ref<Webhook[]>([])
 const basicForm = reactive({
   name: '',
   description: '',
-  visibility: 'private' as 'public' | 'private' | 'internal',
-  default_branch: ''
+  visibility: 'private' as 'public' | 'private' | 'internal'
 })
 
 const newMemberUsername = ref('')
@@ -219,7 +209,6 @@ async function loadSettings() {
     basicForm.name = props.project.name
     basicForm.description = props.project.description || ''
     basicForm.visibility = props.project.visibility
-    basicForm.default_branch = props.project.default_branch
   } catch (error) {
     console.error('Failed to load settings:', error)
   } finally {
