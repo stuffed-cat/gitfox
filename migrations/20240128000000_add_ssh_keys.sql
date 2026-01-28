@@ -1,4 +1,4 @@
-6-- SSH Keys table for storing user SSH public keys
+-- SSH Keys table for storing user SSH public keys
 CREATE TABLE ssh_keys (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

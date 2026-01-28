@@ -13,6 +13,14 @@ pub struct Config {
     pub shell_secret: String,
     /// Base URL for the GitFox instance (used for LFS, webhooks, etc.)
     pub base_url: String,
+    /// SSH server enabled
+    pub ssh_enabled: bool,
+    /// SSH server host
+    pub ssh_host: String,
+    /// SSH server port
+    pub ssh_port: u16,
+    /// SSH host key path (without e`xtension)
+    pub ssh_host_key_path: String,
 }
 
 impl Config {
@@ -40,6 +48,17 @@ impl Config {
                     .unwrap_or_else(|_| "change-me-in-production".to_string())),
             base_url: env::var("GITFOX_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".to_string()),
+            ssh_enabled: env::var("SSH_ENABLED")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true),
+            ssh_host: env::var("SSH_HOST")
+                .unwrap_or_else(|_| "0.0.0.0".to_string()),
+            ssh_port: env::var("SSH_PORT")
+                .unwrap_or_else(|_| "2222".to_string())
+                .parse()
+                .expect("Invalid SSH_PORT"),
+            ssh_host_key_path: env::var("SSH_HOST_KEY_PATH")
+                .unwrap_or_else(|_| "./data/ssh/host_key".to_string()),
         }
     }
 }

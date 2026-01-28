@@ -92,6 +92,14 @@ const routes = [
     meta: { requiresAuth: true }
   },
   
+  // User settings routes
+  {
+    path: '/-/profile/keys',
+    name: 'SshKeys',
+    component: () => import('@/views/settings/SshKeysView.vue'),
+    meta: { requiresAuth: true }
+  },
+  
   // User/Group profile (single segment path)
   {
     path: '/:namespace',

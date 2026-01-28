@@ -1,7 +1,7 @@
 use actix_cors::Cors;
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use dotenv::dotenv;
-use std::env;
+use std::sync::Arc;
 
 mod config;
 mod db;
@@ -11,6 +11,7 @@ mod middleware;
 mod models;
 mod queue;
 mod services;
+mod ssh;
 
 use config::AppConfig;
 use db::{init_pg_pool, init_redis_pool};
@@ -41,7 +42,21 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Failed to run migrations");
 
-    log::info!("Starting DevOps server at {}", server_addr);
+    // Start SSH server if enabled
+    if config.ssh_enabled {
+        let ssh_config = Arc::new(config.clone());
+        let ssh_pool = Arc::new(pg_pool.clone());
+        
+        log::info!(
+            "Starting GitFox SSH server on {}:{}",
+            config.ssh_host,
+            config.ssh_port
+        );
+        
+        ssh::start_ssh_server(ssh_config, ssh_pool);
+    }
+
+    log::info!("Starting GitFox HTTP server at {}", server_addr);
 
     HttpServer::new(move || {
         let cors = Cors::default()
