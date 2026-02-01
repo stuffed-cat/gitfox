@@ -229,7 +229,7 @@ git push -u origin --tags</code></pre>
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
-import apiClient from '@/api'
+import apiClient, { api } from '@/api'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
@@ -288,6 +288,8 @@ const fileSize = ref(0)
 const viewingFile = ref(false)
 const lastCommit = ref<CommitInfo | null>(null)
 const readmeContent = ref('')
+const cloneConfig = ref<{ ssh_enabled: boolean; ssh_clone_url_prefix: string; http_clone_url_prefix: string } | null>(null)
+const cloneType = ref<'http' | 'ssh'>('http')
 
 // Ref dropdown
 const showRefDropdown = ref(false)
@@ -296,7 +298,16 @@ const refSearch = ref('')
 
 // Computed
 const project = computed(() => props.project)
-const cloneUrl = computed(() => `${window.location.origin}/${owner.value}/${repo.value}.git`)
+const cloneUrl = computed(() => {
+  const repoPath = `${owner.value}/${repo.value}.git`
+  if (cloneType.value === 'ssh' && cloneConfig.value?.ssh_enabled) {
+    return `${cloneConfig.value.ssh_clone_url_prefix}${repoPath}`
+  }
+  if (cloneConfig.value?.http_clone_url_prefix) {
+    return `${cloneConfig.value.http_clone_url_prefix}${repoPath}`
+  }
+  return `${window.location.origin}/${repoPath}`
+})
 
 const pathSegments = computed(() => {
   return currentPath.value ? currentPath.value.split('/').filter(Boolean) : []
@@ -655,8 +666,14 @@ watch(() => route.params, () => {
   initFromRoute()
 }, { deep: true })
 
-onMounted(() => {
+onMounted(async () => {
   document.addEventListener('click', handleClickOutside)
+  // 加载克隆 URL 配置
+  try {
+    cloneConfig.value = await api.config.get()
+  } catch (e) {
+    console.warn('Failed to load clone config:', e)
+  }
 })
 
 onUnmounted(() => {

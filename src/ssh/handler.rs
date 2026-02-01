@@ -11,7 +11,7 @@ use russh::{Channel, ChannelId, CryptoVec};
 use russh_keys::key::PublicKey;
 use russh_keys::PublicKeyBase64;
 use sqlx::PgPool;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use super::session::{GitAction, GitSession};
@@ -37,7 +37,7 @@ impl GitSshHandler {
         // Compute fingerprint
         let fingerprint = compute_key_fingerprint(key);
         
-        debug!("Authenticating key with fingerprint: {}", fingerprint);
+        debug!("SSH auth attempt");
 
         // Look up key in database
         let result = sqlx::query_as::<_, (i64, i64, String)>(
@@ -88,21 +88,25 @@ impl GitSshHandler {
     ) -> Result<bool, String> {
         let user_id = self.session.user_id.ok_or("Not authenticated")?;
 
-        // Find the project
+        debug!("check_access: repo_path='{}', user_id={}, needs_write={}", repo_path, user_id, needs_write);
+
+        // Find the project by matching owner.username/project.name
         let project = sqlx::query_as::<_, (i64, String, i64)>(
             r#"
             SELECT p.id, p.visibility::text, p.owner_id
             FROM projects p
-            JOIN namespaces n ON p.namespace_id = n.id
-            WHERE CONCAT(n.path, '/', p.name) = $1
-               OR p.repository_path = $1
+            JOIN users u ON p.owner_id = u.id
+            WHERE LOWER(CONCAT(u.username, '/', p.name)) = LOWER($1)
             "#,
         )
         .bind(repo_path)
         .fetch_optional(self.session.pool.as_ref())
         .await
-        .map_err(|e| format!("Database error: {}", e))?
-        .ok_or_else(|| "Repository not found".to_string())?;
+        .map_err(|e| format!("Database error: {}", e))?;
+
+        debug!("check_access: query result for '{}': {:?}", repo_path, project);
+
+        let project = project.ok_or_else(|| format!("Repository '{}' not found", repo_path))?;
 
         let (project_id, visibility, owner_id) = project;
 
@@ -367,10 +371,21 @@ impl Handler for GitSshHandler {
                     session.close(channel);
                 }
             }
-            Ok(false) | Err(_) => {
+            Ok(false) => {
+                debug!("check_access returned Ok(false) for {}", repo_path);
                 let err_msg = format!(
                     "GitFox: Permission denied. You don't have access to {}.\n",
                     repo_path
+                );
+                session.extended_data(channel, 1, CryptoVec::from_slice(err_msg.as_bytes()));
+                session.exit_status_request(channel, 1);
+                session.close(channel);
+            }
+            Err(e) => {
+                debug!("check_access error for {}: {}", repo_path, e);
+                let err_msg = format!(
+                    "GitFox: {}.\n",
+                    e
                 );
                 session.extended_data(channel, 1, CryptoVec::from_slice(err_msg.as_bytes()));
                 session.exit_status_request(channel, 1);
@@ -412,13 +427,26 @@ impl Handler for GitSshHandler {
     }
 }
 
-/// Compute the SHA256 fingerprint of a public key
+/// Compute the SHA256 fingerprint of a public key (compatible with ssh-keygen format)
 fn compute_key_fingerprint(key: &PublicKey) -> String {
     use base64::Engine;
+    use russh_keys::PublicKeyBase64;
     
-    let blob = key.public_key_bytes();
+    // 使用 russh 的 public_key_base64() 获取标准 OpenSSH 格式的 base64 编码
+    // 这和 ssh-keygen 使用的格式一致
+    let key_base64 = key.public_key_base64();
+    
+    // 解码 base64 得到 wire format blob
+    let blob = match base64::engine::general_purpose::STANDARD.decode(&key_base64) {
+        Ok(b) => b,
+        Err(_) => return "invalid".to_string(),
+    };
+    
+    // 计算 SHA256 hash
     let hash = ring::digest::digest(&ring::digest::SHA256, &blob);
-    let fingerprint = base64::engine::general_purpose::STANDARD.encode(hash.as_ref());
     
-    format!("SHA256:{}", fingerprint.trim_end_matches('='))
+    // 使用标准 base64 编码（无 padding），和 ssh-keygen 一致
+    let fingerprint = base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash.as_ref());
+    
+    format!("SHA256:{}", fingerprint)
 }

@@ -214,6 +214,8 @@ onMounted(() => {
 </script>
 
 <style lang="scss" scoped>
+@import '@/styles/variables';
+
 .new-issue-view {
   padding: $spacing-6;
   max-width: 1200px;
@@ -274,7 +276,7 @@ onMounted(() => {
   
   &:focus {
     outline: none;
-    border-color: $primary;
+    border-color: $brand-primary;
   }
   
   &::placeholder {

@@ -258,7 +258,7 @@ onMounted(() => {
 </script>
 
 <style lang="scss" scoped>
-@use '@/styles/variables' as *;
+@import '@/styles/variables';
 
 .issue-list-view {
   padding: $spacing-6;

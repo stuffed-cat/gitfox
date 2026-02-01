@@ -1,5 +1,5 @@
 <template>
-  <div class="settings-page">
+  <div class="preferences-page">
     <!-- 面包屑导航 -->
     <div class="breadcrumb">
       <router-link to="/-/profile">用户设置</router-link>
@@ -7,128 +7,152 @@
       <span>偏好设置</span>
     </div>
 
-    <!-- 页面标题 -->
-    <div class="page-header">
-      <h1>偏好设置</h1>
-      <p class="description">自定义您的 GitFox 体验</p>
+    <!-- 搜索框 -->
+    <div class="search-box">
+      <svg class="search-icon" viewBox="0 0 16 16" width="16" height="16" fill="none">
+        <path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM10.5 11a5.5 5.5 0 1 1 1-1l3 3a.75.75 0 1 1-1 1l-3-3Z" stroke="currentColor" stroke-width="1.2"/>
+      </svg>
+      <input type="text" placeholder="搜索页" v-model="searchQuery" />
     </div>
 
-    <div class="settings-content">
+    <!-- Mode 部分 -->
+    <section class="preference-section">
+      <h2>Mode</h2>
+      <p class="section-description">Choose a color mode.</p>
+      
+      <div class="radio-group">
+        <label class="radio-option">
+          <input type="radio" v-model="preferences.mode" value="light" />
+          <span class="radio-custom"></span>
+          <span class="radio-label">亮色</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" v-model="preferences.mode" value="dark" />
+          <span class="radio-custom"></span>
+          <span class="radio-label">Dark</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" v-model="preferences.mode" value="auto" />
+          <span class="radio-custom"></span>
+          <span class="radio-label">Auto</span>
+        </label>
+      </div>
+    </section>
 
-      <form @submit.prevent="savePreferences" class="preferences-form">
-        <div class="form-section">
-          <h3>外观</h3>
-          
-          <div class="form-group">
-            <label>主题</label>
-            <div class="theme-options">
-              <label class="theme-option" :class="{ active: preferences.theme === 'light' }">
-                <input type="radio" v-model="preferences.theme" value="light" />
-                <div class="theme-preview light-theme">
-                  <div class="preview-header"></div>
-                  <div class="preview-content"></div>
-                </div>
-                <span>浅色</span>
-              </label>
-              <label class="theme-option" :class="{ active: preferences.theme === 'dark' }">
-                <input type="radio" v-model="preferences.theme" value="dark" />
-                <div class="theme-preview dark-theme">
-                  <div class="preview-header"></div>
-                  <div class="preview-content"></div>
-                </div>
-                <span>深色</span>
-              </label>
-              <label class="theme-option" :class="{ active: preferences.theme === 'system' }">
-                <input type="radio" v-model="preferences.theme" value="system" />
-                <div class="theme-preview system-theme">
-                  <div class="preview-header"></div>
-                  <div class="preview-content"></div>
-                </div>
-                <span>跟随系统</span>
-              </label>
+    <!-- Theme 部分 -->
+    <section class="preference-section">
+      <h2>Theme</h2>
+      <p class="section-description">Select the accent color for the application interface.</p>
+      
+      <div class="theme-colors">
+        <label class="color-option" :class="{ active: preferences.theme === 'default' }">
+          <input type="radio" v-model="preferences.theme" value="default" />
+          <div class="color-preview default"></div>
+          <span>Default</span>
+        </label>
+        <label class="color-option" :class="{ active: preferences.theme === 'indigo' }">
+          <input type="radio" v-model="preferences.theme" value="indigo" />
+          <div class="color-preview indigo"></div>
+          <span>靛蓝</span>
+        </label>
+        <label class="color-option" :class="{ active: preferences.theme === 'blue' }">
+          <input type="radio" v-model="preferences.theme" value="blue" />
+          <div class="color-preview blue"></div>
+          <span>蓝色</span>
+        </label>
+        <label class="color-option" :class="{ active: preferences.theme === 'green' }">
+          <input type="radio" v-model="preferences.theme" value="green" />
+          <div class="color-preview green"></div>
+          <span>绿色</span>
+        </label>
+        <label class="color-option" :class="{ active: preferences.theme === 'red' }">
+          <input type="radio" v-model="preferences.theme" value="red" />
+          <div class="color-preview red"></div>
+          <span>红色</span>
+        </label>
+        <label class="color-option" :class="{ active: preferences.theme === 'gray' }">
+          <input type="radio" v-model="preferences.theme" value="gray" />
+          <div class="color-preview gray"></div>
+          <span>灰色</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Syntax highlighting 部分 -->
+    <section class="preference-section">
+      <h2>Syntax highlighting</h2>
+      <p class="section-description">Choose a highlight color scheme for viewing and editing code.</p>
+      
+      <div class="syntax-section">
+        <h3>Light color scheme</h3>
+        <div class="syntax-options">
+          <label class="syntax-option" :class="{ active: preferences.lightSyntax === 'white' }">
+            <input type="radio" v-model="preferences.lightSyntax" value="white" />
+            <div class="syntax-preview white">
+              <div class="code-line"><span class="keyword">class</span> DoctypesCont</div>
+              <div class="code-line">  <span class="method">def</span> index</div>
+              <div class="code-line">    <span class="variable">@doctypes</span> = Dc</div>
+              <div class="code-line">  <span class="keyword">end</span></div>
             </div>
-          </div>
+          </label>
+          <label class="syntax-option" :class="{ active: preferences.lightSyntax === 'solarized-light' }">
+            <input type="radio" v-model="preferences.lightSyntax" value="solarized-light" />
+            <div class="syntax-preview solarized-light">
+              <div class="code-line"><span class="keyword">class</span> DoctypesCont</div>
+              <div class="code-line">  <span class="method">def</span> index</div>
+              <div class="code-line">    <span class="variable">@doctypes</span> = Dc</div>
+              <div class="code-line">  <span class="keyword">end</span></div>
+            </div>
+          </label>
+          <label class="syntax-option" :class="{ active: preferences.lightSyntax === 'monokai' }">
+            <input type="radio" v-model="preferences.lightSyntax" value="monokai" />
+            <div class="syntax-preview monokai">
+              <div class="code-line"><span class="keyword">class</span> DoctypesCont</div>
+              <div class="code-line">  <span class="method">def</span> index</div>
+              <div class="code-line">    <span class="variable">@doctypes</span> = Dc</div>
+              <div class="code-line">  <span class="keyword">end</span></div>
+            </div>
+          </label>
+          <label class="syntax-option" :class="{ active: preferences.lightSyntax === 'solarized-dark' }">
+            <input type="radio" v-model="preferences.lightSyntax" value="solarized-dark" />
+            <div class="syntax-preview solarized-dark">
+              <div class="code-line"><span class="keyword">class</span> DoctypesCont</div>
+              <div class="code-line">  <span class="method">def</span> index</div>
+              <div class="code-line">    <span class="variable">@doctypes</span> = Dc</div>
+              <div class="code-line">  <span class="keyword">end</span></div>
+            </div>
+          </label>
+          <label class="syntax-option" :class="{ active: preferences.lightSyntax === 'dracula' }">
+            <input type="radio" v-model="preferences.lightSyntax" value="dracula" />
+            <div class="syntax-preview dracula">
+              <div class="code-line"><span class="keyword">class</span> DoctypesCont</div>
+              <div class="code-line">  <span class="method">def</span> index</div>
+              <div class="code-line">    <span class="variable">@doctypes</span> = Dc</div>
+              <div class="code-line">  <span class="keyword">end</span></div>
+            </div>
+          </label>
+          <label class="syntax-option" :class="{ active: preferences.lightSyntax === 'none' }">
+            <input type="radio" v-model="preferences.lightSyntax" value="none" />
+            <div class="syntax-preview none">
+              <div class="code-line">class DoctypesCont</div>
+              <div class="code-line">  def index</div>
+              <div class="code-line">    @doctypes = Dc</div>
+              <div class="code-line">  end</div>
+            </div>
+          </label>
         </div>
+      </div>
+    </section>
 
-        <div class="form-section">
-          <h3>语言与地区</h3>
-          
-          <div class="form-group">
-            <label for="language">语言</label>
-            <select id="language" v-model="preferences.language" class="form-control">
-              <option value="zh-CN">简体中文</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-          
-          <div class="form-group">
-            <label for="timezone">时区</label>
-            <select id="timezone" v-model="preferences.timezone" class="form-control">
-              <option value="Asia/Shanghai">中国标准时间 (UTC+8)</option>
-              <option value="UTC">协调世界时 (UTC)</option>
-              <option value="America/New_York">美国东部时间 (UTC-5)</option>
-              <option value="Europe/London">格林威治时间 (UTC+0)</option>
-            </select>
-          </div>
-        </div>
+    <!-- 保存按钮 -->
+    <div class="form-actions">
+      <button type="button" class="btn btn-primary" @click="savePreferences" :disabled="saving">
+        {{ saving ? '保存中...' : '保存更改' }}
+      </button>
+    </div>
 
-        <div class="form-section">
-          <h3>通知</h3>
-          
-          <div class="form-group checkbox-group">
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="preferences.notifications.email" />
-              <span>邮件通知</span>
-            </label>
-            <small class="form-text">接收项目更新、评论和合并请求的邮件通知</small>
-          </div>
-          
-          <div class="form-group checkbox-group">
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="preferences.notifications.web" />
-              <span>网页通知</span>
-            </label>
-            <small class="form-text">在浏览器中接收实时通知</small>
-          </div>
-        </div>
-
-        <div class="form-section">
-          <h3>代码编辑器</h3>
-          
-          <div class="form-group">
-            <label for="tabSize">Tab 大小</label>
-            <select id="tabSize" v-model="preferences.editor.tabSize" class="form-control">
-              <option :value="2">2 空格</option>
-              <option :value="4">4 空格</option>
-              <option :value="8">8 空格</option>
-            </select>
-          </div>
-          
-          <div class="form-group checkbox-group">
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="preferences.editor.lineNumbers" />
-              <span>显示行号</span>
-            </label>
-          </div>
-          
-          <div class="form-group checkbox-group">
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="preferences.editor.wordWrap" />
-              <span>自动换行</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary" :disabled="saving">
-            {{ saving ? '保存中...' : '保存更改' }}
-          </button>
-        </div>
-
-        <div v-if="message" :class="['alert', messageType === 'success' ? 'alert-success' : 'alert-danger']">
-          {{ message }}
-        </div>
-      </form>
+    <div v-if="message" :class="['alert', messageType === 'success' ? 'alert-success' : 'alert-error']">
+      {{ message }}
     </div>
   </div>
 </template>
@@ -136,19 +160,13 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 
+const searchQuery = ref('')
+
 const preferences = reactive({
-  theme: 'light',
-  language: 'zh-CN',
-  timezone: 'Asia/Shanghai',
-  notifications: {
-    email: true,
-    web: true
-  },
-  editor: {
-    tabSize: 4,
-    lineNumbers: true,
-    wordWrap: false
-  }
+  mode: 'light',
+  theme: 'default',
+  lightSyntax: 'white',
+  darkSyntax: 'monokai'
 })
 
 const saving = ref(false)
@@ -160,9 +178,7 @@ const savePreferences = async () => {
   message.value = ''
 
   try {
-    // Save to localStorage for now
     localStorage.setItem('user-preferences', JSON.stringify(preferences))
-    
     message.value = '偏好设置已保存'
     messageType.value = 'success'
   } catch (error: any) {
@@ -175,9 +191,11 @@ const savePreferences = async () => {
 </script>
 
 <style lang="scss" scoped>
-.settings-page {
-  padding: 24px 32px;
-  max-width: 900px;
+.preferences-page {
+  padding: 24px 40px;
+  max-width: 1000px;
+  background: #fff;
+  min-height: 100vh;
 }
 
 .breadcrumb {
@@ -185,219 +203,300 @@ const savePreferences = async () => {
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  margin-bottom: 16px;
+  margin-bottom: 24px;
+  color: #737278;
   
   a {
-    color: var(--text-secondary, #8b949e);
+    color: #1f75cb;
     text-decoration: none;
     
     &:hover {
-      color: var(--text-link, #58a6ff);
       text-decoration: underline;
     }
   }
   
   .separator {
-    color: var(--text-secondary, #8b949e);
+    color: #737278;
   }
   
   span:last-child {
-    color: var(--text-primary, #c9d1d9);
+    color: #303030;
   }
 }
 
-.settings-content {
-  background: var(--bg-secondary, #161b22);
-  border: 1px solid var(--border-color, #30363d);
-  border-radius: 6px;
-}
-
-.page-header {
-  margin-bottom: 24px;
+.search-box {
+  position: relative;
+  margin-bottom: 32px;
   
-  h1 {
-    font-size: 24px;
-    font-weight: 600;
-    margin: 0 0 8px 0;
-    color: var(--text-primary, #c9d1d9);
+  .search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #737278;
   }
   
-  .description {
-    font-size: 14px;
-    color: var(--text-secondary, #8b949e);
-    margin: 0;
-  }
-}
-
-.preferences-form {
-  .form-section {
-    margin-bottom: 32px;
-    padding: 24px;
-    background: var(--bg-secondary, #161b22);
-    border-radius: 8px;
-    border: 1px solid var(--border-color, #30363d);
-    
-    h3 {
-      font-size: 16px;
-      font-weight: 600;
-      margin: 0 0 20px 0;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--border-color, #30363d);
-      color: var(--text-primary, #c9d1d9);
-    }
-  }
-}
-
-.form-group {
-  margin-bottom: 20px;
-  
-  &:last-child {
-    margin-bottom: 0;
-  }
-  
-  label {
-    display: block;
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-primary, #c9d1d9);
-    margin-bottom: 8px;
-  }
-  
-  .form-control {
+  input {
     width: 100%;
-    max-width: 300px;
-    padding: 10px 12px;
+    padding: 10px 12px 10px 40px;
     font-size: 14px;
-    color: var(--text-primary, #c9d1d9);
-    background: var(--bg-primary, #0d1117);
-    border: 1px solid var(--border-color, #30363d);
-    border-radius: 6px;
+    color: #303030;
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
     
     &:focus {
       outline: none;
-      border-color: var(--color-primary, #58a6ff);
-      box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+      border-color: #1f75cb;
+      box-shadow: 0 0 0 3px rgba(31, 117, 203, 0.15);
+    }
+    
+    &::placeholder {
+      color: #737278;
+    }
+  }
+}
+
+.preference-section {
+  margin-bottom: 40px;
+  
+  h2 {
+    font-size: 20px;
+    font-weight: 600;
+    color: #303030;
+    margin: 0 0 8px 0;
+  }
+  
+  .section-description {
+    font-size: 14px;
+    color: #737278;
+    margin: 0 0 20px 0;
+  }
+  
+  h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #303030;
+    margin: 0 0 16px 0;
+  }
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #303030;
+  
+  input[type="radio"] {
+    display: none;
+  }
+  
+  .radio-custom {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #868686;
+    border-radius: 50%;
+    position: relative;
+    transition: all 0.2s;
+    
+    &::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 8px;
+      height: 8px;
+      background: #1f75cb;
+      border-radius: 50%;
+      opacity: 0;
+      transition: opacity 0.2s;
     }
   }
   
-  .form-text {
-    display: block;
-    margin-top: 6px;
-    font-size: 12px;
-    color: var(--text-secondary, #8b949e);
-  }
-}
-
-.checkbox-group {
-  .checkbox-label {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    cursor: pointer;
+  input[type="radio"]:checked + .radio-custom {
+    border-color: #1f75cb;
     
-    input[type="checkbox"] {
-      width: 18px;
-      height: 18px;
-      cursor: pointer;
-    }
-    
-    span {
-      font-weight: 400;
+    &::after {
+      opacity: 1;
     }
   }
 }
 
-.theme-options {
+.theme-colors {
   display: flex;
   gap: 16px;
-  margin-top: 12px;
+  flex-wrap: wrap;
 }
 
-.theme-option {
+.color-option {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   cursor: pointer;
   
   input[type="radio"] {
     display: none;
   }
   
-  .theme-preview {
-    width: 80px;
-    height: 60px;
+  .color-preview {
+    width: 120px;
+    height: 80px;
     border-radius: 8px;
-    border: 2px solid transparent;
-    overflow: hidden;
+    border: 2px solid #dcdcde;
     transition: border-color 0.2s;
     
-    .preview-header {
-      height: 12px;
-    }
-    
-    .preview-content {
-      height: 48px;
-    }
+    &.default { background: linear-gradient(135deg, #fff 50%, #f0f0f2 50%); }
+    &.indigo { background: #6366f1; }
+    &.blue { background: #1f75cb; }
+    &.green { background: #108548; }
+    &.red { background: #dd2b0e; }
+    &.gray { background: #e5e5e5; }
   }
   
-  &.active .theme-preview {
-    border-color: var(--color-primary, #58a6ff);
-  }
-  
-  .dark-theme {
-    .preview-header { background: #161b22; }
-    .preview-content { background: #0d1117; }
-  }
-  
-  .light-theme {
-    .preview-header { background: #f6f8fa; }
-    .preview-content { background: #ffffff; }
-  }
-  
-  .system-theme {
-    .preview-header {
-      background: linear-gradient(90deg, #161b22 50%, #f6f8fa 50%);
-    }
-    .preview-content {
-      background: linear-gradient(90deg, #0d1117 50%, #ffffff 50%);
-    }
+  &.active .color-preview {
+    border-color: #1f75cb;
+    border-width: 3px;
   }
   
   span {
     font-size: 13px;
-    color: var(--text-secondary, #8b949e);
+    color: #303030;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    
+    &::before {
+      content: '';
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #868686;
+      border-radius: 50%;
+    }
   }
   
-  &.active span {
-    color: var(--text-primary, #c9d1d9);
-    font-weight: 500;
+  &.active span::before {
+    border-color: #1f75cb;
+    background: #1f75cb;
+    box-shadow: inset 0 0 0 2px #fff;
+  }
+}
+
+.syntax-options {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.syntax-option {
+  cursor: pointer;
+  
+  input[type="radio"] {
+    display: none;
+  }
+  
+  .syntax-preview {
+    width: 140px;
+    padding: 8px;
+    border-radius: 6px;
+    border: 2px solid #dcdcde;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+    font-size: 10px;
+    line-height: 1.4;
+    transition: border-color 0.2s;
+    
+    &.white {
+      background: #fff;
+      color: #303030;
+      .keyword { color: #d73a49; }
+      .method { color: #6f42c1; }
+      .variable { color: #005cc5; }
+    }
+    
+    &.solarized-light {
+      background: #fdf6e3;
+      color: #657b83;
+      .keyword { color: #859900; }
+      .method { color: #268bd2; }
+      .variable { color: #b58900; }
+    }
+    
+    &.monokai {
+      background: #272822;
+      color: #f8f8f2;
+      .keyword { color: #f92672; }
+      .method { color: #a6e22e; }
+      .variable { color: #66d9ef; }
+    }
+    
+    &.solarized-dark {
+      background: #002b36;
+      color: #839496;
+      .keyword { color: #859900; }
+      .method { color: #268bd2; }
+      .variable { color: #b58900; }
+    }
+    
+    &.dracula {
+      background: #282a36;
+      color: #f8f8f2;
+      .keyword { color: #ff79c6; }
+      .method { color: #50fa7b; }
+      .variable { color: #8be9fd; }
+    }
+    
+    &.none {
+      background: #f6f8fa;
+      color: #303030;
+    }
+  }
+  
+  &.active .syntax-preview {
+    border-color: #1f75cb;
+  }
+  
+  .code-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 
 .form-actions {
-  margin-top: 24px;
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid #dcdcde;
+}
+
+.btn {
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+  border: none;
   
-  .btn {
-    padding: 10px 20px;
-    font-size: 14px;
-    font-weight: 500;
-    border-radius: 6px;
-    cursor: pointer;
+  &.btn-primary {
+    background: #1f75cb;
+    color: white;
     
-    &.btn-primary {
-      background: var(--color-primary, #238636);
-      border: 1px solid var(--color-primary, #238636);
-      color: white;
-      
-      &:hover:not(:disabled) {
-        background: var(--color-primary-hover, #2ea043);
-      }
-      
-      &:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
+    &:hover:not(:disabled) {
+      background: #1068bf;
+    }
+    
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
   }
 }
@@ -405,19 +504,19 @@ const savePreferences = async () => {
 .alert {
   margin-top: 16px;
   padding: 12px 16px;
-  border-radius: 6px;
+  border-radius: 4px;
   font-size: 14px;
   
   &.alert-success {
-    background: rgba(35, 134, 54, 0.15);
-    border: 1px solid #238636;
-    color: #3fb950;
+    background: #ecf4ee;
+    border: 1px solid #108548;
+    color: #108548;
   }
   
-  &.alert-danger {
-    background: rgba(248, 81, 73, 0.15);
-    border: 1px solid #f85149;
-    color: #f85149;
+  &.alert-error {
+    background: #fcf1ef;
+    border: 1px solid #dd2b0e;
+    color: #dd2b0e;
   }
 }
 </style>

@@ -15,11 +15,15 @@ pub struct Config {
     pub base_url: String,
     /// SSH server enabled
     pub ssh_enabled: bool,
-    /// SSH server host
+    /// SSH server bind host (what the server listens on)
     pub ssh_host: String,
-    /// SSH server port
+    /// SSH server bind port (what the server listens on)
     pub ssh_port: u16,
-    /// SSH host key path (without e`xtension)
+    /// SSH public host (for external access, e.g., git@gitfox.example.com)
+    pub ssh_public_host: String,
+    /// SSH public port (for external access, e.g., 22 or 2222)
+    pub ssh_public_port: u16,
+    /// SSH host key path (without extension)
     pub ssh_host_key_path: String,
 }
 
@@ -57,6 +61,14 @@ impl Config {
                 .unwrap_or_else(|_| "2222".to_string())
                 .parse()
                 .expect("Invalid SSH_PORT"),
+            ssh_public_host: env::var("SSH_PUBLIC_HOST")
+                .unwrap_or_else(|_| env::var("SSH_HOST")
+                    .unwrap_or_else(|_| "localhost".to_string())),
+            ssh_public_port: env::var("SSH_PUBLIC_PORT")
+                .unwrap_or_else(|_| env::var("SSH_PORT")
+                    .unwrap_or_else(|_| "2222".to_string()))
+                .parse()
+                .expect("Invalid SSH_PUBLIC_PORT"),
             ssh_host_key_path: env::var("SSH_HOST_KEY_PATH")
                 .unwrap_or_else(|_| "./data/ssh/host_key".to_string()),
         }

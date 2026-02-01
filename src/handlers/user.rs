@@ -63,3 +63,48 @@ pub async fn delete_user(
     UserService::delete_user(pool.get_ref(), path.into_inner()).await?;
     Ok(HttpResponse::NoContent().finish())
 }
+
+/// Request for batch avatar lookup by emails
+#[derive(Debug, serde::Deserialize)]
+pub struct AvatarsByEmailsRequest {
+    pub emails: Vec<String>,
+}
+
+/// Response for avatar lookup
+#[derive(Debug, serde::Serialize)]
+pub struct AvatarInfo {
+    pub email: String,
+    pub avatar_url: Option<String>,
+    pub display_name: Option<String>,
+}
+
+/// POST /api/v1/users/avatars - Get avatars by email addresses
+pub async fn get_avatars_by_emails(
+    pool: web::Data<PgPool>,
+    body: web::Json<AvatarsByEmailsRequest>,
+) -> AppResult<HttpResponse> {
+    let emails = &body.emails;
+    
+    if emails.is_empty() {
+        return Ok(HttpResponse::Ok().json(Vec::<AvatarInfo>::new()));
+    }
+    
+    // Query users by email
+    let users = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+        r#"SELECT email, avatar_url, display_name FROM users WHERE email = ANY($1)"#
+    )
+    .bind(emails)
+    .fetch_all(pool.get_ref())
+    .await?;
+    
+    let avatars: Vec<AvatarInfo> = users
+        .into_iter()
+        .map(|(email, avatar_url, display_name)| AvatarInfo {
+            email,
+            avatar_url,
+            display_name,
+        })
+        .collect();
+    
+    Ok(HttpResponse::Ok().json(avatars))
+}

@@ -14,7 +14,49 @@ pub mod ssh_key;
 pub mod internal;
 pub mod issue;
 
-use actix_web::web;
+use actix_web::{web, HttpResponse};
+use serde::Serialize;
+use crate::config::AppConfig;
+
+/// Server configuration response (public info only)
+#[derive(Serialize)]
+pub struct ServerConfigResponse {
+    pub ssh_enabled: bool,
+    /// SSH clone URL prefix, e.g. "ssh://git@host:2222/" or "git@host:"
+    pub ssh_clone_url_prefix: String,
+    /// HTTP clone URL prefix, e.g. "http://localhost:8080/"
+    pub http_clone_url_prefix: String,
+}
+
+/// GET /api/v1/config - Get public server configuration
+pub async fn get_server_config(
+    config: web::Data<AppConfig>,
+    req: actix_web::HttpRequest,
+) -> HttpResponse {
+    let connection_info = req.connection_info();
+    let http_clone_url_prefix = format!("{}://{}/", connection_info.scheme(), connection_info.host());
+    
+    // 根据端口决定 SSH URL 格式
+    let ssh_clone_url_prefix = if config.ssh_enabled {
+        let host = &config.ssh_public_host;
+        let port = config.ssh_public_port;
+        if port == 22 {
+            // 默认端口使用 git@host: 格式
+            format!("git@{}:", host)
+        } else {
+            // 非默认端口使用 ssh://git@host:port/ 格式
+            format!("ssh://git@{}:{}/", host, port)
+        }
+    } else {
+        String::new()
+    };
+    
+    HttpResponse::Ok().json(ServerConfigResponse {
+        ssh_enabled: config.ssh_enabled,
+        ssh_clone_url_prefix,
+        http_clone_url_prefix,
+    })
+}
 
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // Git HTTP Smart Protocol routes (must be before API routes)
@@ -25,6 +67,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     
     cfg.service(
         web::scope("/api/v1")
+            // Server config route (public)
+            .route("/config", web::get().to(get_server_config))
+            
             // Auth routes
             .route("/auth/register", web::post().to(auth::register))
             .route("/auth/login", web::post().to(auth::login))
@@ -32,6 +77,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             
             // User routes
             .route("/users", web::get().to(user::list_users))
+            .route("/users/avatars", web::post().to(user::get_avatars_by_emails))
             .route("/users/{username}", web::get().to(user::get_user_by_username))
             .route("/users/{id}", web::put().to(user::update_user))
             .route("/users/{id}", web::delete().to(user::delete_user))

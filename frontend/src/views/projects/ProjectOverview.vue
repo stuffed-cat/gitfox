@@ -136,7 +136,10 @@
 
         <!-- 最后提交信息 -->
         <div v-if="lastCommit" class="commit-bar">
-          <img :src="`https://www.gravatar.com/avatar/${lastCommit.author}?d=identicon&s=32`" class="commit-avatar" />
+          <div class="commit-avatar">
+            <img v-if="authorAvatarUrl" :src="authorAvatarUrl" alt="avatar" />
+            <span v-else class="avatar-initial">{{ lastCommit.author?.charAt(0)?.toUpperCase() || '?' }}</span>
+          </div>
           <div class="commit-info">
             <span class="commit-message">{{ lastCommit.message?.split('\n')[0] }}</span>
           </div>
@@ -323,7 +326,7 @@ interface Tag {
   name: string 
   commit?: { sha: string }
 }
-interface CommitInfo { sha: string; message: string; author: string; date: string }
+interface CommitInfo { sha: string; message: string; author: string; author_email: string; date: string }
 
 const props = defineProps<{ project?: Project; stats?: ProjectStats }>()
 const router = useRouter()
@@ -337,6 +340,7 @@ const treeItems = ref<TreeItem[]>([])
 const currentRef = ref('')
 const currentPath = ref('')
 const lastCommit = ref<CommitInfo | null>(null)
+const authorAvatarUrl = ref<string | null>(null)
 const readmeContent = ref('')
 const hasReadme = ref(false)
 const repoSize = ref(0)
@@ -350,12 +354,18 @@ const copied = ref(false)
 
 const projectPath = computed(() => props.project?.owner_name ? `/${props.project.owner_name}/${props.project.name}` : '')
 
+const cloneConfig = ref<{ ssh_enabled: boolean; ssh_clone_url_prefix: string; http_clone_url_prefix: string } | null>(null)
+
 const currentCloneUrl = computed(() => {
   if (!props.project) return ''
-  const base = window.location.origin
-  return cloneType.value === 'ssh' 
-    ? `git@${window.location.hostname}:${props.project.owner_name}/${props.project.name}.git`
-    : `${base}/${props.project.owner_name}/${props.project.name}.git`
+  const repoPath = `${props.project.owner_name}/${props.project.name}.git`
+  if (cloneType.value === 'ssh' && cloneConfig.value?.ssh_enabled) {
+    return `${cloneConfig.value.ssh_clone_url_prefix}${repoPath}`
+  }
+  if (cloneConfig.value?.http_clone_url_prefix) {
+    return `${cloneConfig.value.http_clone_url_prefix}${repoPath}`
+  }
+  return `${window.location.origin}/${repoPath}`
 })
 
 const filteredBranches = computed(() => {
@@ -502,7 +512,22 @@ async function loadLastCommit() {
     )
     if (commits?.[0]) {
       const c = commits[0]
-      lastCommit.value = { sha: c.sha, message: c.message, author: c.author_name, date: new Date(c.authored_date * 1000).toISOString() }
+      lastCommit.value = { 
+        sha: c.sha, 
+        message: c.message, 
+        author: c.author_name, 
+        author_email: c.author_email,
+        date: new Date(c.authored_date * 1000).toISOString() 
+      }
+      // Fetch author avatar by email
+      if (c.author_email) {
+        const avatars = await apiClient.users.getAvatarsByEmails([c.author_email])
+        if (avatars?.[0]?.avatar_url) {
+          authorAvatarUrl.value = avatars[0].avatar_url
+        } else {
+          authorAvatarUrl.value = null
+        }
+      }
     }
   } catch {}
 }
@@ -522,6 +547,14 @@ function handleClickOutside(e: MouseEvent) {
 
 onMounted(async () => {
   document.addEventListener('click', handleClickOutside)
+  
+  // Load server config for clone URLs
+  try {
+    cloneConfig.value = await apiClient.config.get()
+  } catch (e) {
+    console.warn('Failed to load server config:', e)
+  }
+  
   if (props.project) {
     await loadBranches()
     await loadTags()
@@ -915,6 +948,24 @@ $orange-folder: #e9a84b;
   width: 32px;
   height: 32px;
   border-radius: 50%;
+  background: $gray-200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  
+  .avatar-initial {
+    font-size: 14px;
+    font-weight: 600;
+    color: $gray-600;
+  }
 }
 
 .commit-info {

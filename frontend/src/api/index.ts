@@ -72,6 +72,14 @@ class ApiClient {
     }
   }
 
+  // Server config
+  config = {
+    get: async (): Promise<{ ssh_enabled: boolean; ssh_clone_url_prefix: string; http_clone_url_prefix: string }> => {
+      const response = await this.client.get('/config')
+      return response.data
+    }
+  }
+
   // Users
   users = {
     list: async (page = 1, perPage = 20): Promise<User[]> => {
@@ -80,6 +88,10 @@ class ApiClient {
     },
     get: async (username: string): Promise<User> => {
       const response = await this.client.get(`/users/${username}`)
+      return response.data
+    },
+    getAvatarsByEmails: async (emails: string[]): Promise<{ email: string; avatar_url: string | null; display_name: string | null }[]> => {
+      const response = await this.client.post('/users/avatars', { emails })
       return response.data
     }
   }

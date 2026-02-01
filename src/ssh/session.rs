@@ -7,6 +7,8 @@ use log::{debug, info, warn};
 use russh::server::Session;
 use russh::ChannelId;
 use sqlx::PgPool;
+use tokio::io::AsyncWriteExt;
+use tokio::process::ChildStdin;
 use tokio::sync::Mutex;
 
 use crate::config::Config;
@@ -24,6 +26,8 @@ pub struct GitSession {
     pub authenticated: bool,
     /// Active channels and their state
     pub channels: Arc<Mutex<HashMap<ChannelId, ChannelState>>>,
+    /// Git process stdin writers per channel
+    pub git_stdin: Arc<Mutex<HashMap<ChannelId, tokio::sync::mpsc::Sender<Vec<u8>>>>>,
     /// Database pool
     pub pool: Arc<PgPool>,
     /// Application config
@@ -52,6 +56,7 @@ impl GitSession {
             key_id: None,
             authenticated: false,
             channels: Arc::new(Mutex::new(HashMap::new())),
+            git_stdin: Arc::new(Mutex::new(HashMap::new())),
             pool,
             config,
         }
