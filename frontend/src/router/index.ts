@@ -94,9 +94,21 @@ const routes = [
   
   // User settings routes
   {
+    path: '/-/profile',
+    name: 'UserProfile',
+    component: () => import('@/views/settings/UserProfileView.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/-/profile/keys',
     name: 'SshKeys',
     component: () => import('@/views/settings/SshKeysView.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/-/profile/preferences',
+    name: 'UserPreferences',
+    component: () => import('@/views/settings/UserPreferencesView.vue'),
     meta: { requiresAuth: true }
   },
   
@@ -149,6 +161,21 @@ const routes = [
         path: '-/tags',
         name: 'ProjectTags',
         component: () => import('@/views/repository/TagListView.vue')
+      },
+      {
+        path: '-/issues',
+        name: 'Issues',
+        component: () => import('@/views/issues/IssueListView.vue')
+      },
+      {
+        path: '-/issues/new',
+        name: 'NewIssue',
+        component: () => import('@/views/issues/NewIssueView.vue')
+      },
+      {
+        path: '-/issues/:iid',
+        name: 'IssueDetail',
+        component: () => import('@/views/issues/IssueDetailView.vue')
       },
       {
         path: '-/merge_requests',

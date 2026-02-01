@@ -176,7 +176,11 @@ git push -u origin --tags</code></pre>
           <!-- Parent directory -->
           <tr v-if="currentPath" class="tree-item" @click="goToParent">
             <td class="item-name">
-              <span class="item-icon">📁</span>
+              <span class="item-icon item-icon--folder">
+                <svg viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M1.5 14h13a.5.5 0 00.5-.5V4a.5.5 0 00-.5-.5h-6a.5.5 0 01-.4-.2L6.5 1.5h-5a.5.5 0 00-.5.5v11.5a.5.5 0 00.5.5z"/>
+                </svg>
+              </span>
               <span>..</span>
             </td>
             <td></td>
@@ -191,7 +195,14 @@ git push -u origin --tags</code></pre>
             @click="handleItemClick(item)"
           >
             <td class="item-name">
-              <span class="item-icon">{{ item.type === 'tree' ? '📁' : getFileIcon(item.name) }}</span>
+              <span class="item-icon" :class="getFileIconClass(item)">
+                <svg v-if="item.type === 'tree'" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M1.5 14h13a.5.5 0 00.5-.5V4a.5.5 0 00-.5-.5h-6a.5.5 0 01-.4-.2L6.5 1.5h-5a.5.5 0 00-.5.5v11.5a.5.5 0 00.5.5z"/>
+                </svg>
+                <svg v-else viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M3.5 1A1.5 1.5 0 002 2.5v11A1.5 1.5 0 003.5 15h9a1.5 1.5 0 001.5-1.5v-8a.5.5 0 00-.146-.354l-4-4A.5.5 0 009.5 1h-6zm6 0v3.5A1.5 1.5 0 0011 6h3"/>
+                </svg>
+              </span>
               <span>{{ item.name }}</span>
             </td>
             <td class="item-commit">{{ item.last_commit_message || '-' }}</td>
@@ -352,16 +363,31 @@ function formatSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function getFileIcon(name: string) {
-  const ext = name.split('.').pop()?.toLowerCase()
-  const iconMap: Record<string, string> = {
-    js: '📜', ts: '📘', py: '🐍', rb: '💎', go: '🔵', rs: '🦀',
-    java: '☕', md: '📝', json: '📋', yaml: '📋', yml: '📋',
-    html: '🌐', css: '🎨', scss: '🎨', vue: '💚', svg: '🖼️',
-    png: '🖼️', jpg: '🖼️', gif: '🖼️', pdf: '📕', zip: '📦',
-    lock: '🔒', gitignore: '👁️', dockerfile: '🐳'
+function getFileIconClass(item: TreeItem) {
+  if (item.type === 'tree') return 'item-icon--folder'
+  
+  const ext = item.name.split('.').pop()?.toLowerCase() || ''
+  const classMap: Record<string, string> = {
+    js: 'item-icon--js',
+    ts: 'item-icon--ts',
+    vue: 'item-icon--vue',
+    py: 'item-icon--py',
+    rs: 'item-icon--rs',
+    go: 'item-icon--go',
+    java: 'item-icon--java',
+    md: 'item-icon--md',
+    json: 'item-icon--json',
+    yaml: 'item-icon--config',
+    yml: 'item-icon--config',
+    html: 'item-icon--html',
+    css: 'item-icon--css',
+    scss: 'item-icon--css',
+    png: 'item-icon--image',
+    jpg: 'item-icon--image',
+    gif: 'item-icon--image',
+    svg: 'item-icon--image'
   }
-  return iconMap[ext || ''] || '📄'
+  return classMap[ext] || 'item-icon--file'
 }
 
 function selectRef(ref: string) {

@@ -12,6 +12,7 @@ pub mod git_http;
 pub mod namespace;
 pub mod ssh_key;
 pub mod internal;
+pub mod issue;
 
 use actix_web::web;
 
@@ -45,7 +46,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects", web::get().to(project::list_projects))
             .route("/projects", web::post().to(project::create_project))
             
-            // Single project routes by namespace/project_name (GitLab v4 style)
+            // Single project routes by namespace/project_name 
             .route("/projects/{namespace}/{project}", web::get().to(project::get_project))
             .route("/projects/{namespace}/{project}", web::put().to(project::update_project))
             .route("/projects/{namespace}/{project}", web::delete().to(project::delete_project))
@@ -54,30 +55,30 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/members", web::post().to(project::add_member))
             .route("/projects/{namespace}/{project}/members/{user_id}", web::delete().to(project::remove_member))
             
-            // Repository routes (GitLab v4 style)
+            // Repository routes 
             .route("/projects/{namespace}/{project}/repository", web::get().to(repository::get_repository_info))
             .route("/projects/{namespace}/{project}/repository/tree", web::get().to(repository::browse_tree))
             .route("/projects/{namespace}/{project}/repository/files/{filepath:.*}", web::get().to(repository::get_file))
             .route("/projects/{namespace}/{project}/repository/blobs/{sha}", web::get().to(repository::get_blob))
             
-            // Branch routes (GitLab v4 style)
+            // Branch routes 
             .route("/projects/{namespace}/{project}/repository/branches", web::get().to(branch::list_branches))
             .route("/projects/{namespace}/{project}/repository/branches", web::post().to(branch::create_branch))
             .route("/projects/{namespace}/{project}/repository/branches/{branch:.*}", web::get().to(branch::get_branch))
             .route("/projects/{namespace}/{project}/repository/branches/{branch:.*}", web::delete().to(branch::delete_branch))
             
-            // Commit routes (GitLab v4 style)
+            // Commit routes 
             .route("/projects/{namespace}/{project}/repository/commits", web::get().to(commit::list_commits))
             .route("/projects/{namespace}/{project}/repository/commits/{sha}", web::get().to(commit::get_commit))
             .route("/projects/{namespace}/{project}/repository/compare", web::get().to(commit::compare))
             
-            // Tag routes (GitLab v4 style)
+            // Tag routes 
             .route("/projects/{namespace}/{project}/repository/tags", web::get().to(tag::list_tags))
             .route("/projects/{namespace}/{project}/repository/tags", web::post().to(tag::create_tag))
             .route("/projects/{namespace}/{project}/repository/tags/{tag_name}", web::get().to(tag::get_tag))
             .route("/projects/{namespace}/{project}/repository/tags/{tag_name}", web::delete().to(tag::delete_tag))
             
-            // Merge Request routes (GitLab v4 style)
+            // Merge Request routes 
             .route("/projects/{namespace}/{project}/merge_requests", web::get().to(merge_request::list_merge_requests))
             .route("/projects/{namespace}/{project}/merge_requests", web::post().to(merge_request::create_merge_request))
             .route("/projects/{namespace}/{project}/merge_requests/{iid}", web::get().to(merge_request::get_merge_request))
@@ -86,7 +87,16 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/merge_requests/{iid}/notes", web::get().to(merge_request::list_comments))
             .route("/projects/{namespace}/{project}/merge_requests/{iid}/notes", web::post().to(merge_request::add_comment))
             
-            // Pipeline routes (GitLab v4 style)
+            // Issue routes
+            .route("/projects/{namespace}/{project}/issues", web::get().to(issue::list_issues))
+            .route("/projects/{namespace}/{project}/issues", web::post().to(issue::create_issue))
+            .route("/projects/{namespace}/{project}/issues/{iid}", web::get().to(issue::get_issue))
+            .route("/projects/{namespace}/{project}/issues/{iid}", web::put().to(issue::update_issue))
+            .route("/projects/{namespace}/{project}/issues/{iid}", web::delete().to(issue::delete_issue))
+            .route("/projects/{namespace}/{project}/issues/{iid}/notes", web::get().to(issue::list_issue_notes))
+            .route("/projects/{namespace}/{project}/issues/{iid}/notes", web::post().to(issue::add_issue_note))
+            
+            // Pipeline routes 
             .route("/projects/{namespace}/{project}/pipelines", web::get().to(pipeline::list_pipelines))
             .route("/projects/{namespace}/{project}/pipelines", web::post().to(pipeline::trigger_pipeline))
             .route("/projects/{namespace}/{project}/pipelines/{id}", web::get().to(pipeline::get_pipeline))
@@ -95,7 +105,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/jobs", web::get().to(pipeline::list_jobs))
             .route("/projects/{namespace}/{project}/jobs/{job_id}/trace", web::get().to(pipeline::get_job_log))
             
-            // Webhook/Hooks routes (GitLab v4 style)
+            // Webhook/Hooks routes 
             .route("/projects/{namespace}/{project}/hooks", web::get().to(webhook::list_webhooks))
             .route("/projects/{namespace}/{project}/hooks", web::post().to(webhook::create_webhook))
             .route("/projects/{namespace}/{project}/hooks/{id}", web::get().to(webhook::get_webhook))

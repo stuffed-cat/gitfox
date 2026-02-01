@@ -9,6 +9,7 @@ pub mod pipeline;
 pub mod webhook;
 pub mod namespace;
 pub mod ssh_key;
+pub mod issue;
 
 pub use user::*;
 pub use project::*;
@@ -21,3 +22,4 @@ pub use pipeline::*;
 pub use webhook::*;
 pub use namespace::*;
 pub use ssh_key::*;
+pub use issue::*;

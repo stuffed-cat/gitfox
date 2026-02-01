@@ -91,17 +91,23 @@
               </div>
             </div>
             <div class="dropdown-divider"></div>
-            <router-link to="/profile" class="dropdown-item" @click="userMenuOpen = false">
+            <button class="dropdown-item" @click="userMenuOpen = false">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M8 5v1M6 9a2 2 0 104 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              设置状态
+            </button>
+            <router-link to="/-/profile" class="dropdown-item" @click="userMenuOpen = false">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                 <circle cx="8" cy="5" r="3" stroke="currentColor" stroke-width="1.5"/>
                 <path d="M2 14a6 6 0 0112 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
               </svg>
-              个人设置
+              编辑个人资料
             </router-link>
-            <router-link to="/settings" class="dropdown-item" @click="userMenuOpen = false">
+            <router-link to="/-/profile/preferences" class="dropdown-item" @click="userMenuOpen = false">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5l1.5 1.5M3 13l1.5-1.5M11.5 4.5l1.5-1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                <path d="M4 5h8M4 8h8M4 11h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
               </svg>
               偏好设置
             </router-link>

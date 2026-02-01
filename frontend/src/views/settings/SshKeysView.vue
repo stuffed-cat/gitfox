@@ -1,136 +1,126 @@
 <template>
-  <div class="settings-ssh-keys">
+  <div class="settings-page">
+    <!-- 面包屑导航 -->
+    <div class="breadcrumb">
+      <router-link to="/-/profile">用户设置</router-link>
+      <span class="separator">/</span>
+      <span>SSH 密钥</span>
+    </div>
+
+    <!-- 页面标题 -->
     <div class="page-header">
-      <h1>SSH Keys</h1>
-      <p class="text-secondary">
-        SSH keys allow you to establish a secure connection between your computer and GitFox.
+      <h1>SSH 密钥</h1>
+      <p class="description">
+        SSH 密钥用于在您的电脑和 GitFox 建立安全连接。
       </p>
     </div>
 
-    <!-- Add new key form -->
-    <div class="add-key-section card">
-      <div class="card-header">
-        <h3>Add an SSH key</h3>
-      </div>
-      <div class="card-body">
+    <!-- 添加新密钥 -->
+    <div class="settings-content">
+      <section class="form-section">
+        <h2>添加 SSH 密钥</h2>
         <form @submit.prevent="addKey">
           <div class="form-group">
-            <label for="key-title">Title</label>
+            <label for="key-title">标题</label>
             <input
               id="key-title"
               v-model="newKey.title"
               type="text"
-              class="form-control"
-              placeholder="e.g., My MacBook Pro"
+              class="form-input"
+              placeholder="例如：My MacBook Pro"
               required
             />
-            <small class="form-text text-muted">
-              A descriptive label for this key
-            </small>
+            <p class="form-hint">为此密钥添加一个描述性标签</p>
           </div>
 
           <div class="form-group">
-            <label for="key-content">Key</label>
+            <label for="key-content">密钥</label>
             <textarea
               id="key-content"
               v-model="newKey.key"
-              class="form-control"
-              rows="6"
-              placeholder="Paste your public SSH key here (starts with 'ssh-rsa', 'ssh-ed25519', etc.)"
+              class="form-input mono"
+              rows="4"
+              placeholder="粘贴您的公钥（以 'ssh-rsa'、'ssh-ed25519' 等开头）"
               required
             ></textarea>
-            <small class="form-text text-muted">
-              Paste your public SSH key, which is usually found in
-              <code>~/.ssh/id_ed25519.pub</code> or <code>~/.ssh/id_rsa.pub</code>
-            </small>
+            <p class="form-hint">
+              公钥通常在 <code>~/.ssh/id_ed25519.pub</code> 或 <code>~/.ssh/id_rsa.pub</code>
+            </p>
           </div>
 
-          <div class="form-actions">
+          <div class="form-actions-inline">
             <button type="submit" class="btn btn-primary" :disabled="adding">
-              <span v-if="adding">Adding...</span>
-              <span v-else>Add key</span>
+              {{ adding ? '添加中...' : '添加密钥' }}
             </button>
           </div>
 
-          <div v-if="addError" class="alert alert-danger mt-3">
+          <div v-if="addError" class="alert alert-error">
             {{ addError }}
           </div>
         </form>
-      </div>
+      </section>
     </div>
 
-    <!-- Existing keys -->
-    <div class="keys-list-section">
-      <h3>Your SSH keys ({{ keys.length }})</h3>
+    <!-- 现有密钥列表 -->
+    <div class="keys-section">
+      <div class="keys-header">
+        <h2>您的 SSH 密钥</h2>
+        <span class="keys-count">{{ keys.length }}</span>
+      </div>
 
       <div v-if="loading" class="loading-state">
         <div class="spinner"></div>
-        <span>Loading SSH keys...</span>
+        <span>加载中...</span>
       </div>
 
       <div v-else-if="keys.length === 0" class="empty-state">
-        <div class="empty-icon">🔑</div>
-        <p>You haven't added any SSH keys yet.</p>
-        <p class="text-secondary">
-          Add an SSH key to start pushing code to GitFox repositories.
-        </p>
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24" fill="none" width="64" height="64">
+            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <p class="empty-title">此帐户没有访问权限的 SSH 密钥</p>
+        <p class="empty-description">添加 SSH 密钥以开始向 GitFox 仓库推送代码。</p>
       </div>
 
       <div v-else class="keys-list">
-        <div v-for="key in keys" :key="key.id" class="key-item card">
+        <div v-for="key in keys" :key="key.id" class="key-item">
+          <div class="key-icon">
+            <svg viewBox="0 0 24 24" fill="none" width="20" height="20">
+              <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
           <div class="key-info">
-            <div class="key-header">
-              <span class="key-icon">🔐</span>
-              <span class="key-title">{{ key.title }}</span>
-              <span class="key-type badge">{{ key.key_type }}</span>
-            </div>
-            <div class="key-details">
-              <code class="key-fingerprint">{{ key.fingerprint }}</code>
-              <div class="key-meta">
-                <span v-if="key.last_used_at" class="last-used">
-                  Last used: {{ formatDate(key.last_used_at) }}
-                </span>
-                <span v-else class="last-used never">
-                  Never used
-                </span>
-                <span class="created-at">
-                  Added: {{ formatDate(key.created_at) }}
-                </span>
-              </div>
+            <div class="key-title">{{ key.title }}</div>
+            <code class="key-fingerprint">{{ key.fingerprint }}</code>
+            <div class="key-meta">
+              <span v-if="key.last_used_at">最后使用: {{ formatDate(key.last_used_at) }}</span>
+              <span v-else class="never-used">从未使用</span>
+              <span>添加于: {{ formatDate(key.created_at) }}</span>
             </div>
           </div>
           <div class="key-actions">
             <button
-              class="btn btn-danger btn-sm"
+              class="btn btn-danger-outline btn-sm"
               @click="confirmDelete(key)"
               :disabled="deleting === key.id"
             >
-              <span v-if="deleting === key.id">Removing...</span>
-              <span v-else>Remove</span>
+              {{ deleting === key.id ? '删除中...' : '删除' }}
             </button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Delete confirmation modal -->
+    <!-- 删除确认弹窗 -->
     <div v-if="keyToDelete" class="modal-overlay" @click.self="keyToDelete = null">
       <div class="modal-content">
-        <h3>Remove SSH Key</h3>
-        <p>
-          Are you sure you want to remove the SSH key
-          <strong>"{{ keyToDelete.title }}"</strong>?
-        </p>
-        <p class="text-danger">
-          You will not be able to push or pull from GitFox using this key.
-        </p>
+        <h3>删除 SSH 密钥</h3>
+        <p>确定要删除 SSH 密钥 <strong>"{{ keyToDelete.title }}"</strong>？</p>
+        <p class="warning">删除后将无法使用此密钥向 GitFox 推送或拉取代码。</p>
         <div class="modal-actions">
-          <button class="btn btn-secondary" @click="keyToDelete = null">
-            Cancel
-          </button>
-          <button class="btn btn-danger" @click="deleteKey(keyToDelete)">
-            Remove key
-          </button>
+          <button class="btn btn-secondary" @click="keyToDelete = null">取消</button>
+          <button class="btn btn-danger" @click="deleteKey(keyToDelete)">删除密钥</button>
         </div>
       </div>
     </div>
@@ -139,7 +129,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { api } from '@/api'
+import apiClient from '@/api'
 
 interface SshKey {
   id: number
@@ -166,7 +156,7 @@ const newKey = ref({
 const loadKeys = async () => {
   loading.value = true
   try {
-    const response = await api.get('/user/ssh_keys')
+    const response = await apiClient.client.get('/user/ssh_keys')
     keys.value = response.data
   } catch (error: any) {
     console.error('Failed to load SSH keys:', error)
@@ -180,7 +170,7 @@ const addKey = async () => {
   addError.value = ''
 
   try {
-    const response = await api.post('/user/ssh_keys', {
+    const response = await apiClient.client.post('/user/ssh_keys', {
       title: newKey.value.title,
       key: newKey.value.key.trim()
     })
@@ -202,7 +192,7 @@ const deleteKey = async (key: SshKey) => {
   keyToDelete.value = null
 
   try {
-    await api.delete(`/user/ssh_keys/${key.id}`)
+    await apiClient.client.delete(`/user/ssh_keys/${key.id}`)
     keys.value = keys.value.filter(k => k.id !== key.id)
   } catch (error: any) {
     console.error('Failed to delete SSH key:', error)
@@ -228,270 +218,361 @@ onMounted(() => {
 </script>
 
 <style lang="scss" scoped>
-.settings-ssh-keys {
+.settings-page {
+  padding: 24px 32px;
   max-width: 900px;
-  margin: 0 auto;
-  padding: 24px;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin-bottom: 16px;
+  
+  a {
+    color: var(--text-secondary, #8b949e);
+    text-decoration: none;
+    
+    &:hover {
+      color: var(--text-link, #58a6ff);
+      text-decoration: underline;
+    }
+  }
+  
+  .separator {
+    color: var(--text-secondary, #8b949e);
+  }
+  
+  span:last-child {
+    color: var(--text-primary, #c9d1d9);
+  }
 }
 
 .page-header {
   margin-bottom: 24px;
-
+  
   h1 {
-    margin: 0 0 8px 0;
     font-size: 24px;
     font-weight: 600;
+    margin: 0 0 8px 0;
+    color: var(--text-primary, #c9d1d9);
   }
-
-  .text-secondary {
-    color: #666;
+  
+  .description {
+    font-size: 14px;
+    color: var(--text-secondary, #8b949e);
     margin: 0;
   }
 }
 
-.card {
-  background: #fff;
-  border: 1px solid #e1e4e8;
-  border-radius: 8px;
+.settings-content {
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-color, #30363d);
+  border-radius: 6px;
   margin-bottom: 24px;
 }
 
-.card-header {
-  padding: 16px 20px;
-  border-bottom: 1px solid #e1e4e8;
-
-  h3 {
-    margin: 0;
+.form-section {
+  padding: 24px;
+  
+  h2 {
     font-size: 16px;
     font-weight: 600;
+    margin: 0 0 16px 0;
+    color: var(--text-primary, #c9d1d9);
   }
-}
-
-.card-body {
-  padding: 20px;
 }
 
 .form-group {
   margin-bottom: 16px;
-
+  
   label {
     display: block;
-    margin-bottom: 6px;
+    font-size: 14px;
     font-weight: 500;
-    font-size: 14px;
-  }
-
-  .form-control {
-    width: 100%;
-    padding: 8px 12px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    font-size: 14px;
-    font-family: inherit;
-
-    &:focus {
-      outline: none;
-      border-color: #6366f1;
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-    }
-  }
-
-  textarea.form-control {
-    font-family: 'Monaco', 'Menlo', monospace;
-    font-size: 12px;
-    resize: vertical;
-  }
-
-  .form-text {
-    display: block;
-    margin-top: 4px;
-    font-size: 12px;
-    color: #6b7280;
-
-    code {
-      background: #f3f4f6;
-      padding: 2px 4px;
-      border-radius: 4px;
-      font-size: 11px;
-    }
+    color: var(--text-primary, #c9d1d9);
+    margin-bottom: 8px;
   }
 }
 
-.form-actions {
-  margin-top: 20px;
+.form-input {
+  width: 100%;
+  max-width: 480px;
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--text-primary, #c9d1d9);
+  background: var(--bg-primary, #0d1117);
+  border: 1px solid var(--border-color, #30363d);
+  border-radius: 6px;
+  
+  &:focus {
+    outline: none;
+    border-color: var(--color-primary, #58a6ff);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+  }
+  
+  &::placeholder {
+    color: var(--text-muted, #484f58);
+  }
+  
+  &.mono {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+    font-size: 12px;
+  }
+}
+
+textarea.form-input {
+  resize: vertical;
+  min-height: 80px;
+  max-width: 100%;
+}
+
+.form-hint {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  color: var(--text-secondary, #8b949e);
+  
+  code {
+    background: var(--bg-tertiary, #21262d);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+}
+
+.form-actions-inline {
+  margin-top: 16px;
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 16px;
-  border: none;
-  border-radius: 6px;
   font-size: 14px;
   font-weight: 500;
+  border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s;
-
+  border: none;
+  transition: background 0.2s;
+  
   &:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }
-}
-
-.btn-primary {
-  background: #6366f1;
-  color: white;
-
-  &:hover:not(:disabled) {
-    background: #4f46e5;
+  
+  &.btn-primary {
+    background: var(--color-success, #238636);
+    color: white;
+    
+    &:hover:not(:disabled) {
+      background: var(--color-success-hover, #2ea043);
+    }
   }
-}
-
-.btn-secondary {
-  background: #e5e7eb;
-  color: #374151;
-
-  &:hover:not(:disabled) {
-    background: #d1d5db;
+  
+  &.btn-secondary {
+    background: var(--bg-tertiary, #21262d);
+    border: 1px solid var(--border-color, #30363d);
+    color: var(--text-primary, #c9d1d9);
+    
+    &:hover:not(:disabled) {
+      background: var(--bg-secondary, #30363d);
+    }
   }
-}
-
-.btn-danger {
-  background: #ef4444;
-  color: white;
-
-  &:hover:not(:disabled) {
-    background: #dc2626;
+  
+  &.btn-danger {
+    background: #da3633;
+    color: white;
+    
+    &:hover:not(:disabled) {
+      background: #f85149;
+    }
   }
-}
-
-.btn-sm {
-  padding: 6px 12px;
-  font-size: 13px;
+  
+  &.btn-danger-outline {
+    background: transparent;
+    border: 1px solid var(--border-color, #30363d);
+    color: #f85149;
+    
+    &:hover:not(:disabled) {
+      background: rgba(248, 81, 73, 0.1);
+      border-color: #f85149;
+    }
+  }
+  
+  &.btn-sm {
+    padding: 4px 12px;
+    font-size: 12px;
+  }
 }
 
 .alert {
+  margin-top: 16px;
   padding: 12px 16px;
   border-radius: 6px;
   font-size: 14px;
-}
-
-.alert-danger {
-  background: #fef2f2;
-  color: #dc2626;
-  border: 1px solid #fecaca;
-}
-
-.keys-list-section {
-  h3 {
-    font-size: 16px;
-    font-weight: 600;
-    margin-bottom: 16px;
+  
+  &.alert-error {
+    background: rgba(248, 81, 73, 0.15);
+    border: 1px solid #f85149;
+    color: #f85149;
   }
 }
 
-.loading-state,
-.empty-state {
-  text-align: center;
-  padding: 40px 20px;
-  background: #f9fafb;
-  border-radius: 8px;
+.keys-section {
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-color, #30363d);
+  border-radius: 6px;
 }
 
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid #e5e7eb;
-  border-top-color: #6366f1;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin: 0 auto 12px;
+.keys-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-color, #30363d);
+  
+  h2 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary, #c9d1d9);
+  }
+  
+  .keys-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--bg-tertiary, #21262d);
+    color: var(--text-secondary, #8b949e);
+    border-radius: 10px;
+  }
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  color: var(--text-secondary, #8b949e);
+  
+  .spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--border-color, #30363d);
+    border-top-color: var(--text-link, #58a6ff);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 12px;
+  }
 }
 
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
 .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px;
+  text-align: center;
+  
   .empty-icon {
-    font-size: 48px;
-    margin-bottom: 16px;
+    width: 96px;
+    height: 96px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary, #21262d);
+    border-radius: 50%;
+    margin-bottom: 24px;
+    color: var(--text-secondary, #8b949e);
   }
-
-  p {
+  
+  .empty-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text-primary, #c9d1d9);
     margin: 0 0 8px 0;
+  }
+  
+  .empty-description {
+    font-size: 14px;
+    color: var(--text-secondary, #8b949e);
+    margin: 0;
   }
 }
 
 .keys-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.key-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 20px;
-}
-
-.key-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.key-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-
-  .key-icon {
-    font-size: 18px;
-  }
-
-  .key-title {
-    font-weight: 600;
-    font-size: 15px;
-  }
-
-  .badge {
-    padding: 2px 8px;
-    background: #e0e7ff;
-    color: #4338ca;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 500;
-  }
-}
-
-.key-details {
-  .key-fingerprint {
-    display: block;
-    font-family: 'Monaco', 'Menlo', monospace;
-    font-size: 12px;
-    color: #6b7280;
-    background: #f3f4f6;
-    padding: 4px 8px;
-    border-radius: 4px;
-    margin-bottom: 8px;
-  }
-
-  .key-meta {
+  .key-item {
     display: flex;
+    align-items: flex-start;
     gap: 16px;
-    font-size: 12px;
-    color: #9ca3af;
-
-    .last-used.never {
-      color: #d97706;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border-color, #30363d);
+    
+    &:last-child {
+      border-bottom: none;
     }
   }
-}
-
-.key-actions {
-  margin-left: 16px;
+  
+  .key-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary, #21262d);
+    border-radius: 6px;
+    color: var(--text-secondary, #8b949e);
+  }
+  
+  .key-info {
+    flex: 1;
+    min-width: 0;
+  }
+  
+  .key-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary, #c9d1d9);
+    margin-bottom: 4px;
+  }
+  
+  .key-fingerprint {
+    display: block;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-secondary, #8b949e);
+    margin-bottom: 8px;
+    word-break: break-all;
+  }
+  
+  .key-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-muted, #484f58);
+    
+    .never-used {
+      color: #d29922;
+    }
+  }
+  
+  .key-actions {
+    flex-shrink: 0;
+  }
 }
 
 .modal-overlay {
@@ -500,7 +581,7 @@ onMounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.7);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -508,23 +589,32 @@ onMounted(() => {
 }
 
 .modal-content {
-  background: white;
-  padding: 24px;
+  background: var(--bg-secondary, #161b22);
+  border: 1px solid var(--border-color, #30363d);
   border-radius: 12px;
+  padding: 24px;
   max-width: 400px;
   width: 90%;
-
+  
   h3 {
+    font-size: 18px;
+    font-weight: 600;
     margin: 0 0 16px 0;
+    color: var(--text-primary, #c9d1d9);
   }
-
+  
   p {
+    font-size: 14px;
+    color: var(--text-secondary, #8b949e);
     margin: 0 0 12px 0;
-    color: #4b5563;
+    
+    strong {
+      color: var(--text-primary, #c9d1d9);
+    }
   }
-
-  .text-danger {
-    color: #dc2626;
+  
+  .warning {
+    color: #f85149;
     font-size: 13px;
   }
 }
