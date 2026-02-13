@@ -35,9 +35,10 @@ pub async fn list_commits(
     let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
     // 从Git读取默认分支，不是数据库
+    // 空字符串也视为 None
     let ref_name = match query.ref_name.as_deref() {
-        Some(r) => r.to_string(),
-        None => GitService::get_default_branch(&repo)?
+        Some(r) if !r.is_empty() => r.to_string(),
+        _ => GitService::get_default_branch(&repo)?
             .ok_or_else(|| crate::error::AppError::NotFound("Empty repository".to_string()))?
     };
     let page = query.page.unwrap_or(1);

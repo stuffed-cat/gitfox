@@ -28,6 +28,7 @@ import type {
   UpdateGroupRequest,
   GroupMember,
   AddGroupMemberRequest,
+  NamespaceOption,
 } from '@/types'
 
 // 的项目路径
@@ -296,6 +297,15 @@ class ApiClient {
     },
     test: async (path: ProjectPath, id: string): Promise<{ message: string; delivery_id: string }> => {
       const response = await this.client.post(`${this.projectPath(path)}/webhooks/${id}/test`)
+      return response.data
+    }
+  }
+
+  // Namespaces - for project creation
+  namespaces = {
+    /** Get namespaces where the current user can create projects */
+    listForProjectCreation: async (): Promise<NamespaceOption[]> => {
+      const response = await this.client.get('/namespaces/for-project-creation')
       return response.data
     }
   }

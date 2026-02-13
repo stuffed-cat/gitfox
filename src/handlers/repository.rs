@@ -59,11 +59,10 @@ pub async fn browse_tree(
     ).await?;
     let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
-    // 如果没指定分支，从git仓库获取默认分支
-    let ref_name = if let Some(ref r) = query.ref_name {
-        r.clone()
-    } else {
-        GitService::get_default_branch(&repo)?
+    // 如果没指定分支或为空字符串，从 git 仓库获取默认分支
+    let ref_name = match query.ref_name.as_deref() {
+        Some(r) if !r.is_empty() => r.to_string(),
+        _ => GitService::get_default_branch(&repo)?
             .ok_or_else(|| crate::error::AppError::NotFound("Repository is empty".to_string()))?
     };
     
@@ -87,11 +86,10 @@ pub async fn get_file(
     ).await?;
     let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
-    // 如果没指定分支，从git仓库获取默认分支
-    let ref_name = if let Some(ref r) = query.ref_name {
-        r.clone()
-    } else {
-        GitService::get_default_branch(&repo)?
+    // 如果没指定分支或为空字符串，从 git 仓库获取默认分支
+    let ref_name = match query.ref_name.as_deref() {
+        Some(r) if !r.is_empty() => r.to_string(),
+        _ => GitService::get_default_branch(&repo)?
             .ok_or_else(|| crate::error::AppError::NotFound("Repository is empty".to_string()))?
     };
     

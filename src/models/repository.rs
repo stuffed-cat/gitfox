@@ -43,7 +43,6 @@ pub struct BrowseQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct FileQuery {
-    pub path: String,
     pub ref_name: Option<String>,
 }
 

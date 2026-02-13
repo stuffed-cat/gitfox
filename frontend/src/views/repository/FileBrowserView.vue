@@ -142,7 +142,14 @@ git push -u origin --tags</code></pre>
         </div>
       </div>
       <div class="file-content">
-        <pre class="code-block"><code :class="fileLanguage">{{ fileContent }}</code></pre>
+        <CodeViewer
+          v-if="fileContent"
+          :content="fileContent"
+          :filename="currentFileName"
+          :height="editorHeight"
+          theme="vs-dark"
+          :minimap="fileLines > 100"
+        />
       </div>
     </div>
     
@@ -234,6 +241,7 @@ import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
 import type { Project } from '@/types'
+import { CodeViewer } from '@/components/editor'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
@@ -323,18 +331,13 @@ const fileLines = computed(() => {
   return fileContent.value.split('\n').length
 })
 
-const fileLanguage = computed(() => {
-  const ext = currentFileName.value.split('.').pop()?.toLowerCase()
-  const langMap: Record<string, string> = {
-    js: 'javascript', ts: 'typescript', py: 'python', rb: 'ruby',
-    go: 'go', rs: 'rust', java: 'java', c: 'c', cpp: 'cpp',
-    h: 'c', hpp: 'cpp', cs: 'csharp', php: 'php', swift: 'swift',
-    kt: 'kotlin', scala: 'scala', html: 'html', css: 'css',
-    scss: 'scss', less: 'less', json: 'json', xml: 'xml',
-    yaml: 'yaml', yml: 'yaml', md: 'markdown', sh: 'bash',
-    sql: 'sql', vue: 'vue', svelte: 'svelte'
-  }
-  return langMap[ext || ''] || 'plaintext'
+// 编辑器高度：根据内容行数动态调整，最小 300px，最大 80vh
+const editorHeight = computed(() => {
+  const lines = fileLines.value
+  const lineHeight = 20 // 大约每行 20px
+  const minHeight = 300
+  const maxHeight = Math.min(lines * lineHeight + 40, window.innerHeight * 0.8)
+  return `${Math.max(minHeight, maxHeight)}px`
 })
 
 const rawFileUrl = computed(() => {

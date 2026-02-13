@@ -1,6 +1,6 @@
-# DevOps 版本管理系统
+# DevSecOps 版本管理系统
 
-基于 Git 的 DevOps 版本管理系统，使用 Actix Web + Vue.js + TypeScript + Sass + PostgreSQL + Redis 构建。
+基于 Git 的 DevSecOps 版本管理系统，使用 Actix Web + Vue.js + TypeScript + Sass + PostgreSQL + Redis 构建。
 
 ## 技术栈
 

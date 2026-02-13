@@ -9,6 +9,47 @@ use crate::models::namespace::{
     Group, GroupMember, NamespaceVisibility, NamespaceInfo,
 };
 
+/// Namespace option for project creation
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct NamespaceOption {
+    pub id: i64,
+    pub name: String,
+    pub path: String,
+    pub namespace_type: crate::models::namespace::NamespaceType,
+    pub avatar_url: Option<String>,
+}
+
+/// List namespaces where the user can create projects
+/// Returns user's own namespace + groups where user has Developer or higher access
+pub async fn list_namespaces_for_project_creation(
+    pool: web::Data<PgPool>,
+    auth: AuthenticatedUser,
+) -> Result<HttpResponse, AppError> {
+    let namespaces = sqlx::query_as::<_, NamespaceOption>(
+        r#"
+        SELECT n.id, n.name, n.path, n.namespace_type, n.avatar_url
+        FROM namespaces n
+        WHERE 
+            -- User's own namespace
+            (n.namespace_type = 'user' AND n.owner_id = $1)
+            OR
+            -- Groups where user has Developer (30) or higher access
+            (n.namespace_type = 'group' AND EXISTS (
+                SELECT 1 FROM group_members gm
+                JOIN groups g ON g.id = gm.group_id
+                WHERE g.namespace_id = n.id AND gm.user_id = $1 AND gm.access_level >= 30
+            ))
+        ORDER BY n.namespace_type DESC, n.name
+        "#
+    )
+    .bind(auth.user_id)
+    .fetch_all(pool.get_ref())
+    .await
+    .map_err(AppError::from)?;
+    
+    Ok(HttpResponse::Ok().json(namespaces))
+}
+
 /// List all groups the current user has access to
 pub async fn list_groups(
     pool: web::Data<PgPool>,
@@ -52,18 +93,43 @@ pub async fn create_group(
         return Err(AppError::conflict("Group path already exists"));
     }
     
-    // Also check if a user has this username
-    let user_exists = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM users WHERE username = $1"
-    )
-    .bind(&body.path)
-    .fetch_one(pool.get_ref())
-    .await
-    .map_err(AppError::from)?;
-    
-    if user_exists > 0 {
-        return Err(AppError::conflict("Path conflicts with existing username"));
+    // For top-level groups, check if path conflicts with username
+    // Subgroups (with parent_id) can have paths like "parent/subgroup" which won't conflict
+    if body.parent_id.is_none() {
+        let user_exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM users WHERE username = $1"
+        )
+        .bind(&body.path)
+        .fetch_one(pool.get_ref())
+        .await
+        .map_err(AppError::from)?;
+        
+        if user_exists > 0 {
+            return Err(AppError::conflict("Path conflicts with existing username"));
+        }
     }
+    
+    // If parent_id is provided, verify that the user has permission to create subgroups
+    let parent_namespace_id: Option<i64> = if let Some(parent_id) = body.parent_id {
+        let parent_group = sqlx::query_as::<_, Group>(
+            "SELECT * FROM groups WHERE id = $1"
+        )
+        .bind(parent_id)
+        .fetch_optional(pool.get_ref())
+        .await
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found("Parent group not found"))?;
+        
+        // Check permission: need at least Developer to create subgroups
+        let access = get_user_group_access(pool.get_ref(), parent_id, auth.user_id).await?;
+        if access < AccessLevel::Developer {
+            return Err(AppError::forbidden("You don't have permission to create subgroups in this group"));
+        }
+        
+        Some(parent_group.namespace_id)
+    } else {
+        None
+    };
     
     let visibility = body.visibility.clone().unwrap_or(NamespaceVisibility::Private);
     
@@ -79,7 +145,7 @@ pub async fn create_group(
     .bind(&body.path)
     .bind(&visibility)
     .bind(auth.user_id)
-    .bind(&body.parent_id)
+    .bind(parent_namespace_id)  // Link to parent's namespace_id
     .fetch_one(pool.get_ref())
     .await
     .map_err(AppError::from)?;
@@ -97,7 +163,7 @@ pub async fn create_group(
     .bind(&body.path)
     .bind(&body.description)
     .bind(&visibility)
-    .bind(&body.parent_id)
+    .bind(&body.parent_id)  // Link to parent group's id
     .fetch_one(pool.get_ref())
     .await
     .map_err(AppError::from)?;
@@ -353,8 +419,16 @@ pub async fn list_group_projects(
     .map_err(AppError::from)?
     .ok_or_else(|| AppError::not_found("Group not found"))?;
     
-    let projects = sqlx::query_as::<_, crate::models::project::Project>(
-        "SELECT * FROM projects WHERE namespace_id = $1 ORDER BY name"
+    // Return ProjectWithOwner with namespace path as owner_name
+    let projects = sqlx::query_as::<_, crate::models::project::ProjectWithOwner>(
+        r#"
+        SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+               n.path as owner_name, n.avatar_url as owner_avatar
+        FROM projects p
+        JOIN namespaces n ON p.namespace_id = n.id
+        WHERE p.namespace_id = $1 
+        ORDER BY p.name
+        "#
     )
     .bind(group.namespace_id)
     .fetch_all(pool.get_ref())

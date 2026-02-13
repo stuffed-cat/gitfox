@@ -88,6 +88,17 @@
           <span class="hint">必须以小写或大写字母、数字、表情符号或下划线开头。也可以包含点、加号、破折号或空格。</span>
         </div>
         
+        <div class="form-group">
+          <label>父群组（可选）</label>
+          <select v-model="selectedParentId" class="form-input" :disabled="loadingGroups">
+            <option :value="null">无（创建顶级群组）</option>
+            <option v-for="g in availableParentGroups" :key="g.id" :value="Number(g.id)">
+              {{ g.path }}
+            </option>
+          </select>
+          <span class="hint">选择一个父群组来创建子群组，或保留为空创建顶级群组。</span>
+        </div>
+        
         <div class="form-row">
           <div class="form-group flex-grow">
             <label>群组 URL</label>
@@ -185,8 +196,18 @@ const router = useRouter()
 const route = useRoute()
 
 const baseUrl = window.location.origin
-const parentPath = computed(() => (route.query.parent as string) || '')
-const parentGroup = ref<Group | null>(null)
+
+// 可用的父群组列表（用户有权限创建子群组的群组）
+const availableParentGroups = ref<Group[]>([])
+const loadingGroups = ref(false)
+
+// 选中的父群组
+const selectedParentId = ref<number | null>(null)
+const parentGroup = computed(() => {
+  if (!selectedParentId.value) return null
+  return availableParentGroups.value.find(g => Number(g.id) === selectedParentId.value) || null
+})
+const parentPath = computed(() => parentGroup.value?.path || '')
 
 const step = ref<'choose' | 'group' | 'import'>('choose')
 const showBanner = ref(true)
@@ -201,14 +222,25 @@ const form = ref({
 const submitting = ref(false)
 const error = ref('')
 
-// 如果有 parent 参数，加载父群组信息
+// 加载用户有权限的群组
 onMounted(async () => {
-  if (parentPath.value) {
-    try {
-      parentGroup.value = await api.groups.get(parentPath.value)
-    } catch (e) {
-      console.warn('Failed to load parent group:', e)
+  loadingGroups.value = true
+  try {
+    // 获取用户有权限的群组（可以创建子群组的）
+    availableParentGroups.value = await api.groups.list()
+    
+    // 如果 URL 有 parent 参数，预选该群组
+    const parentFromQuery = route.query.parent as string
+    if (parentFromQuery) {
+      const found = availableParentGroups.value.find(g => g.path === parentFromQuery)
+      if (found) {
+        selectedParentId.value = Number(found.id)
+      }
     }
+  } catch (e) {
+    console.warn('Failed to load groups:', e)
+  } finally {
+    loadingGroups.value = false
   }
 })
 
@@ -228,12 +260,17 @@ async function createGroup() {
   error.value = ''
   
   try {
+    // 子群组的路径需要包含父路径
+    const fullPath = parentPath.value 
+      ? `${parentPath.value}/${form.value.path}` 
+      : form.value.path
+    
     const group = await api.groups.create({
       name: form.value.name,
-      path: form.value.path,
+      path: fullPath,
       description: form.value.description || undefined,
       visibility: form.value.visibility,
-      parent_id: parentGroup.value?.id
+      parent_id: selectedParentId.value || undefined
     })
     router.push(`/${group.path}`)
   } catch (e: any) {

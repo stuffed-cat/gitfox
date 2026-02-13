@@ -30,6 +30,8 @@ pub struct CreateProjectRequest {
     pub name: String,
     pub description: Option<String>,
     pub visibility: Option<ProjectVisibility>,
+    /// Optional namespace_id (group's namespace). If not provided, uses user's namespace.
+    pub namespace_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Validate)]

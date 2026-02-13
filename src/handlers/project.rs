@@ -4,7 +4,7 @@ use sqlx::PgPool;
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
-use crate::middleware::validate_token;
+use crate::middleware::{validate_token, try_validate_token};
 use crate::models::{AddMemberRequest, CreateProjectRequest, UpdateProjectRequest};
 use crate::services::{GitService, ProjectService};
 
@@ -22,13 +22,19 @@ pub struct ProjectPath {
 }
 
 pub async fn list_projects(
+    req: HttpRequest,
     pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
     query: web::Query<ListQuery>,
 ) -> AppResult<HttpResponse> {
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(20);
     
-    let projects = ProjectService::list_projects(pool.get_ref(), None, page, per_page).await?;
+    // Try to get current user ID if authenticated
+    let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
+    let user_id = try_validate_token(&service_req, config.get_ref()).await.map(|c| c.user_id);
+    
+    let projects = ProjectService::list_projects(pool.get_ref(), user_id, page, per_page).await?;
     Ok(HttpResponse::Ok().json(projects))
 }
 

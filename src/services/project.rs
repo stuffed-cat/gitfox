@@ -6,11 +6,13 @@ use crate::models::{
     CreateProjectRequest, MemberRole, Project, ProjectMember,
     ProjectStats, ProjectVisibility, UpdateProjectRequest, ProjectWithOwner,
 };
+use crate::models::namespace::AccessLevel;
 
 pub struct ProjectService;
 
 impl ProjectService {
     /// 创建项目 - 使用 BIGSERIAL 自增ID
+    /// 支持在用户命名空间或组群命名空间下创建项目
     pub async fn create_project(
         pool: &PgPool,
         owner_id: i64,
@@ -19,35 +21,107 @@ impl ProjectService {
         let now = Utc::now();
         let visibility = req.visibility.unwrap_or(ProjectVisibility::Private);
 
-        // 检查同一用户下是否已存在同名项目
+        // 获取实际使用的命名空间
+        let (namespace_id, owner_name, owner_avatar): (i64, String, Option<String>) = 
+            if let Some(ns_id) = req.namespace_id {
+                // 使用指定的命名空间，需要验证权限
+                let ns = sqlx::query_as::<_, (i64, String, Option<String>, String, Option<i64>)>(
+                    r#"
+                    SELECT n.id, n.path, n.avatar_url, n.namespace_type::text, n.owner_id
+                    FROM namespaces n
+                    WHERE n.id = $1
+                    "#
+                )
+                .bind(ns_id)
+                .fetch_optional(pool)
+                .await?
+                .ok_or_else(|| AppError::NotFound("Namespace not found".to_string()))?;
+
+                let (ns_id, ns_path, ns_avatar, ns_type, ns_owner_id) = ns;
+
+                // 如果是组群命名空间，检查用户权限
+                if ns_type == "group" {
+                    // 获取用户在组群中的权限
+                    let access_level = sqlx::query_scalar::<_, i32>(
+                        r#"
+                        SELECT COALESCE(
+                            (SELECT gm.access_level FROM group_members gm
+                             JOIN groups g ON g.id = gm.group_id
+                             WHERE g.namespace_id = $1 AND gm.user_id = $2),
+                            0
+                        )
+                        "#
+                    )
+                    .bind(ns_id)
+                    .bind(owner_id)
+                    .fetch_one(pool)
+                    .await?;
+
+                    // 至少需要 Developer (30) 权限才能创建项目
+                    if access_level < AccessLevel::Developer as i32 {
+                        return Err(AppError::Forbidden(
+                            "You don't have permission to create projects in this group".to_string()
+                        ));
+                    }
+                } else if ns_type == "user" {
+                    // 用户命名空间，检查是否是自己的
+                    if ns_owner_id != Some(owner_id) {
+                        return Err(AppError::Forbidden(
+                            "You can only create projects in your own namespace".to_string()
+                        ));
+                    }
+                }
+
+                (ns_id, ns_path, ns_avatar)
+            } else {
+                // 没有指定命名空间，使用用户的命名空间
+                let user_ns = sqlx::query_as::<_, (i64, String, Option<String>)>(
+                    r#"
+                    SELECT n.id, n.path, n.avatar_url
+                    FROM namespaces n
+                    WHERE n.namespace_type = 'user' AND n.owner_id = $1
+                    "#
+                )
+                .bind(owner_id)
+                .fetch_optional(pool)
+                .await?
+                .ok_or_else(|| AppError::NotFound("User namespace not found".to_string()))?;
+
+                user_ns
+            };
+
+        // 检查同一命名空间下是否已存在同名项目
         let existing = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM projects WHERE owner_id = $1 AND LOWER(name) = LOWER($2)"
+            "SELECT COUNT(*) FROM projects WHERE namespace_id = $1 AND LOWER(name) = LOWER($2)"
         )
-        .bind(owner_id)
+        .bind(namespace_id)
         .bind(&req.name)
         .fetch_one(pool)
         .await?;
 
         if existing > 0 {
-            return Err(AppError::Conflict("Project with this name already exists".to_string()));
+            return Err(AppError::Conflict("Project with this name already exists in this namespace".to_string()));
         }
 
         let project = sqlx::query_as::<_, ProjectWithOwner>(
             r#"
-            INSERT INTO projects (name, description, visibility, owner_id, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $5)
+            INSERT INTO projects (name, description, visibility, owner_id, namespace_id, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
             RETURNING id, name, description, visibility, owner_id, created_at, updated_at,
-                (SELECT username FROM users WHERE id = $4) as owner_name,
-                (SELECT avatar_url FROM users WHERE id = $4) as owner_avatar
+                $7 as owner_name,
+                $8 as owner_avatar
             "#
         )
         .bind(&req.name)
         .bind(&req.description)
         .bind(visibility)
         .bind(owner_id)
+        .bind(namespace_id)
         .bind(now)
+        .bind(&owner_name)
+        .bind(&owner_avatar)
         .fetch_one(pool)
-        .await?;;
+        .await?;
 
         // 把 owner 添加为项目成员
         Self::add_member(pool, project.id, owner_id, MemberRole::Owner).await?;
@@ -64,13 +138,16 @@ impl ProjectService {
     }
 
     /// 通过 namespace/name 获取项目 (标准 GitLab/GitHub 风格)
+    /// 支持用户命名空间和组群命名空间
     pub async fn get_project_by_owner_and_name(pool: &PgPool, owner: &str, name: &str) -> AppResult<ProjectWithOwner> {
+        // 先尝试通过命名空间路径查找
         sqlx::query_as::<_, ProjectWithOwner>(
             r#"
-            SELECT p.*, u.username as owner_name, u.avatar_url as owner_avatar
+            SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+                   n.path as owner_name, n.avatar_url as owner_avatar
             FROM projects p
-            JOIN users u ON p.owner_id = u.id
-            WHERE LOWER(u.username) = LOWER($1) AND LOWER(p.name) = LOWER($2)
+            JOIN namespaces n ON p.namespace_id = n.id
+            WHERE LOWER(n.path) = LOWER($1) AND LOWER(p.name) = LOWER($2)
             "#
         )
         .bind(owner)
@@ -89,14 +166,24 @@ impl ProjectService {
         let offset = (page.saturating_sub(1)) * per_page;
 
         let projects = if let Some(uid) = user_id {
+            // Get projects the user can access:
+            // 1. Public projects
+            // 2. Projects the user owns
+            // 3. Projects the user is a member of
+            // 4. Projects in groups the user is a member of
             sqlx::query_as::<_, ProjectWithOwner>(
                 r#"
-                SELECT p.*, u.username as owner_name, u.avatar_url as owner_avatar
+                SELECT DISTINCT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+                       n.path as owner_name, n.avatar_url as owner_avatar
                 FROM projects p
-                JOIN users u ON p.owner_id = u.id
-                LEFT JOIN project_members pm ON p.id = pm.project_id
-                WHERE p.visibility = 'public' OR pm.user_id = $1
-                GROUP BY p.id, u.username, u.avatar_url
+                JOIN namespaces n ON p.namespace_id = n.id
+                LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = $1
+                LEFT JOIN groups g ON n.namespace_type = 'group' AND n.id = g.namespace_id
+                LEFT JOIN group_members gm ON g.id = gm.group_id AND gm.user_id = $1
+                WHERE p.visibility = 'public'
+                   OR p.owner_id = $1
+                   OR pm.user_id IS NOT NULL
+                   OR gm.user_id IS NOT NULL
                 ORDER BY p.updated_at DESC
                 LIMIT $2 OFFSET $3
                 "#
@@ -109,11 +196,12 @@ impl ProjectService {
         } else {
             sqlx::query_as::<_, ProjectWithOwner>(
                 r#"
-                SELECT p.*, u.username as owner_name, u.avatar_url as owner_avatar
+                SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+                       n.path as owner_name, n.avatar_url as owner_avatar
                 FROM projects p
-                JOIN users u ON p.owner_id = u.id
-                WHERE visibility = 'public'
-                ORDER BY updated_at DESC
+                JOIN namespaces n ON p.namespace_id = n.id
+                WHERE p.visibility = 'public'
+                ORDER BY p.updated_at DESC
                 LIMIT $1 OFFSET $2
                 "#
             )

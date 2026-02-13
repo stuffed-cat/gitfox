@@ -159,20 +159,23 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/hooks/{id}", web::delete().to(webhook::delete_webhook))
             .route("/projects/{namespace}/{project}/hooks/{id}/test", web::post().to(webhook::test_webhook))
             
-            // Namespace/Group routes
+            // Namespace/Group routes - specific routes MUST come before generic {path:.*} routes
             .route("/groups", web::get().to(namespace::list_groups))
             .route("/groups", web::post().to(namespace::create_group))
+            // Routes with suffixes must come before the generic get/put/delete
+            .route("/groups/{path:.*}/members/{user_id}", web::delete().to(namespace::remove_group_member))
+            .route("/groups/{path:.*}/members", web::get().to(namespace::list_group_members))
+            .route("/groups/{path:.*}/members", web::post().to(namespace::add_group_member))
+            .route("/groups/{path:.*}/projects", web::get().to(namespace::list_group_projects))
+            .route("/groups/{path:.*}/subgroups", web::get().to(namespace::list_subgroups))
+            // Generic group routes come last
             .route("/groups/{path:.*}", web::get().to(namespace::get_group))
             .route("/groups/{path:.*}", web::put().to(namespace::update_group))
             .route("/groups/{path:.*}", web::delete().to(namespace::delete_group))
-            .route("/groups/{path:.*}/members", web::get().to(namespace::list_group_members))
-            .route("/groups/{path:.*}/members", web::post().to(namespace::add_group_member))
-            .route("/groups/{path:.*}/members/{user_id}", web::delete().to(namespace::remove_group_member))
-            .route("/groups/{path:.*}/projects", web::get().to(namespace::list_group_projects))
-            .route("/groups/{path:.*}/subgroups", web::get().to(namespace::list_subgroups))
             
             // Namespaces (users + groups unified listing)
             .route("/namespaces", web::get().to(namespace::list_namespaces))
+            .route("/namespaces/for-project-creation", web::get().to(namespace::list_namespaces_for_project_creation))
             .route("/namespaces/{path:.*}", web::get().to(namespace::get_namespace))
     );
 }

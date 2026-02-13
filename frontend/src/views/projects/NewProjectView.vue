@@ -135,8 +135,10 @@ git push --set-upstream origin main</code></pre>
             <label>项目 URL</label>
             <div class="url-input">
               <span class="prefix">{{ baseUrl }}/</span>
-              <select v-model="form.namespace" class="namespace-select">
-                <option :value="currentUser?.username">{{ currentUser?.username }}</option>
+              <select v-model="form.namespace_id" class="namespace-select" :disabled="loadingNamespaces">
+                <option v-for="ns in availableNamespaces" :key="ns.id" :value="ns.id">
+                  {{ ns.path }}
+                </option>
               </select>
               <span class="separator">/</span>
             </div>
@@ -273,10 +275,12 @@ git push --set-upstream origin main</code></pre>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useProjectStore } from '@/stores/project'
+import api from '@/api'
+import type { NamespaceOption } from '@/types'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -292,15 +296,47 @@ const showBanner = ref(true)
 const loading = ref(false)
 const error = ref('')
 
+// Available namespaces for project creation
+const availableNamespaces = ref<NamespaceOption[]>([])
+const loadingNamespaces = ref(false)
+
 const form = reactive({
   name: '',
-  namespace: currentUser.value?.username || '',
+  namespace_id: null as number | null,
   description: '',
   visibility: 'private' as 'public' | 'private' | 'internal',
   deployTarget: '',
   initializeWithReadme: true,
   enableSAST: false
 })
+
+// Computed property for selected namespace path (for display)
+const selectedNamespacePath = computed(() => {
+  if (!form.namespace_id) return currentUser.value?.username || ''
+  const ns = availableNamespaces.value.find(n => n.id === form.namespace_id)
+  return ns?.path || currentUser.value?.username || ''
+})
+
+// Load available namespaces when component mounts
+onMounted(async () => {
+  await loadNamespaces()
+})
+
+async function loadNamespaces() {
+  loadingNamespaces.value = true
+  try {
+    availableNamespaces.value = await api.namespaces.listForProjectCreation()
+    // Set default to user's namespace
+    const userNs = availableNamespaces.value.find(n => n.namespace_type === 'user')
+    if (userNs) {
+      form.namespace_id = userNs.id
+    }
+  } catch (e) {
+    console.error('Failed to load namespaces:', e)
+  } finally {
+    loadingNamespaces.value = false
+  }
+}
 
 function selectType(type: 'blank' | 'template' | 'import') {
   step.value = type
@@ -314,9 +350,10 @@ async function handleSubmit() {
     const project = await projectStore.createProject({
       name: form.name,
       description: form.description,
-      visibility: form.visibility
+      visibility: form.visibility,
+      namespace_id: form.namespace_id || undefined
     })
-    router.push(`/${project.owner_name || currentUser.value?.username}/${project.name}`)
+    router.push(`/${project.owner_name || selectedNamespacePath.value}/${project.name}`)
   } catch (e: any) {
     error.value = e.response?.data?.message || '创建项目失败，请重试'
   } finally {

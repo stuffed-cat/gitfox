@@ -40,6 +40,17 @@ export interface CreateProjectRequest {
   name: string
   description?: string
   visibility?: 'public' | 'private' | 'internal'
+  /** Optional namespace_id (group's namespace). If not provided, uses user's namespace. */
+  namespace_id?: number
+}
+
+/** Namespace option for project creation */
+export interface NamespaceOption {
+  id: number
+  name: string
+  path: string
+  namespace_type: 'user' | 'group'
+  avatar_url?: string
 }
 
 export interface ProjectStats {
@@ -279,7 +290,7 @@ export interface CreateGroupRequest {
   path: string
   description?: string
   visibility?: 'public' | 'private' | 'internal'
-  parent_id?: string
+  parent_id?: number
 }
 
 export interface UpdateGroupRequest {

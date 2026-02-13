@@ -33,6 +33,27 @@ pub async fn validate_token(req: &ServiceRequest, config: &AppConfig) -> Result<
     Ok(token_data.claims)
 }
 
+/// Try to validate token, returns Option<Claims> instead of error
+pub async fn try_validate_token(req: &ServiceRequest, config: &AppConfig) -> Option<Claims> {
+    let auth_header = req.headers().get("Authorization")?;
+    let auth_str = auth_header.to_str().ok()?;
+    
+    if !auth_str.starts_with("Bearer ") {
+        return None;
+    }
+    
+    let token = &auth_str[7..];
+    
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(config.jwt_secret.as_bytes()),
+        &Validation::default(),
+    )
+    .ok()?;
+    
+    Some(token_data.claims)
+}
+
 pub fn extract_user_from_request(req: &ServiceRequest) -> Option<Claims> {
     req.extensions().get::<Claims>().cloned()
 }
