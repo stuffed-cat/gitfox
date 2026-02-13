@@ -4,5 +4,5 @@
 /repos
 /gitlab-css
 /gitfox-shell/target
-
+.env
 /data

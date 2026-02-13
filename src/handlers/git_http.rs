@@ -93,19 +93,29 @@ pub async fn get_info_refs(
     // Check project access
     let project = get_project_by_path(&pool, &namespace, project_name).await?;
     
-    // For git-receive-pack (push), require authentication
+    // For git-receive-pack (push), require authentication and write permission
     if service == "git-receive-pack" {
-        // 首先尝试 Bearer Token (来自 OptionalAuth)
-        let user_authenticated = auth.user_id().is_some() 
-            // 然后尝试 Git Basic Auth
-            || verify_git_basic_auth(&req, &pool).await.is_some();
-        
-        if !user_authenticated {
-            return Ok(HttpResponse::Unauthorized()
-                .append_header(("WWW-Authenticate", "Basic realm=\"Git\""))
-                .body("Authentication required"));
+        // 获取用户ID
+        let user_id = match auth.user_id() {
+            Some(id) => id,
+            None => {
+                // 尝试 Basic Auth
+                match verify_git_basic_auth(&req, &pool).await {
+                    Some((id, _)) => id,
+                    None => {
+                        return Ok(HttpResponse::Unauthorized()
+                            .append_header(("WWW-Authenticate", "Basic realm=\"Git\""))
+                            .body("Authentication required"));
+                    }
+                }
+            }
+        };
+
+        // 检查用户是否有写权限
+        if !check_write_permission(&pool, user_id, project.id, project.owner_id).await? {
+            return Ok(HttpResponse::Forbidden()
+                .body("You don't have write access to this repository"));
         }
-        // TODO: Check write permission
     }
     
     let repo_path = format!("{}/{}/{}.git", config.git_repos_path, namespace, project.name);
@@ -207,7 +217,11 @@ pub async fn git_receive_pack(
     
     let project = get_project_by_path(&pool, &namespace, project_name).await?;
     
-    // TODO: Check write permission for user_id on project
+    // 检查用户是否有写权限
+    if !check_write_permission(&pool, _user_id, project.id, project.owner_id).await? {
+        return Ok(HttpResponse::Forbidden()
+            .body("You don't have write access to this repository"));
+    }
     
     let repo_path = format!("{}/{}/{}.git", config.git_repos_path, namespace, project.name);
     
@@ -278,6 +292,38 @@ async fn get_project_by_path(
 fn pkt_line(data: &str) -> String {
     let len = data.len() + 4; // 4 bytes for length prefix
     format!("{:04x}{}", len, data)
+}
+
+/// 检查用户是否有项目的写权限
+/// 只有 owner、maintainer、developer 角色可以写入
+async fn check_write_permission(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    project_id: i64,
+    owner_id: i64,
+) -> Result<bool, AppError> {
+    // Owner 总是有写权限
+    if user_id == owner_id {
+        return Ok(true);
+    }
+    
+    // 检查项目成员角色
+    let role = sqlx::query_scalar::<_, String>(
+        r#"SELECT role::text FROM project_members WHERE project_id = $1 AND user_id = $2"#
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(AppError::from)?;
+    
+    match role {
+        Some(role) => {
+            // 只有 owner、maintainer、developer 有写权限
+            Ok(matches!(role.as_str(), "owner" | "maintainer" | "developer"))
+        }
+        None => Ok(false),
+    }
 }
 
 pub fn configure_git_routes(cfg: &mut web::ServiceConfig) {

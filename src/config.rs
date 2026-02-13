@@ -13,6 +13,8 @@ pub struct Config {
     pub shell_secret: String,
     /// Base URL for the GitFox instance (used for LFS, webhooks, etc.)
     pub base_url: String,
+    /// Internal API URL for gitfox-shell (defaults to http://127.0.0.1:<port>)
+    pub internal_api_url: String,
     /// SSH server enabled
     pub ssh_enabled: bool,
     /// SSH server bind host (what the server listens on)
@@ -25,6 +27,8 @@ pub struct Config {
     pub ssh_public_port: u16,
     /// SSH host key path (without extension)
     pub ssh_host_key_path: String,
+    /// Path to gitfox-shell binary
+    pub gitfox_shell_path: String,
 }
 
 impl Config {
@@ -52,6 +56,11 @@ impl Config {
                     .unwrap_or_else(|_| "change-me-in-production".to_string())),
             base_url: env::var("GITFOX_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:8080".to_string()),
+            internal_api_url: env::var("GITFOX_INTERNAL_API_URL")
+                .unwrap_or_else(|_| {
+                    let port = env::var("SERVER_PORT").unwrap_or_else(|_| "8080".to_string());
+                    format!("http://127.0.0.1:{}", port)
+                }),
             ssh_enabled: env::var("SSH_ENABLED")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(true),
@@ -71,6 +80,8 @@ impl Config {
                 .expect("Invalid SSH_PUBLIC_PORT"),
             ssh_host_key_path: env::var("SSH_HOST_KEY_PATH")
                 .unwrap_or_else(|_| "./data/ssh/host_key".to_string()),
+            gitfox_shell_path: env::var("GITFOX_SHELL_PATH")
+                .unwrap_or_else(|_| "./gitfox-shell/target/debug/gitfox-shell".to_string()),
         }
     }
 }

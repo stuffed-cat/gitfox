@@ -80,189 +80,158 @@ impl GitSshHandler {
         }
     }
 
-    /// Check if user has access to a repository
-    async fn check_access(
-        &self,
-        repo_path: &str,
-        needs_write: bool,
-    ) -> Result<bool, String> {
-        let user_id = self.session.user_id.ok_or("Not authenticated")?;
+    // Note: Access control is now handled by gitfox-shell via internal API
+    // The check_access method has been removed in favor of delegating to gitfox-shell
 
-        debug!("check_access: repo_path='{}', user_id={}, needs_write={}", repo_path, user_id, needs_write);
-
-        // Find the project by matching owner.username/project.name
-        let project = sqlx::query_as::<_, (i64, String, i64)>(
-            r#"
-            SELECT p.id, p.visibility::text, p.owner_id
-            FROM projects p
-            JOIN users u ON p.owner_id = u.id
-            WHERE LOWER(CONCAT(u.username, '/', p.name)) = LOWER($1)
-            "#,
-        )
-        .bind(repo_path)
-        .fetch_optional(self.session.pool.as_ref())
-        .await
-        .map_err(|e| format!("Database error: {}", e))?;
-
-        debug!("check_access: query result for '{}': {:?}", repo_path, project);
-
-        let project = project.ok_or_else(|| format!("Repository '{}' not found", repo_path))?;
-
-        let (project_id, visibility, owner_id) = project;
-
-        // Check if user is owner
-        if user_id == owner_id {
-            return Ok(true);
-        }
-
-        // Check project membership
-        let membership = sqlx::query_scalar::<_, String>(
-            r#"SELECT role::text FROM project_members WHERE project_id = $1 AND user_id = $2"#,
-        )
-        .bind(project_id)
-        .bind(user_id)
-        .fetch_optional(self.session.pool.as_ref())
-        .await
-        .map_err(|e| format!("Database error: {}", e))?;
-
-        match membership {
-            Some(role) => {
-                if needs_write {
-                    Ok(matches!(role.as_str(), "owner" | "maintainer" | "developer"))
-                } else {
-                    Ok(true)
-                }
-            }
-            None => {
-                // No membership, check visibility
-                if visibility == "public" || visibility == "internal" {
-                    if needs_write {
-                        Err("Write access denied".to_string())
-                    } else {
-                        Ok(true)
-                    }
-                } else {
-                    Err("Access denied".to_string())
-                }
-            }
-        }
-    }
-
-    /// Execute a Git command on the given channel
+    /// Execute a Git command on the given channel via gitfox-shell
+    /// This ensures all access control is handled by gitfox-shell
     async fn execute_git_command_on_channel(
-        &self,
+        &mut self,
         channel_id: ChannelId,
         session: &mut Session,
-        action: GitAction,
+        _action: GitAction,
         repo_path: &str,
+        original_command: &str,
     ) -> Result<(), String> {
         let config = &self.session.config;
-        let full_path = format!("{}/{}.git", config.git_repos_path, repo_path);
-
-        // Check if repository exists
-        if !std::path::Path::new(&full_path).exists() {
-            return Err(format!("Repository not found: {}", repo_path));
-        }
-
-        let binary = action.binary_name();
+        let key_id = self.session.key_id.ok_or("No SSH key ID available")?;
         
         info!(
-            "Executing {} on {} for user {:?}",
-            binary,
-            full_path,
-            self.session.username
+            "Executing gitfox-shell for command '{}' on {} for user {:?} (key_id={})",
+            original_command,
+            repo_path,
+            self.session.username,
+            key_id
         );
 
-        // Build environment variables
-        let user_id = self.session.user_id.unwrap_or(0);
-        let username = self.session.username.as_deref().unwrap_or("anonymous");
-
-        // Spawn the git process
-        let mut child = Command::new(binary)
-            .arg(&full_path)
-            .env("GL_ID", format!("user-{}", user_id))
-            .env("GL_USERNAME", username)
-            .env("GL_REPOSITORY", repo_path)
-            .env("GL_PROTOCOL", "ssh")
-            .env("GITFOX_USER_ID", user_id.to_string())
-            .env("GITFOX_USERNAME", username)
-            .env("GITFOX_REPO_PATH", repo_path)
+        // Spawn gitfox-shell process
+        // gitfox-shell reads SSH_ORIGINAL_COMMAND and handles access control
+        // key_id is passed in format "key-123" as expected by internal API
+        let mut child = Command::new(&config.gitfox_shell_path)
+            .arg(format!("key-{}", key_id))
+            .env("SSH_ORIGINAL_COMMAND", original_command)
+            .env("GITFOX_API_URL", &config.internal_api_url)
+            .env("GITFOX_API_SECRET", &config.shell_secret)
+            .env("GITFOX_REPOS_PATH", &config.git_repos_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to spawn {}: {}", binary, e))?;
+            .map_err(|e| format!("Failed to spawn gitfox-shell: {}", e))?;
 
-        let _stdin = child.stdin.take().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
         let mut stdout = child.stdout.take().unwrap();
         let mut stderr = child.stderr.take().unwrap();
 
-        // Handle stdin from client
-        let _stdin_handle = tokio::spawn(async move {
-            // This will be fed data from channel_data callbacks
-            // For now we just keep stdin open
-            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-        });
-
-        // Send stdout to channel
-        let session_handle = session.handle();
-        let stdout_handle = tokio::spawn(async move {
-            let mut buf = vec![0u8; 32768];
-            loop {
-                match stdout.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let data = CryptoVec::from_slice(&buf[..n]);
-                        if session_handle.data(channel_id, data).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Error reading from git stdout: {}", e);
-                        break;
-                    }
-                }
-            }
-        });
-
-        // Send stderr to channel
-        let session_handle2 = session.handle();
-        let stderr_handle = tokio::spawn(async move {
-            let mut buf = vec![0u8; 4096];
-            loop {
-                match stderr.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let data = CryptoVec::from_slice(&buf[..n]);
-                        if session_handle2.extended_data(channel_id, 1, data).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Error reading from git stderr: {}", e);
-                        break;
-                    }
-                }
-            }
-        });
-
-        // Wait for the process to complete
-        let status = child.wait().await.map_err(|e| format!("Failed to wait: {}", e))?;
-
-        stdout_handle.abort();
-        stderr_handle.abort();
-
-        // Send exit status
-        let exit_code = status.code().unwrap_or(1) as u32;
-        session.exit_status_request(channel_id, exit_code);
-        session.close(channel_id);
-
-        if status.success() {
-            info!("Git command completed successfully");
-            Ok(())
-        } else {
-            Err(format!("Git command failed with exit code {}", exit_code))
+        // Create channel for stdin data
+        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(100);
+        
+        // Store the sender so data callback can use it
+        {
+            let mut stdin_map = self.session.git_stdin.lock().await;
+            stdin_map.insert(channel_id, stdin_tx);
         }
+
+        // Get session handle for async operations
+        let session_handle = session.handle();
+        let git_stdin = self.session.git_stdin.clone();
+
+        // Spawn a task to handle the entire git process lifecycle
+        tokio::spawn(async move {
+            // Handle stdin from client
+            let stdin_handle = tokio::spawn(async move {
+                while let Some(data) = stdin_rx.recv().await {
+                    debug!("Writing {} bytes to git stdin", data.len());
+                    if stdin.write_all(&data).await.is_err() {
+                        break;
+                    }
+                }
+                debug!("Git stdin closed");
+                drop(stdin);
+            });
+
+            // Send stdout to channel
+            let stdout_session = session_handle.clone();
+            let stdout_handle = tokio::spawn(async move {
+                let mut buf = vec![0u8; 32768];
+                loop {
+                    match stdout.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            debug!("Read {} bytes from git stdout", n);
+                            let data = CryptoVec::from_slice(&buf[..n]);
+                            if stdout_session.data(channel_id, data).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error reading from git stdout: {}", e);
+                            break;
+                        }
+                    }
+                }
+                debug!("Git stdout closed");
+            });
+
+            // Send stderr to channel
+            let stderr_session = session_handle.clone();
+            let stderr_handle = tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                loop {
+                    match stderr.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            debug!("Read {} bytes from git stderr", n);
+                            let data = CryptoVec::from_slice(&buf[..n]);
+                            if stderr_session.extended_data(channel_id, 1, data).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error reading from git stderr: {}", e);
+                            break;
+                        }
+                    }
+                }
+                debug!("Git stderr closed");
+            });
+
+            // Wait for the process to complete
+            let status = child.wait().await;
+            
+            // Wait for stdout/stderr to finish
+            let _ = stdout_handle.await;
+            let _ = stderr_handle.await;
+            stdin_handle.abort();
+
+            // Remove stdin sender
+            {
+                let mut stdin_map = git_stdin.lock().await;
+                stdin_map.remove(&channel_id);
+            }
+
+            // Send exit status
+            match status {
+                Ok(status) => {
+                    let exit_code = status.code().unwrap_or(1) as u32;
+                    let _ = session_handle.exit_status_request(channel_id, exit_code).await;
+                    let _ = session_handle.close(channel_id).await;
+                    if status.success() {
+                        info!("Git command completed successfully");
+                    } else {
+                        error!("Git command failed with exit code {}", exit_code);
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to wait for git process: {}", e);
+                    let _ = session_handle.exit_status_request(channel_id, 1).await;
+                    let _ = session_handle.close(channel_id).await;
+                }
+            }
+        });
+
+        // Return immediately - the git process runs in the background
+        Ok(())
     }
 }
 
@@ -336,7 +305,7 @@ impl Handler for GitSshHandler {
             return Ok(());
         }
 
-        // Parse the Git command
+        // Parse the Git command to validate it's a git operation
         let (action, repo_path) = match GitSession::parse_git_command(&command) {
             Some(parsed) => parsed,
             None => {
@@ -356,41 +325,16 @@ impl Handler for GitSshHandler {
             }
         };
 
-        // Check access
-        match self.check_access(&repo_path, action.requires_write()).await {
-            Ok(true) => {
-                // Access granted, execute command
-                session.channel_success(channel);
-                
-                // Execute directly on this channel
-                if let Err(e) = self.execute_git_command_on_channel(channel, session, action, &repo_path).await {
-                    error!("Git command failed: {}", e);
-                    let err_msg = format!("GitFox: {}\n", e);
-                    session.extended_data(channel, 1, CryptoVec::from_slice(err_msg.as_bytes()));
-                    session.exit_status_request(channel, 1);
-                    session.close(channel);
-                }
-            }
-            Ok(false) => {
-                debug!("check_access returned Ok(false) for {}", repo_path);
-                let err_msg = format!(
-                    "GitFox: Permission denied. You don't have access to {}.\n",
-                    repo_path
-                );
-                session.extended_data(channel, 1, CryptoVec::from_slice(err_msg.as_bytes()));
-                session.exit_status_request(channel, 1);
-                session.close(channel);
-            }
-            Err(e) => {
-                debug!("check_access error for {}: {}", repo_path, e);
-                let err_msg = format!(
-                    "GitFox: {}.\n",
-                    e
-                );
-                session.extended_data(channel, 1, CryptoVec::from_slice(err_msg.as_bytes()));
-                session.exit_status_request(channel, 1);
-                session.close(channel);
-            }
+        // Execute via gitfox-shell which handles access control
+        session.channel_success(channel);
+        
+        // Execute the command through gitfox-shell
+        if let Err(e) = self.execute_git_command_on_channel(channel, session, action, &repo_path, &command).await {
+            error!("Git command failed: {}", e);
+            let err_msg = format!("GitFox: {}\n", e);
+            session.extended_data(channel, 1, CryptoVec::from_slice(err_msg.as_bytes()));
+            session.exit_status_request(channel, 1);
+            session.close(channel);
         }
 
         Ok(())
@@ -403,8 +347,15 @@ impl Handler for GitSshHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         // Forward data to the git process stdin
-        // This needs to be connected to the spawned process
         debug!("Received {} bytes of data on channel {:?}", data.len(), channel);
+        
+        let stdin_map = self.session.git_stdin.lock().await;
+        if let Some(tx) = stdin_map.get(&channel) {
+            if let Err(e) = tx.send(data.to_vec()).await {
+                error!("Failed to send data to git stdin: {}", e);
+            }
+        }
+        
         Ok(())
     }
 
@@ -414,6 +365,11 @@ impl Handler for GitSshHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         debug!("Channel EOF: {:?}", channel);
+        
+        // Remove stdin sender to signal EOF to git process
+        let mut stdin_map = self.session.git_stdin.lock().await;
+        stdin_map.remove(&channel);
+        
         Ok(())
     }
 
@@ -423,6 +379,11 @@ impl Handler for GitSshHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         debug!("Channel close: {:?}", channel);
+        
+        // Remove stdin sender if not already removed
+        let mut stdin_map = self.session.git_stdin.lock().await;
+        stdin_map.remove(&channel);
+        
         Ok(())
     }
 }

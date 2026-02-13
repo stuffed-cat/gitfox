@@ -246,3 +246,25 @@ export interface CreateWebhookRequest {
   secret?: string
   events: string[]
 }
+
+// Groups
+export interface Group {
+  id: string
+  namespace_id: string
+  name: string
+  path: string
+  description?: string
+  avatar_url?: string
+  visibility: 'public' | 'private' | 'internal'
+  parent_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateGroupRequest {
+  name: string
+  path: string
+  description?: string
+  visibility?: 'public' | 'private' | 'internal'
+  parent_id?: string
+}

@@ -90,20 +90,29 @@ pub async fn check_allowed(
         )));
     }
 
-    // Parse repository path (format: "namespace/project" or "namespace/subgroup/project")
+    // Parse repository path (format: "owner/project")
     let repo_path = &body.repo_path;
+    
+    // Split into owner and project name
+    let parts: Vec<&str> = repo_path.split('/').collect();
+    if parts.len() != 2 {
+        return Ok(HttpResponse::BadRequest().json(AccessCheckResponse::denied(
+            "Invalid repository path format. Expected: owner/project",
+        )));
+    }
+    let (owner_name, project_name) = (parts[0], parts[1]);
 
-    // Find the project by repository path or namespace/name
+    // Find the project by owner username and project name
     let project = sqlx::query_as::<_, (i64, String, i64)>(
         r#"
         SELECT p.id, p.visibility::text, p.owner_id
         FROM projects p
-        JOIN namespaces n ON p.namespace_id = n.id
-        WHERE CONCAT(n.path, '/', p.name) = $1
-           OR p.repository_path = $1
+        JOIN users u ON p.owner_id = u.id
+        WHERE LOWER(u.username) = LOWER($1) AND LOWER(p.name) = LOWER($2)
         "#,
     )
-    .bind(repo_path)
+    .bind(owner_name)
+    .bind(project_name)
     .fetch_optional(pool.get_ref())
     .await?;
 

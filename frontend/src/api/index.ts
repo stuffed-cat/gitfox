@@ -22,7 +22,9 @@ import type {
   Pipeline,
   PipelineJob,
   Webhook,
-  CreateWebhookRequest
+  CreateWebhookRequest,
+  Group,
+  CreateGroupRequest
 } from '@/types'
 
 // 的项目路径
@@ -294,8 +296,34 @@ class ApiClient {
       return response.data
     }
   }
+
+  // Groups
+  groups = {
+    list: async (): Promise<Group[]> => {
+      const response = await this.client.get('/groups')
+      return response.data
+    },
+    create: async (data: CreateGroupRequest): Promise<Group> => {
+      const response = await this.client.post('/groups', data)
+      return response.data
+    },
+    get: async (path: string): Promise<Group> => {
+      const response = await this.client.get(`/groups/${path}`)
+      return response.data
+    },
+    update: async (path: string, data: Partial<CreateGroupRequest>): Promise<Group> => {
+      const response = await this.client.put(`/groups/${path}`, data)
+      return response.data
+    },
+    delete: async (path: string): Promise<void> => {
+      await this.client.delete(`/groups/${path}`)
+    }
+  }
 }
 
 const apiClient = new ApiClient()
+
+// Named export for convenience
+export const api = apiClient
 
 export default apiClient

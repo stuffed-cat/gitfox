@@ -32,16 +32,29 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { api } from '@/api'
+import type { Group } from '@/types'
 
 const loading = ref(false)
 const searchQuery = ref('')
-const groups = ref<any[]>([])
+const groups = ref<Group[]>([])
 
 const filteredGroups = computed(() => {
   if (!searchQuery.value) return groups.value
   const query = searchQuery.value.toLowerCase()
   return groups.value.filter(g => g.name.toLowerCase().includes(query))
+})
+
+onMounted(async () => {
+  loading.value = true
+  try {
+    groups.value = await api.groups.list()
+  } catch (e) {
+    console.error('Failed to load groups:', e)
+  } finally {
+    loading.value = false
+  }
 })
 </script>
 

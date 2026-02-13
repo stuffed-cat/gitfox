@@ -46,11 +46,11 @@ async fn main() -> ExitCode {
     // Parse arguments
     let args = Args::parse();
 
-    // Setup logging
+    // Setup logging - only show errors in normal mode, debug shows all
     let log_level = if args.debug {
         Level::DEBUG
     } else {
-        Level::INFO
+        Level::ERROR
     };
 
     let subscriber = FmtSubscriber::builder()

@@ -4,6 +4,8 @@
       <h1>新建群组</h1>
     </div>
     
+    <div v-if="error" class="error-message">{{ error }}</div>
+    
     <form @submit.prevent="createGroup" class="group-form">
       <div class="form-group">
         <label for="name">群组名称</label>
@@ -80,6 +82,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { api } from '@/api'
 
 const router = useRouter()
 
@@ -89,10 +92,11 @@ const form = ref({
   name: '',
   path: '',
   description: '',
-  visibility: 'private'
+  visibility: 'private' as 'public' | 'private' | 'internal'
 })
 
 const submitting = ref(false)
+const error = ref('')
 
 watch(() => form.value.name, (name) => {
   form.value.path = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
@@ -100,11 +104,21 @@ watch(() => form.value.name, (name) => {
 
 async function createGroup() {
   submitting.value = true
-  // TODO: 实现群组创建 API
-  setTimeout(() => {
-    submitting.value = false
+  error.value = ''
+  
+  try {
+    await api.groups.create({
+      name: form.value.name,
+      path: form.value.path,
+      description: form.value.description || undefined,
+      visibility: form.value.visibility
+    })
     router.push('/dashboard/groups')
-  }, 1000)
+  } catch (e: any) {
+    error.value = e.response?.data?.message || e.message || '创建群组失败'
+  } finally {
+    submitting.value = false
+  }
 }
 </script>
 
@@ -118,6 +132,15 @@ async function createGroup() {
 .page-header {
   margin-bottom: $spacing-6;
   h1 { font-size: $text-2xl; font-weight: 600; }
+}
+
+.error-message {
+  padding: $spacing-3 $spacing-4;
+  margin-bottom: $spacing-4;
+  background: rgba($color-danger, 0.1);
+  border: 1px solid $color-danger;
+  border-radius: $radius-md;
+  color: $color-danger;
 }
 
 .group-form {
