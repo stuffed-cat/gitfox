@@ -261,10 +261,53 @@ export interface Group {
   updated_at: string
 }
 
+export interface GroupMember {
+  id: string
+  group_id: string
+  user_id: string
+  access_level: number
+  created_at: string
+  expires_at?: string
+  // joined from users table
+  username?: string
+  display_name?: string
+  avatar_url?: string
+}
+
 export interface CreateGroupRequest {
   name: string
   path: string
   description?: string
   visibility?: 'public' | 'private' | 'internal'
   parent_id?: string
+}
+
+export interface UpdateGroupRequest {
+  name?: string
+  description?: string
+  visibility?: 'public' | 'private' | 'internal'
+  avatar_url?: string
+}
+
+export interface AddGroupMemberRequest {
+  user_id: string
+  access_level: number
+  expires_at?: string
+}
+
+// Access levels matching backend
+export const ACCESS_LEVELS = {
+  GUEST: 10,
+  REPORTER: 20,
+  DEVELOPER: 30,
+  MAINTAINER: 40,
+  OWNER: 50,
+} as const
+
+export const ACCESS_LEVEL_LABELS: Record<number, string> = {
+  10: '访客',
+  20: '报告者',
+  30: '开发者',
+  40: '维护者',
+  50: '所有者',
 }

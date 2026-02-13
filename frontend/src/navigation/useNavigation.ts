@@ -6,9 +6,11 @@
 import { computed, type ComputedRef } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useNamespaceStore } from '@/stores/namespace'
 import type { NavContext, NavSection, NavItem, ContextHeader } from './types'
 import { globalMenuConfig } from './menus/globalMenu'
 import { createProjectMenuConfig } from './menus/projectMenu'
+import { createGroupMenuConfig } from './menus/groupMenu'
 import { userSettingsMenuConfig } from './menus/userSettingsMenu'
 
 export interface UseNavigationReturn {
@@ -28,6 +30,7 @@ export interface UseNavigationReturn {
 export function useNavigation(): UseNavigationReturn {
   const route = useRoute()
   const authStore = useAuthStore()
+  const namespaceStore = useNamespaceStore()
   
   // 解析当前导航上下文
   const context = computed<NavContext>(() => {
@@ -40,6 +43,17 @@ export function useNavigation(): UseNavigationReturn {
         user: authStore.user ? {
           username: authStore.user.username
         } : undefined
+      }
+    }
+    
+    // 群组页面 - 检查路由 meta 或 namespace store
+    if (route.meta?.contextType === 'group' || namespaceStore.currentNamespaceType === 'group') {
+      const groupPath = (route.params.namespace || route.params.groupPath || namespaceStore.currentNamespace) as string
+      return {
+        type: 'group',
+        group: {
+          path: groupPath
+        }
       }
     }
     
@@ -65,6 +79,8 @@ export function useNavigation(): UseNavigationReturn {
     switch (context.value.type) {
       case 'project':
         return createProjectMenuConfig(context.value)
+      case 'group':
+        return createGroupMenuConfig(context.value)
       case 'user-settings':
         return userSettingsMenuConfig
       default:
@@ -82,6 +98,16 @@ export function useNavigation(): UseNavigationReturn {
         title: ctx.project.name,
         subtitle: ctx.project.owner,
         to: ctx.project.path
+      }
+    }
+    
+    if (ctx.type === 'group' && ctx.group) {
+      const groupName = ctx.group.path.split('/').pop() || ctx.group.path
+      return {
+        avatar: groupName.charAt(0).toUpperCase(),
+        title: groupName,
+        subtitle: ctx.group.path,
+        to: `/${ctx.group.path}`
       }
     }
     

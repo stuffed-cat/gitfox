@@ -112,12 +112,26 @@ const routes = [
     meta: { requiresAuth: true }
   },
   
-  // User/Group profile (single segment path)
+  // User/Group profile (single segment path - handles both users and groups)
   {
     path: '/:namespace',
     name: 'Namespace',
     component: () => import('@/views/namespace/NamespaceView.vue'),
     meta: { requiresAuth: false }
+  },
+
+  // Group sub-pages (single level group with sub-routes)
+  {
+    path: '/:namespace/-/members',
+    name: 'GroupMembers',
+    component: () => import('@/views/groups/GroupMembersView.vue'),
+    meta: { requiresAuth: true, contextType: 'group' }
+  },
+  {
+    path: '/:namespace/-/settings',
+    name: 'GroupSettings',
+    component: () => import('@/views/groups/GroupSettingsView.vue'),
+    meta: { requiresAuth: true, contextType: 'group' }
   },
   
   // Project routes (must be LAST - catches /:owner/:repo)

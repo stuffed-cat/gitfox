@@ -1,3 +1,4 @@
 export * from './globalMenu'
 export * from './projectMenu'
+export * from './groupMenu'
 export * from './userSettingsMenu'

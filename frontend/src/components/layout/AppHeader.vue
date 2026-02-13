@@ -51,11 +51,42 @@
     </div>
     
     <div class="header-right">
-      <button class="header-btn" title="新建">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-          <path d="M9 4v10M4 9h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-      </button>
+      <!-- 新建下拉菜单 -->
+      <div class="create-dropdown" ref="createDropdownRef">
+        <button class="header-btn" :class="{ active: createMenuOpen }" @click="toggleCreateMenu" title="新建">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M9 4v10M4 9h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+        
+        <Transition name="dropdown">
+          <div v-if="createMenuOpen" class="dropdown-menu create-menu">
+            <router-link to="/projects/new" class="dropdown-item" @click="createMenuOpen = false">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3z" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M8 5v6M5 8h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              新建项目/仓库
+            </router-link>
+            <router-link to="/groups/new" class="dropdown-item" @click="createMenuOpen = false">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <rect x="1" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                <rect x="9" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                <rect x="5" y="8" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+              </svg>
+              新建群组
+            </router-link>
+            <router-link to="/snippets/new" class="dropdown-item disabled" @click.prevent>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M4 2h8a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M5 6h6M5 9h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              新建代码片段
+              <span class="coming-soon">即将推出</span>
+            </router-link>
+          </div>
+        </Transition>
+      </div>
       
       <button class="header-btn" title="待办事项">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -136,8 +167,10 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const userMenuOpen = ref(false)
+const createMenuOpen = ref(false)
 const searchFocused = ref(false)
 const userDropdownRef = ref<HTMLElement | null>(null)
+const createDropdownRef = ref<HTMLElement | null>(null)
 
 const user = computed(() => authStore.user)
 const userInitial = computed(() => {
@@ -147,6 +180,12 @@ const userInitial = computed(() => {
 
 function toggleUserMenu() {
   userMenuOpen.value = !userMenuOpen.value
+  createMenuOpen.value = false
+}
+
+function toggleCreateMenu() {
+  createMenuOpen.value = !createMenuOpen.value
+  userMenuOpen.value = false
 }
 
 function handleLogout() {
@@ -159,6 +198,9 @@ function handleLogout() {
 function handleClickOutside(event: MouseEvent) {
   if (userDropdownRef.value && !userDropdownRef.value.contains(event.target as Node)) {
     userMenuOpen.value = false
+  }
+  if (createDropdownRef.value && !createDropdownRef.value.contains(event.target as Node)) {
+    createMenuOpen.value = false
   }
 }
 
@@ -505,6 +547,43 @@ onUnmounted(() => {
     &:hover {
       background: $color-danger-light;
     }
+  }
+  
+  &.disabled {
+    color: $text-muted;
+    cursor: not-allowed;
+    
+    svg {
+      color: $text-muted;
+    }
+    
+    &:hover {
+      background: transparent;
+    }
+  }
+  
+  .coming-soon {
+    margin-left: auto;
+    font-size: $font-size-xs;
+    color: $text-muted;
+    background: $bg-tertiary;
+    padding: 2px 6px;
+    border-radius: $border-radius-sm;
+  }
+}
+
+// Create dropdown
+.create-dropdown {
+  position: relative;
+  
+  .header-btn.active {
+    background: $bg-tertiary;
+    color: $color-primary;
+  }
+  
+  .create-menu {
+    min-width: 200px;
+    padding: $spacing-2 0;
   }
 }
 

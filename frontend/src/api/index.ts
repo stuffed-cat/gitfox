@@ -24,7 +24,10 @@ import type {
   Webhook,
   CreateWebhookRequest,
   Group,
-  CreateGroupRequest
+  CreateGroupRequest,
+  UpdateGroupRequest,
+  GroupMember,
+  AddGroupMemberRequest,
 } from '@/types'
 
 // 的项目路径
@@ -311,13 +314,35 @@ class ApiClient {
       const response = await this.client.get(`/groups/${path}`)
       return response.data
     },
-    update: async (path: string, data: Partial<CreateGroupRequest>): Promise<Group> => {
+    update: async (path: string, data: UpdateGroupRequest): Promise<Group> => {
       const response = await this.client.put(`/groups/${path}`, data)
       return response.data
     },
     delete: async (path: string): Promise<void> => {
       await this.client.delete(`/groups/${path}`)
-    }
+    },
+    // Group members
+    listMembers: async (path: string): Promise<GroupMember[]> => {
+      const response = await this.client.get(`/groups/${path}/members`)
+      return response.data
+    },
+    addMember: async (path: string, data: AddGroupMemberRequest): Promise<GroupMember> => {
+      const response = await this.client.post(`/groups/${path}/members`, data)
+      return response.data
+    },
+    removeMember: async (path: string, userId: string): Promise<void> => {
+      await this.client.delete(`/groups/${path}/members/${userId}`)
+    },
+    // Group projects
+    listProjects: async (path: string): Promise<Project[]> => {
+      const response = await this.client.get(`/groups/${path}/projects`)
+      return response.data
+    },
+    // Subgroups
+    listSubgroups: async (path: string): Promise<Group[]> => {
+      const response = await this.client.get(`/groups/${path}/subgroups`)
+      return response.data
+    },
   }
 }
 
