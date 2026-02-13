@@ -16,22 +16,22 @@
             </svg>
           </h1>
           <div class="project-actions">
-            <button class="btn btn-default">
-              <svg class="btn-icon" viewBox="0 0 16 16" fill="none">
+            <button class="btn btn-default" :class="{ 'is-starred': isStarred }" @click="toggleStar" :disabled="starLoading">
+              <svg class="btn-icon" viewBox="0 0 16 16" :fill="isStarred ? 'currentColor' : 'none'">
                 <path d="M8 2l1.8 3.6 4 .6-2.9 2.8.7 4L8 11.3 4.4 13l.7-4L2.2 6.2l4-.6L8 2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
               </svg>
-              星标
-              <span class="btn-count">0</span>
+              {{ isStarred ? '取消星标' : '星标' }}
+              <span class="btn-count">{{ starsCount }}</span>
             </button>
-            <button class="btn btn-default">
+            <button class="btn btn-default" @click="handleFork" :disabled="forkLoading">
               <svg class="btn-icon" viewBox="0 0 16 16" fill="none">
                 <circle cx="5" cy="3" r="2" stroke="currentColor" stroke-width="1.5"/>
                 <circle cx="11" cy="3" r="2" stroke="currentColor" stroke-width="1.5"/>
                 <circle cx="8" cy="13" r="2" stroke="currentColor" stroke-width="1.5"/>
                 <path d="M5 5v2a3 3 0 003 3m3-5v2a3 3 0 01-3 3" stroke="currentColor" stroke-width="1.5"/>
               </svg>
-              派生
-              <span class="btn-count">0</span>
+              {{ forkLoading ? '派生中...' : '派生' }}
+              <span class="btn-count">{{ forksCount }}</span>
             </button>
           </div>
         </div>
@@ -209,7 +209,7 @@ git push -u origin main</code></pre>
             <svg class="file-icon" viewBox="0 0 16 16" fill="none"><path d="M4 14h8a2 2 0 002-2V6l-4-4H4a2 2 0 00-2 2v8a2 2 0 002 2z" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v4h4" stroke="currentColor" stroke-width="1.5"/></svg>
             <span>README.md</span>
           </div>
-          <article class="readme-content" v-html="readmeContent"></article>
+          <div class="readme-content rendered-markdown" v-html="renderedReadme"></div>
         </div>
       </div>
 
@@ -345,6 +345,13 @@ const readmeContent = ref('')
 const hasReadme = ref(false)
 const repoSize = ref(0)
 
+// Star/Fork state
+const isStarred = ref(false)
+const starLoading = ref(false)
+const starsCount = ref(0)
+const forkLoading = ref(false)
+const forksCount = ref(0)
+
 const showRefDropdown = ref(false)
 const showCodeDropdown = ref(false)
 const refTab = ref<'branches' | 'tags'>('branches')
@@ -419,6 +426,60 @@ function handleItemClick(item: TreeItem) {
     loadTree()
   } else {
     router.push(`${projectPath.value}/-/blob/${currentRef.value}/${item.path}`)
+  }
+}
+
+// Star/Fork methods
+async function checkStarredStatus() {
+  if (!props.project?.owner_name || !props.project?.name) return
+  try {
+    const result = await apiClient.projects.checkStarred({ 
+      namespace: props.project.owner_name, 
+      project: props.project.name 
+    })
+    isStarred.value = result.starred
+  } catch (err) {
+    console.error('Failed to check starred status:', err)
+  }
+}
+
+async function toggleStar() {
+  if (!props.project?.owner_name || !props.project?.name) return
+  starLoading.value = true
+  try {
+    const path = { namespace: props.project.owner_name, project: props.project.name }
+    if (isStarred.value) {
+      const result = await apiClient.projects.unstar(path)
+      isStarred.value = result.starred
+      starsCount.value = result.stars_count
+    } else {
+      const result = await apiClient.projects.star(path)
+      isStarred.value = result.starred
+      starsCount.value = result.stars_count
+    }
+  } catch (err: any) {
+    console.error('Failed to toggle star:', err)
+    alert(err.response?.data?.message || '操作失败')
+  } finally {
+    starLoading.value = false
+  }
+}
+
+async function handleFork() {
+  if (!props.project?.owner_name || !props.project?.name) return
+  if (!confirm(`确定要派生项目 "${props.project.name}" 吗？`)) return
+  
+  forkLoading.value = true
+  try {
+    const path = { namespace: props.project.owner_name, project: props.project.name }
+    const forkedProject = await apiClient.projects.fork(path)
+    // Navigate to the forked project
+    router.push(`/${forkedProject.owner_name}/${forkedProject.name}`)
+  } catch (err: any) {
+    console.error('Failed to fork:', err)
+    alert(err.response?.data?.message || '派生失败')
+  } finally {
+    forkLoading.value = false
   }
 }
 
@@ -497,8 +558,72 @@ async function loadReadme(path: string) {
       { namespace: props.project.owner_name, project: props.project.name },
       path, refToUse
     )
-    if (data?.content) readmeContent.value = convertMarkdown(data.content)
+    if (data?.content) readmeContent.value = data.content
   } catch { readmeContent.value = '' }
+}
+
+const renderedReadme = computed(() => {
+  const text = readmeContent.value
+  if (!text) return ''
+  // 提取代码块
+  const blocks: string[] = []
+  let s = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_: string, lang: string, code: string) => {
+    const escaped = code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    blocks.push(`<pre><code class="language-${lang}">${escaped}</code></pre>`)
+    return `\x00BLOCK${blocks.length - 1}\x00`
+  })
+  // 按行解析
+  const lines = s.split('\n')
+  const out: string[] = []
+  let inUl = false
+  let inOl = false
+  for (const line of lines) {
+    const t = line.trim()
+    if (t.startsWith('### ')) {
+      if (inUl) { out.push('</ul>'); inUl = false }
+      if (inOl) { out.push('</ol>'); inOl = false }
+      out.push(`<h3>${inline(t.slice(4))}</h3>`)
+    } else if (t.startsWith('## ')) {
+      if (inUl) { out.push('</ul>'); inUl = false }
+      if (inOl) { out.push('</ol>'); inOl = false }
+      out.push(`<h2>${inline(t.slice(3))}</h2>`)
+    } else if (t.startsWith('# ')) {
+      if (inUl) { out.push('</ul>'); inUl = false }
+      if (inOl) { out.push('</ol>'); inOl = false }
+      out.push(`<h1>${inline(t.slice(2))}</h1>`)
+    } else if (t.startsWith('- ')) {
+      if (inOl) { out.push('</ol>'); inOl = false }
+      if (!inUl) { out.push('<ul>'); inUl = true }
+      out.push(`<li>${inline(t.slice(2))}</li>`)
+    } else if (/^\d+\.\s/.test(t)) {
+      if (inUl) { out.push('</ul>'); inUl = false }
+      if (!inOl) { out.push('<ol>'); inOl = true }
+      out.push(`<li>${inline(t.replace(/^\d+\.\s/, ''))}</li>`)
+    } else if (t === '') {
+      if (inUl) { out.push('</ul>'); inUl = false }
+      if (inOl) { out.push('</ol>'); inOl = false }
+    } else if (t.startsWith('\x00BLOCK')) {
+      if (inUl) { out.push('</ul>'); inUl = false }
+      if (inOl) { out.push('</ol>'); inOl = false }
+      const idx = parseInt(t.replace(/\x00/g, '').replace('BLOCK', ''))
+      out.push(blocks[idx])
+    } else {
+      if (inUl) { out.push('</ul>'); inUl = false }
+      if (inOl) { out.push('</ol>'); inOl = false }
+      out.push(`<p>${inline(t)}</p>`)
+    }
+  }
+  if (inUl) out.push('</ul>')
+  if (inOl) out.push('</ol>')
+  return out.join('\n')
+})
+
+function inline(s: string): string {
+  return s
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
 }
 
 async function loadLastCommit() {
@@ -532,13 +657,6 @@ async function loadLastCommit() {
   } catch {}
 }
 
-function convertMarkdown(md: string): string {
-  return md.replace(/^### (.*$)/gim, '<h3>$1</h3>').replace(/^## (.*$)/gim, '<h2>$1</h2>').replace(/^# (.*$)/gim, '<h1>$1</h1>')
-    .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>').replace(/\*(.*)\*/gim, '<em>$1</em>')
-    .replace(/\[(.*?)\]\((.*?)\)/gim, '<a href="$2">$1</a>').replace(/```([\s\S]*?)```/gim, '<pre><code>$1</code></pre>')
-    .replace(/`(.*?)`/gim, '<code>$1</code>').replace(/\n/gim, '<br>')
-}
-
 function handleClickOutside(e: MouseEvent) {
   const t = e.target as HTMLElement
   if (!t.closest('.ref-selector-wrapper')) showRefDropdown.value = false
@@ -556,6 +674,13 @@ onMounted(async () => {
   }
   
   if (props.project) {
+    // Initialize star/fork counts from project data
+    starsCount.value = props.project.stars_count ?? 0
+    forksCount.value = props.project.forks_count ?? 0
+    
+    // Check starred status
+    checkStarredStatus()
+    
     await loadBranches()
     await loadTags()
     // 根据实际分支设置 currentRef，空仓库不设置任何值
@@ -717,6 +842,25 @@ $orange-folder: #e9a84b;
     padding: 0 6px;
     border-radius: 10px;
     font-size: 0.75rem;
+  }
+  
+  &.is-starred {
+    background: #fef3c7;
+    border-color: #f59e0b;
+    color: #b45309;
+    
+    .btn-icon {
+      color: #f59e0b;
+    }
+    
+    .btn-count {
+      background: #fde68a;
+    }
+  }
+  
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
   
   .chevron {
@@ -1043,7 +1187,6 @@ $orange-folder: #e9a84b;
     border-bottom: 1px solid $gray-200;
   }
   
-  .col-name { width: 40%; }
   .col-commit { width: 40%; }
   .col-time { width: 20%; text-align: right; }
 }
@@ -1167,16 +1310,26 @@ $orange-folder: #e9a84b;
 
 .readme-content {
   padding: 1rem;
-  font-size: 0.875rem;
+}
+
+.rendered-markdown {
+  font-size: 14px;
   line-height: 1.6;
-  
-  h1, h2, h3 { margin: 1rem 0 0.5rem; color: $gray-900; }
-  h1 { font-size: 1.5rem; }
-  h2 { font-size: 1.25rem; }
-  h3 { font-size: 1.1rem; }
-  a { color: $blue-600; }
-  code { padding: 2px 6px; background: $gray-100; border-radius: 3px; font-family: monospace; }
-  pre { padding: 0.75rem; background: $gray-100; border-radius: 4px; overflow-x: auto; code { padding: 0; background: none; } }
+  color: $gray-900;
+
+  :deep(h1) { font-size: 1.75em; font-weight: 600; margin: 24px 0 16px; padding-bottom: 0.3em; border-bottom: 1px solid $gray-200; &:first-child { margin-top: 0; } }
+  :deep(h2) { font-size: 1.5em; font-weight: 600; margin: 24px 0 16px; padding-bottom: 0.3em; border-bottom: 1px solid $gray-200; }
+  :deep(h3) { font-size: 1.25em; font-weight: 600; margin: 24px 0 16px; }
+  :deep(p) { margin: 0 0 16px; }
+  :deep(ul), :deep(ol) { margin: 0 0 16px; padding-left: 2em; }
+  :deep(li) { margin: 4px 0; }
+  :deep(strong) { font-weight: 600; }
+  :deep(em) { font-style: italic; }
+  :deep(a) { color: $blue-600; text-decoration: none; &:hover { text-decoration: underline; } }
+  :deep(code) { padding: 0.2em 0.4em; font-size: 85%; background: rgba($gray-500, 0.15); border-radius: 4px; font-family: monospace; }
+  :deep(pre) { margin: 0 0 16px; padding: 16px; background: $gray-900; border-radius: 4px; overflow-x: auto;
+    code { display: block; padding: 0; background: none; color: #e5e7eb; font-size: 0.875rem; line-height: 1.5; }
+  }
 }
 
 // 右侧边栏

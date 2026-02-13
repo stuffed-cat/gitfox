@@ -137,6 +137,28 @@ class ApiClient {
     },
     removeMember: async (path: ProjectPath, userId: string): Promise<void> => {
       await this.client.delete(`${this.projectPath(path)}/members/${userId}`)
+    },
+    // Star APIs
+    checkStarred: async (path: ProjectPath): Promise<{ starred: boolean }> => {
+      const response = await this.client.get(`${this.projectPath(path)}/starred`)
+      return response.data
+    },
+    star: async (path: ProjectPath): Promise<{ starred: boolean; stars_count: number }> => {
+      const response = await this.client.post(`${this.projectPath(path)}/star`)
+      return response.data
+    },
+    unstar: async (path: ProjectPath): Promise<{ starred: boolean; stars_count: number }> => {
+      const response = await this.client.delete(`${this.projectPath(path)}/star`)
+      return response.data
+    },
+    // Fork APIs
+    fork: async (path: ProjectPath, data?: { namespace_id?: number; name?: string }): Promise<Project> => {
+      const response = await this.client.post(`${this.projectPath(path)}/fork`, data || {})
+      return response.data
+    },
+    listForks: async (path: ProjectPath): Promise<{ forks_count: number; forks: Project[] }> => {
+      const response = await this.client.get(`${this.projectPath(path)}/forks`)
+      return response.data
     }
   }
 

@@ -144,7 +144,8 @@ impl ProjectService {
         sqlx::query_as::<_, ProjectWithOwner>(
             r#"
             SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
-                   n.path as owner_name, n.avatar_url as owner_avatar
+                   n.path as owner_name, n.avatar_url as owner_avatar,
+                   p.stars_count, p.forks_count, p.forked_from_id
             FROM projects p
             JOIN namespaces n ON p.namespace_id = n.id
             WHERE LOWER(n.path) = LOWER($1) AND LOWER(p.name) = LOWER($2)
@@ -174,7 +175,8 @@ impl ProjectService {
             sqlx::query_as::<_, ProjectWithOwner>(
                 r#"
                 SELECT DISTINCT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
-                       n.path as owner_name, n.avatar_url as owner_avatar
+                       n.path as owner_name, n.avatar_url as owner_avatar,
+                       p.stars_count, p.forks_count, p.forked_from_id
                 FROM projects p
                 JOIN namespaces n ON p.namespace_id = n.id
                 LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = $1
@@ -197,7 +199,8 @@ impl ProjectService {
             sqlx::query_as::<_, ProjectWithOwner>(
                 r#"
                 SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
-                       n.path as owner_name, n.avatar_url as owner_avatar
+                       n.path as owner_name, n.avatar_url as owner_avatar,
+                       p.stars_count, p.forks_count, p.forked_from_id
                 FROM projects p
                 JOIN namespaces n ON p.namespace_id = n.id
                 WHERE p.visibility = 'public'
@@ -356,5 +359,112 @@ impl ProjectService {
             merge_requests_count,
             members_count,
         })
+    }
+
+    /// Create a forked project
+    pub async fn create_fork(
+        pool: &PgPool,
+        owner_id: i64,
+        source_project_id: i64,
+        namespace_id: Option<i64>,
+        name: &str,
+        description: Option<String>,
+        visibility: ProjectVisibility,
+    ) -> AppResult<ProjectWithOwner> {
+        let now = Utc::now();
+
+        // Get the namespace to use (user's namespace if not specified)
+        let (ns_id, owner_name, owner_avatar): (i64, String, Option<String>) = 
+            if let Some(ns_id) = namespace_id {
+                let ns = sqlx::query_as::<_, (i64, String, Option<String>)>(
+                    r#"
+                    SELECT n.id, n.path, n.avatar_url
+                    FROM namespaces n
+                    WHERE n.id = $1
+                    "#
+                )
+                .bind(ns_id)
+                .fetch_optional(pool)
+                .await?
+                .ok_or_else(|| AppError::NotFound("Namespace not found".to_string()))?;
+                ns
+            } else {
+                // Use user's namespace
+                sqlx::query_as::<_, (i64, String, Option<String>)>(
+                    r#"
+                    SELECT n.id, n.path, n.avatar_url
+                    FROM namespaces n
+                    WHERE n.namespace_type = 'user' AND n.owner_id = $1
+                    "#
+                )
+                .bind(owner_id)
+                .fetch_optional(pool)
+                .await?
+                .ok_or_else(|| AppError::NotFound("User namespace not found".to_string()))?
+            };
+
+        // Check if project with same name already exists in target namespace
+        let existing = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM projects WHERE namespace_id = $1 AND LOWER(name) = LOWER($2)"
+        )
+        .bind(ns_id)
+        .bind(name)
+        .fetch_one(pool)
+        .await?;
+
+        if existing > 0 {
+            return Err(AppError::Conflict("Project with this name already exists in this namespace".to_string()));
+        }
+
+        // Create the forked project
+        let project = sqlx::query_as::<_, ProjectWithOwner>(
+            r#"
+            INSERT INTO projects (name, description, visibility, owner_id, namespace_id, forked_from_id, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+            RETURNING id, name, description, visibility, owner_id, created_at, updated_at,
+                $8 as owner_name,
+                $9 as owner_avatar,
+                0 as stars_count,
+                0 as forks_count,
+                $6 as forked_from_id
+            "#
+        )
+        .bind(name)
+        .bind(&description)
+        .bind(visibility)
+        .bind(owner_id)
+        .bind(ns_id)
+        .bind(source_project_id)
+        .bind(now)
+        .bind(&owner_name)
+        .bind(&owner_avatar)
+        .fetch_one(pool)
+        .await?;
+
+        // Add owner as project member
+        Self::add_member(pool, project.id, owner_id, MemberRole::Owner).await?;
+
+        Ok(project)
+    }
+
+    /// List forks of a project
+    pub async fn list_forks(pool: &PgPool, project_id: i64) -> AppResult<Vec<ProjectWithOwner>> {
+        let forks = sqlx::query_as::<_, ProjectWithOwner>(
+            r#"
+            SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+                   n.path as owner_name, n.avatar_url as owner_avatar,
+                   p.stars_count, p.forks_count, p.forked_from_id
+            FROM projects p
+            JOIN namespaces n ON p.namespace_id = n.id
+            JOIN project_forks pf ON pf.forked_project_id = p.id
+            WHERE pf.source_project_id = $1
+            ORDER BY p.created_at DESC
+            "#
+        )
+        .bind(project_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(forks)
     }
 }

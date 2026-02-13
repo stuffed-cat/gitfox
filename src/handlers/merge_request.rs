@@ -210,6 +210,41 @@ pub async fn merge(
         return Err(AppError::Conflict("Cannot merge due to conflicts".to_string()));
     }
     
+    // Get user info for the merge commit
+    let user = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT username, email, display_name FROM users WHERE id = $1"
+    )
+    .bind(claims.user_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+    
+    let (username, email, display_name) = user;
+    let author_name = display_name.unwrap_or(username);
+    
+    // Generate merge commit message
+    let merge_message = format!(
+        "Merge branch '{}' into '{}'\n\nMerge request !{}: {}",
+        mr.source_branch, mr.target_branch, mr.iid, mr.title
+    );
+    
+    // Perform the actual Git merge
+    let merge_commit_sha = GitService::perform_merge(
+        &repo,
+        &mr.source_branch,
+        &mr.target_branch,
+        &merge_message,
+        &author_name,
+        &email,
+    )?;
+    
+    // Optionally delete source branch after merge
+    if body.delete_source_branch.unwrap_or(false) {
+        if let Err(e) = GitService::delete_branch_by_name(&repo, &mr.source_branch) {
+            // Log but don't fail the merge
+            eprintln!("Warning: Failed to delete source branch after merge: {}", e);
+        }
+    }
+    
     // Update MR status
     let now = Utc::now();
     let updated_mr = sqlx::query_as::<_, MergeRequest>(
@@ -227,7 +262,10 @@ pub async fn merge(
     .fetch_one(pool.get_ref())
     .await?;
     
-    Ok(HttpResponse::Ok().json(updated_mr))
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "merge_request": updated_mr,
+        "merge_commit_sha": merge_commit_sha
+    })))
 }
 
 pub async fn close(

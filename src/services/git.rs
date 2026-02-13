@@ -52,6 +52,30 @@ impl GitService {
         Ok(())
     }
 
+    /// Fork a repository by cloning it to a new location
+    pub fn fork_repository(
+        config: &AppConfig,
+        source_owner: &str,
+        source_name: &str,
+        target_owner: &str,
+        target_name: &str,
+    ) -> AppResult<()> {
+        let source_path = Self::get_repo_path(config, source_owner, source_name);
+        let target_path = Self::get_repo_path(config, target_owner, target_name);
+        
+        // Ensure target directory parent exists
+        if let Some(parent) = std::path::Path::new(&target_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        
+        // Clone as a bare repository using git2's RepoBuilder
+        let mut builder = git2::build::RepoBuilder::new();
+        builder.bare(true);
+        builder.clone(&source_path, Path::new(&target_path))?;
+        
+        Ok(())
+    }
+
     pub fn open_repository(config: &AppConfig, owner_name: &str, project_name: &str) -> AppResult<Repository> {
         let path = Self::get_repo_path(config, owner_name, project_name);
         let repo = Repository::open_bare(&path)?;
@@ -392,6 +416,61 @@ impl GitService {
 
         let index = repo.merge_commits(&target_commit, &source_commit, None)?;
         Ok(!index.has_conflicts())
+    }
+
+    /// Perform a merge from source branch to target branch
+    /// Returns the merge commit SHA
+    pub fn perform_merge(
+        repo: &Repository,
+        source_branch: &str,
+        target_branch: &str,
+        merge_message: &str,
+        author_name: &str,
+        author_email: &str,
+    ) -> AppResult<String> {
+        let source_commit = Self::resolve_ref_to_commit(repo, source_branch)?;
+        let target_commit = Self::resolve_ref_to_commit(repo, target_branch)?;
+
+        // Check for conflicts first
+        let mut index = repo.merge_commits(&target_commit, &source_commit, None)?;
+        if index.has_conflicts() {
+            return Err(AppError::Conflict("Cannot merge due to conflicts".to_string()));
+        }
+
+        // Write the merged tree
+        let tree_oid = index.write_tree_to(repo)?;
+        let tree = repo.find_tree(tree_oid)?;
+
+        // Create signature
+        let sig = Signature::now(author_name, author_email)?;
+
+        // Create merge commit
+        let merge_commit_oid = repo.commit(
+            None, // Don't update any reference yet
+            &sig,
+            &sig,
+            merge_message,
+            &tree,
+            &[&target_commit, &source_commit],
+        )?;
+
+        // Update the target branch reference to point to the new merge commit
+        let target_ref_name = format!("refs/heads/{}", target_branch);
+        repo.reference(
+            &target_ref_name,
+            merge_commit_oid,
+            true, // force
+            &format!("merge: {} into {}", source_branch, target_branch),
+        )?;
+
+        Ok(merge_commit_oid.to_string())
+    }
+
+    /// Delete a branch (for cleanup after merge)
+    pub fn delete_branch_by_name(repo: &Repository, branch_name: &str) -> AppResult<()> {
+        let mut branch = repo.find_branch(branch_name, BranchType::Local)?;
+        branch.delete()?;
+        Ok(())
     }
 
     // Helper methods

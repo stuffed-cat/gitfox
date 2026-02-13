@@ -34,6 +34,9 @@ export interface Project {
   owner_avatar?: string
   created_at: string
   updated_at: string
+  stars_count?: number
+  forks_count?: number
+  forked_from_id?: string
 }
 
 export interface CreateProjectRequest {

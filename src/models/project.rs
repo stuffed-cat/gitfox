@@ -87,4 +87,37 @@ pub struct ProjectWithOwner {
     pub updated_at: DateTime<Utc>,
     pub owner_name: String,
     pub owner_avatar: Option<String>,
+    #[serde(default)]
+    pub stars_count: i32,
+    #[serde(default)]
+    pub forks_count: i32,
+    pub forked_from_id: Option<i64>,
+}
+
+/// Project star record
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ProjectStar {
+    pub id: i64,
+    pub project_id: i64,
+    pub user_id: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Project fork record
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ProjectFork {
+    pub id: i64,
+    pub source_project_id: i64,
+    pub forked_project_id: i64,
+    pub forked_by: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Fork project request
+#[derive(Debug, Deserialize)]
+pub struct ForkProjectRequest {
+    /// Target namespace for the forked project (user namespace or group)
+    pub namespace_id: Option<i64>,
+    /// Optional new name for the forked project
+    pub name: Option<String>,
 }

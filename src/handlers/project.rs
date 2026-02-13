@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::middleware::{validate_token, try_validate_token};
-use crate::models::{AddMemberRequest, CreateProjectRequest, UpdateProjectRequest};
+use crate::models::{AddMemberRequest, CreateProjectRequest, UpdateProjectRequest, ForkProjectRequest, ProjectStar, ProjectFork};
 use crate::services::{GitService, ProjectService};
 
 #[derive(Debug, serde::Deserialize)]
@@ -255,4 +255,218 @@ async fn check_admin_permission(
         }
         None => Ok(false),
     }
+}
+
+// ============== Star APIs ==============
+
+/// Check if current user has starred the project
+/// GET /projects/:namespace/:project/starred
+pub async fn check_starred(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<ProjectPath>,
+) -> AppResult<HttpResponse> {
+    let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
+    let claims = match try_validate_token(&service_req, config.get_ref()).await {
+        Some(c) => c,
+        None => return Ok(HttpResponse::Ok().json(serde_json::json!({ "starred": false }))),
+    };
+    
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+    
+    let star = sqlx::query_as::<_, ProjectStar>(
+        "SELECT * FROM project_stars WHERE project_id = $1 AND user_id = $2"
+    )
+    .bind(project.id)
+    .bind(claims.user_id)
+    .fetch_optional(pool.get_ref())
+    .await?;
+    
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "starred": star.is_some()
+    })))
+}
+
+/// Star a project
+/// POST /projects/:namespace/:project/star
+pub async fn star_project(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<ProjectPath>,
+) -> AppResult<HttpResponse> {
+    let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
+    let claims = validate_token(&service_req, config.get_ref()).await?;
+    
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+    
+    // Insert star (ignore if already exists)
+    sqlx::query(
+        r#"
+        INSERT INTO project_stars (project_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT (project_id, user_id) DO NOTHING
+        "#
+    )
+    .bind(project.id)
+    .bind(claims.user_id)
+    .execute(pool.get_ref())
+    .await?;
+    
+    // Get updated stars count
+    let stars_count = sqlx::query_scalar::<_, i32>(
+        "SELECT stars_count FROM projects WHERE id = $1"
+    )
+    .bind(project.id)
+    .fetch_one(pool.get_ref())
+    .await?;
+    
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "starred": true,
+        "stars_count": stars_count
+    })))
+}
+
+/// Unstar a project
+/// DELETE /projects/:namespace/:project/star
+pub async fn unstar_project(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<ProjectPath>,
+) -> AppResult<HttpResponse> {
+    let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
+    let claims = validate_token(&service_req, config.get_ref()).await?;
+    
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+    
+    sqlx::query(
+        "DELETE FROM project_stars WHERE project_id = $1 AND user_id = $2"
+    )
+    .bind(project.id)
+    .bind(claims.user_id)
+    .execute(pool.get_ref())
+    .await?;
+    
+    // Get updated stars count
+    let stars_count = sqlx::query_scalar::<_, i32>(
+        "SELECT stars_count FROM projects WHERE id = $1"
+    )
+    .bind(project.id)
+    .fetch_one(pool.get_ref())
+    .await?;
+    
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "starred": false,
+        "stars_count": stars_count
+    })))
+}
+
+// ============== Fork APIs ==============
+
+/// Fork a project
+/// POST /projects/:namespace/:project/fork
+pub async fn fork_project(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<ProjectPath>,
+    body: web::Json<ForkProjectRequest>,
+) -> AppResult<HttpResponse> {
+    let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
+    let claims = validate_token(&service_req, config.get_ref()).await?;
+    
+    let path = path.into_inner();
+    let source_project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+    
+    // Check if user already forked this project
+    let existing_fork = sqlx::query_as::<_, ProjectFork>(
+        "SELECT * FROM project_forks WHERE source_project_id = $1 AND forked_by = $2"
+    )
+    .bind(source_project.id)
+    .bind(claims.user_id)
+    .fetch_optional(pool.get_ref())
+    .await?;
+    
+    if existing_fork.is_some() {
+        return Err(AppError::BadRequest("You have already forked this project".to_string()));
+    }
+    
+    // Create the forked project
+    let fork_name = body.name.clone().unwrap_or_else(|| source_project.name.clone());
+    
+    let forked_project = ProjectService::create_fork(
+        pool.get_ref(),
+        claims.user_id,
+        source_project.id,
+        body.namespace_id,
+        &fork_name,
+        source_project.description.clone(),
+        source_project.visibility.clone(),
+    ).await?;
+    
+    // Copy the git repository
+    GitService::fork_repository(
+        config.get_ref(),
+        &source_project.owner_name,
+        &source_project.name,
+        &forked_project.owner_name,
+        &forked_project.name,
+    )?;
+    
+    // Create fork record
+    sqlx::query(
+        r#"
+        INSERT INTO project_forks (source_project_id, forked_project_id, forked_by)
+        VALUES ($1, $2, $3)
+        "#
+    )
+    .bind(source_project.id)
+    .bind(forked_project.id)
+    .bind(claims.user_id)
+    .execute(pool.get_ref())
+    .await?;
+    
+    Ok(HttpResponse::Created().json(forked_project))
+}
+
+/// Get fork info for a project
+/// GET /projects/:namespace/:project/forks
+pub async fn list_forks(
+    pool: web::Data<PgPool>,
+    path: web::Path<ProjectPath>,
+) -> AppResult<HttpResponse> {
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+    
+    let forks = ProjectService::list_forks(pool.get_ref(), project.id).await?;
+    
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "forks_count": project.forks_count,
+        "forks": forks
+    })))
 }

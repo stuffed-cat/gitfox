@@ -101,6 +101,15 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/members", web::post().to(project::add_member))
             .route("/projects/{namespace}/{project}/members/{user_id}", web::delete().to(project::remove_member))
             
+            // Star routes
+            .route("/projects/{namespace}/{project}/starred", web::get().to(project::check_starred))
+            .route("/projects/{namespace}/{project}/star", web::post().to(project::star_project))
+            .route("/projects/{namespace}/{project}/star", web::delete().to(project::unstar_project))
+            
+            // Fork routes
+            .route("/projects/{namespace}/{project}/fork", web::post().to(project::fork_project))
+            .route("/projects/{namespace}/{project}/forks", web::get().to(project::list_forks))
+            
             // Repository routes 
             .route("/projects/{namespace}/{project}/repository", web::get().to(repository::get_repository_info))
             .route("/projects/{namespace}/{project}/repository/tree", web::get().to(repository::browse_tree))
