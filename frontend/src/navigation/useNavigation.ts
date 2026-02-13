@@ -8,7 +8,7 @@ import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useNamespaceStore } from '@/stores/namespace'
 import type { NavContext, NavSection, NavItem, ContextHeader } from './types'
-import { globalMenuConfig } from './menus/globalMenu'
+import { globalMenuConfig, guestMenuConfig } from './menus/globalMenu'
 import { createProjectMenuConfig } from './menus/projectMenu'
 import { createGroupMenuConfig } from './menus/groupMenu'
 import { userSettingsMenuConfig } from './menus/userSettingsMenu'
@@ -76,6 +76,9 @@ export function useNavigation(): UseNavigationReturn {
   
   // 根据上下文生成菜单
   const sections = computed<NavSection[]>(() => {
+    // 未登录用户在全局上下文使用访客菜单
+    const isAuthenticated = authStore.isAuthenticated
+    
     switch (context.value.type) {
       case 'project':
         return createProjectMenuConfig(context.value)
@@ -84,7 +87,8 @@ export function useNavigation(): UseNavigationReturn {
       case 'user-settings':
         return userSettingsMenuConfig
       default:
-        return globalMenuConfig
+        // 未登录用户显示访客菜单
+        return isAuthenticated ? globalMenuConfig : guestMenuConfig
     }
   })
   

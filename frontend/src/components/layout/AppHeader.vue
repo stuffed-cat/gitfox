@@ -51,107 +51,116 @@
     </div>
     
     <div class="header-right">
-      <!-- 新建下拉菜单 -->
-      <div class="create-dropdown" ref="createDropdownRef">
-        <button class="header-btn" :class="{ active: createMenuOpen }" @click="toggleCreateMenu" title="新建">
+      <!-- 已登录用户显示操作按钮 -->
+      <template v-if="isAuthenticated">
+        <!-- 新建下拉菜单 -->
+        <div class="create-dropdown" ref="createDropdownRef">
+          <button class="header-btn" :class="{ active: createMenuOpen }" @click="toggleCreateMenu" title="新建">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <path d="M9 4v10M4 9h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>
+          
+          <Transition name="dropdown">
+            <div v-if="createMenuOpen" class="dropdown-menu create-menu">
+              <router-link to="/projects/new" class="dropdown-item" @click="createMenuOpen = false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3z" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M8 5v6M5 8h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                新建项目/仓库
+              </router-link>
+              <router-link to="/groups/new" class="dropdown-item" @click="createMenuOpen = false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <rect x="1" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                  <rect x="9" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                  <rect x="5" y="8" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+                新建群组
+              </router-link>
+              <router-link to="/snippets/new" class="dropdown-item disabled" @click.prevent>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4 2h8a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M5 6h6M5 9h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                新建代码片段
+                <span class="coming-soon">即将推出</span>
+              </router-link>
+            </div>
+          </Transition>
+        </div>
+        
+        <button class="header-btn" title="待办事项">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-            <path d="M9 4v10M4 9h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M3 5h12M3 9h12M3 13h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="badge-count">2</span>
+        </button>
+        
+        <button class="header-btn" title="帮助">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M7 7a2 2 0 113 1.73V10M9 13v.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
         </button>
         
-        <Transition name="dropdown">
-          <div v-if="createMenuOpen" class="dropdown-menu create-menu">
-            <router-link to="/projects/new" class="dropdown-item" @click="createMenuOpen = false">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3z" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M8 5v6M5 8h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-              新建项目/仓库
-            </router-link>
-            <router-link to="/groups/new" class="dropdown-item" @click="createMenuOpen = false">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="1" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
-                <rect x="9" y="2" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
-                <rect x="5" y="8" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
-              </svg>
-              新建群组
-            </router-link>
-            <router-link to="/snippets/new" class="dropdown-item disabled" @click.prevent>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M4 2h8a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M5 6h6M5 9h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-              新建代码片段
-              <span class="coming-soon">即将推出</span>
-            </router-link>
-          </div>
-        </Transition>
-      </div>
-      
-      <button class="header-btn" title="待办事项">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-          <path d="M3 5h12M3 9h12M3 13h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <span class="badge-count">2</span>
-      </button>
-      
-      <button class="header-btn" title="帮助">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-          <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M7 7a2 2 0 113 1.73V10M9 13v.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-      </button>
-      
-      <div class="user-dropdown" ref="userDropdownRef">
-        <button class="user-btn" @click="toggleUserMenu">
-          <span class="avatar avatar-md">{{ userInitial }}</span>
-          <svg class="chevron" :class="{ rotated: userMenuOpen }" width="12" height="12" viewBox="0 0 12 12">
-            <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-        
-        <Transition name="dropdown">
-          <div v-if="userMenuOpen" class="dropdown-menu">
-            <div class="dropdown-header">
-              <div class="user-info">
-                <span class="avatar avatar-lg">{{ userInitial }}</span>
-                <div class="user-details">
-                  <div class="user-name">{{ user?.display_name || user?.username }}</div>
-                  <div class="user-email">{{ user?.email }}</div>
+        <div class="user-dropdown" ref="userDropdownRef">
+          <button class="user-btn" @click="toggleUserMenu">
+            <span class="avatar avatar-md">{{ userInitial }}</span>
+            <svg class="chevron" :class="{ rotated: userMenuOpen }" width="12" height="12" viewBox="0 0 12 12">
+              <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          
+          <Transition name="dropdown">
+            <div v-if="userMenuOpen" class="dropdown-menu">
+              <div class="dropdown-header">
+                <div class="user-info">
+                  <span class="avatar avatar-lg">{{ userInitial }}</span>
+                  <div class="user-details">
+                    <div class="user-name">{{ user?.display_name || user?.username }}</div>
+                    <div class="user-email">{{ user?.email }}</div>
+                  </div>
                 </div>
               </div>
+              <div class="dropdown-divider"></div>
+              <button class="dropdown-item" @click="userMenuOpen = false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M8 5v1M6 9a2 2 0 104 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                设置状态
+              </button>
+              <router-link to="/-/profile" class="dropdown-item" @click="userMenuOpen = false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="5" r="3" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M2 14a6 6 0 0112 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                编辑个人资料
+              </router-link>
+              <router-link to="/-/profile/preferences" class="dropdown-item" @click="userMenuOpen = false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4 5h8M4 8h8M4 11h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                偏好设置
+              </router-link>
+              <div class="dropdown-divider"></div>
+              <button class="dropdown-item danger" @click="handleLogout">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M6 14H3a1 1 0 01-1-1V3a1 1 0 011-1h3M11 11l3-3-3-3M14 8H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                退出登录
+              </button>
             </div>
-            <div class="dropdown-divider"></div>
-            <button class="dropdown-item" @click="userMenuOpen = false">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M8 5v1M6 9a2 2 0 104 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-              设置状态
-            </button>
-            <router-link to="/-/profile" class="dropdown-item" @click="userMenuOpen = false">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="5" r="3" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M2 14a6 6 0 0112 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-              编辑个人资料
-            </router-link>
-            <router-link to="/-/profile/preferences" class="dropdown-item" @click="userMenuOpen = false">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M4 5h8M4 8h8M4 11h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-              偏好设置
-            </router-link>
-            <div class="dropdown-divider"></div>
-            <button class="dropdown-item danger" @click="handleLogout">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M6 14H3a1 1 0 01-1-1V3a1 1 0 011-1h3M11 11l3-3-3-3M14 8H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              退出登录
-            </button>
-          </div>
-        </Transition>
-      </div>
+          </Transition>
+        </div>
+      </template>
+      
+      <!-- 未登录用户显示登录/注册按钮 -->
+      <template v-else>
+        <router-link to="/login" class="auth-btn auth-btn-secondary">登录</router-link>
+        <router-link to="/register" class="auth-btn auth-btn-primary">注册</router-link>
+      </template>
     </div>
   </header>
 </template>
@@ -172,6 +181,7 @@ const searchFocused = ref(false)
 const userDropdownRef = ref<HTMLElement | null>(null)
 const createDropdownRef = ref<HTMLElement | null>(null)
 
+const isAuthenticated = computed(() => authStore.isAuthenticated)
 const user = computed(() => authStore.user)
 const userInitial = computed(() => {
   const name = user.value?.display_name || user.value?.username || 'U'
@@ -584,6 +594,44 @@ onUnmounted(() => {
   .create-menu {
     min-width: 200px;
     padding: $spacing-2 0;
+  }
+}
+
+// Auth buttons for guests
+.auth-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: $spacing-2 $spacing-4;
+  font-size: $font-size-sm;
+  font-weight: $font-weight-medium;
+  border-radius: $border-radius;
+  text-decoration: none;
+  transition: all $transition-fast;
+  white-space: nowrap;
+}
+
+.auth-btn-secondary {
+  color: $text-secondary;
+  background: transparent;
+  border: 1px solid $border-color;
+  
+  &:hover {
+    color: $text-primary;
+    border-color: $text-secondary;
+    background: $bg-tertiary;
+  }
+}
+
+.auth-btn-primary {
+  color: #fff;
+  background: $brand-primary;
+  border: 1px solid $brand-primary;
+  margin-left: $spacing-2;
+  
+  &:hover {
+    background: darken($brand-primary, 8%);
+    border-color: darken($brand-primary, 8%);
   }
 }
 

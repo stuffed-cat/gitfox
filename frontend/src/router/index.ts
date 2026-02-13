@@ -234,7 +234,12 @@ router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore()
   
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
-    next({ name: 'Login' })
+    // 需要登录但未登录，首页特殊处理：跳转到探索页
+    if (to.path === '/') {
+      next({ name: 'ExploreProjects' })
+    } else {
+      next({ name: 'Login', query: { redirect: to.fullPath } })
+    }
   } else if (to.meta.guest && authStore.isAuthenticated) {
     next({ name: 'Home' })
   } else {

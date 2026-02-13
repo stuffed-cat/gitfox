@@ -1,6 +1,11 @@
 <template>
   <div id="app" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'sidebar-hidden': !showSidebar }">
-    <template v-if="isAuthenticated">
+    <!-- Auth pages (login/register) - no header/sidebar -->
+    <template v-if="isAuthPage">
+      <router-view />
+    </template>
+    <!-- All other pages - show header and sidebar -->
+    <template v-else>
       <AppHeader @toggle-sidebar="toggleSidebar" />
       <div class="app-layout">
         <AppSidebar 
@@ -13,22 +18,21 @@
         </main>
       </div>
     </template>
-    <template v-else>
-      <router-view />
-    </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 
 const route = useRoute()
-const authStore = useAuthStore()
-const isAuthenticated = computed(() => authStore.isAuthenticated)
+
+// 判断是否是认证页面（登录/注册）
+const isAuthPage = computed(() => {
+  return route.name === 'Login' || route.name === 'Register'
+})
 
 // Sidebar state
 const sidebarCollapsed = ref(false)

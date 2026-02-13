@@ -4,6 +4,19 @@
 
 import type { NavSection } from '../types'
 
+/** 访客菜单（未登录用户） */
+export const guestMenuConfig: NavSection[] = [
+  {
+    id: 'explore',
+    title: '探索',
+    items: [
+      { id: 'explore-projects', label: '项目', to: '/explore/projects', icon: 'search' },
+      { id: 'explore-groups', label: '群组', to: '/explore/groups', icon: 'users' },
+    ]
+  }
+]
+
+/** 已登录用户的全局菜单 */
 export const globalMenuConfig: NavSection[] = [
   {
     id: 'your-work',
