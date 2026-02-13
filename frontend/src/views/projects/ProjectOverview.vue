@@ -465,22 +465,10 @@ async function toggleStar() {
   }
 }
 
-async function handleFork() {
+function handleFork() {
   if (!props.project?.owner_name || !props.project?.name) return
-  if (!confirm(`确定要派生项目 "${props.project.name}" 吗？`)) return
-  
-  forkLoading.value = true
-  try {
-    const path = { namespace: props.project.owner_name, project: props.project.name }
-    const forkedProject = await apiClient.projects.fork(path)
-    // Navigate to the forked project
-    router.push(`/${forkedProject.owner_name}/${forkedProject.name}`)
-  } catch (err: any) {
-    console.error('Failed to fork:', err)
-    alert(err.response?.data?.message || '派生失败')
-  } finally {
-    forkLoading.value = false
-  }
+  // Navigate to fork page like GitLab
+  router.push(`/${props.project.owner_name}/${props.project.name}/-/forks/new`)
 }
 
 async function copyUrl() {

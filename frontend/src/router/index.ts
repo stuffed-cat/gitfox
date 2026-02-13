@@ -220,6 +220,12 @@ const routes = [
         path: '-/settings',
         name: 'ProjectSettings',
         component: () => import('@/views/projects/ProjectSettingsView.vue')
+      },
+      {
+        path: '-/forks/new',
+        name: 'ForkProject',
+        component: () => import('@/views/projects/ForkProjectView.vue'),
+        meta: { requiresAuth: true }
       }
     ]
   }

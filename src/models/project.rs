@@ -120,4 +120,11 @@ pub struct ForkProjectRequest {
     pub namespace_id: Option<i64>,
     /// Optional new name for the forked project
     pub name: Option<String>,
+    /// Optional description for the forked project
+    pub description: Option<String>,
+    /// Visibility level for the forked project
+    pub visibility: Option<ProjectVisibility>,
+    /// Which branches to include: "all" or "default"
+    #[serde(default)]
+    pub branches: Option<String>,
 }

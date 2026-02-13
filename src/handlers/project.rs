@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::middleware::{validate_token, try_validate_token};
-use crate::models::{AddMemberRequest, CreateProjectRequest, UpdateProjectRequest, ForkProjectRequest, ProjectStar, ProjectFork};
+use crate::models::{AddMemberRequest, CreateProjectRequest, UpdateProjectRequest, ForkProjectRequest, ProjectStar};
 use crate::services::{GitService, ProjectService};
 
 #[derive(Debug, serde::Deserialize)]
@@ -399,21 +399,10 @@ pub async fn fork_project(
         &path.project
     ).await?;
     
-    // Check if user already forked this project
-    let existing_fork = sqlx::query_as::<_, ProjectFork>(
-        "SELECT * FROM project_forks WHERE source_project_id = $1 AND forked_by = $2"
-    )
-    .bind(source_project.id)
-    .bind(claims.user_id)
-    .fetch_optional(pool.get_ref())
-    .await?;
-    
-    if existing_fork.is_some() {
-        return Err(AppError::BadRequest("You have already forked this project".to_string()));
-    }
-    
     // Create the forked project
     let fork_name = body.name.clone().unwrap_or_else(|| source_project.name.clone());
+    let fork_description = body.description.clone().or_else(|| source_project.description.clone());
+    let fork_visibility = body.visibility.clone().unwrap_or_else(|| source_project.visibility.clone());
     
     let forked_project = ProjectService::create_fork(
         pool.get_ref(),
@@ -421,17 +410,19 @@ pub async fn fork_project(
         source_project.id,
         body.namespace_id,
         &fork_name,
-        source_project.description.clone(),
-        source_project.visibility.clone(),
+        fork_description,
+        fork_visibility,
     ).await?;
     
     // Copy the git repository
+    let only_default_branch = body.branches.as_deref() == Some("default");
     GitService::fork_repository(
         config.get_ref(),
         &source_project.owner_name,
         &source_project.name,
         &forked_project.owner_name,
         &forked_project.name,
+        only_default_branch,
     )?;
     
     // Create fork record

@@ -59,6 +59,7 @@ impl GitService {
         source_name: &str,
         target_owner: &str,
         target_name: &str,
+        only_default_branch: bool,
     ) -> AppResult<()> {
         let source_path = Self::get_repo_path(config, source_owner, source_name);
         let target_path = Self::get_repo_path(config, target_owner, target_name);
@@ -68,10 +69,32 @@ impl GitService {
             std::fs::create_dir_all(parent)?;
         }
         
-        // Clone as a bare repository using git2's RepoBuilder
-        let mut builder = git2::build::RepoBuilder::new();
-        builder.bare(true);
-        builder.clone(&source_path, Path::new(&target_path))?;
+        if only_default_branch {
+            // Clone only the default branch
+            let source_repo = Repository::open_bare(&source_path)?;
+            let default_branch = Self::get_default_branch(&source_repo)?.unwrap_or_else(|| "main".to_string());
+            
+            // Create target bare repo
+            let target_repo = Repository::init_bare(&target_path)?;
+            
+            // Add source as remote
+            let mut remote = target_repo.remote("origin", &source_path)?;
+            
+            // Fetch only the default branch
+            let refspec = format!("+refs/heads/{0}:refs/heads/{0}", default_branch);
+            remote.fetch(&[&refspec], None, None)?;
+            
+            // Set HEAD to the default branch
+            target_repo.set_head(&format!("refs/heads/{}", default_branch))?;
+            
+            // Remove the remote after fetching
+            target_repo.remote_delete("origin")?;
+        } else {
+            // Clone as a bare repository using git2's RepoBuilder (all branches)
+            let mut builder = git2::build::RepoBuilder::new();
+            builder.bare(true);
+            builder.clone(&source_path, Path::new(&target_path))?;
+        }
         
         Ok(())
     }

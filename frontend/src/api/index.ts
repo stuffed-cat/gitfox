@@ -152,7 +152,7 @@ class ApiClient {
       return response.data
     },
     // Fork APIs
-    fork: async (path: ProjectPath, data?: { namespace_id?: number; name?: string }): Promise<Project> => {
+    fork: async (path: ProjectPath, data?: { namespace_id?: number; name?: string; description?: string; visibility?: string; branches?: string }): Promise<Project> => {
       const response = await this.client.post(`${this.projectPath(path)}/fork`, data || {})
       return response.data
     },
