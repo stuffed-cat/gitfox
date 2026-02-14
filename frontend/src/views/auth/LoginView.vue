@@ -89,25 +89,22 @@
           </button>
         </form>
         
-        <div class="auth-divider">
+        <div class="auth-divider" v-if="oauthProviders.length > 0">
           <span>或</span>
         </div>
         
-        <div class="social-login">
-          <button type="button" class="btn btn-social">
+        <div class="social-login" v-if="oauthProviders.length > 0">
+          <button 
+            v-for="provider in oauthProviders" 
+            :key="provider.name"
+            type="button" 
+            class="btn btn-social"
+            @click="startOAuthLogin(provider)"
+          >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <path d="M9 0C4.03 0 0 4.03 0 9c0 3.98 2.58 7.35 6.16 8.54.45.08.62-.2.62-.43v-1.52c-2.5.54-3.03-1.2-3.03-1.2-.41-1.04-1-1.32-1-1.32-.82-.56.06-.55.06-.55.9.06 1.38.93 1.38.93.8 1.37 2.1.98 2.62.75.08-.58.31-.98.57-1.2-2-.23-4.1-1-4.1-4.45 0-.98.35-1.78.93-2.41-.09-.23-.4-1.14.09-2.38 0 0 .76-.24 2.48.92a8.64 8.64 0 014.52 0c1.72-1.16 2.48-.92 2.48-.92.49 1.24.18 2.15.09 2.38.58.63.92 1.43.92 2.41 0 3.46-2.1 4.22-4.11 4.44.32.28.61.83.61 1.67v2.47c0 .24.16.52.62.43A9 9 0 0018 9c0-4.97-4.03-9-9-9z" fill="currentColor"/>
+              <path :d="getProviderIcon(provider)" :fill="getProviderColor(provider)"/>
             </svg>
-            使用 GitHub 登录
-          </button>
-          <button type="button" class="btn btn-social">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <path d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 01-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z" fill="#4285F4"/>
-              <path d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.91-2.26c-.81.54-1.84.86-3.05.86-2.35 0-4.33-1.58-5.04-3.72H.96v2.33A9 9 0 009 18z" fill="#34A853"/>
-              <path d="M3.96 10.7A5.4 5.4 0 013.68 9c0-.59.1-1.16.28-1.7V4.97H.96A9 9 0 000 9c0 1.45.35 2.82.96 4.03l3-2.33z" fill="#FBBC05"/>
-              <path d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.89 11.42 0 9 0A9 9 0 00.96 4.97l3 2.33C4.67 5.16 6.65 3.58 9 3.58z" fill="#EA4335"/>
-            </svg>
-            使用 Google 登录
+            使用 {{ provider.display_name }} 登录
           </button>
         </div>
       </div>
@@ -120,9 +117,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import api from '@/api'
+import type { OAuthProviderInfo } from '@/types'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -135,6 +134,50 @@ const loading = ref(false)
 const error = ref('')
 const showPassword = ref(false)
 const rememberMe = ref(false)
+const oauthProviders = ref<OAuthProviderInfo[]>([])
+const oauthLoading = ref(false)
+
+onMounted(async () => {
+  // Load available OAuth providers
+  try {
+    oauthLoading.value = true
+    oauthProviders.value = await api.oauth.getProviders()
+  } catch {
+    // OAuth providers not available, silent fail
+    console.log('OAuth providers not configured')
+  } finally {
+    oauthLoading.value = false
+  }
+})
+
+function startOAuthLogin(provider: OAuthProviderInfo) {
+  // Store current path for redirect after login
+  sessionStorage.setItem('oauth_redirect', router.currentRoute.value.query.redirect as string || '/')
+  // Redirect to OAuth authorization
+  window.location.href = `/api/v1/oauth/${provider.name}/authorize`
+}
+
+function getProviderIcon(provider: OAuthProviderInfo) {
+  const icons: Record<string, string> = {
+    github: 'M9 0C4.03 0 0 4.03 0 9c0 3.98 2.58 7.35 6.16 8.54.45.08.62-.2.62-.43v-1.52c-2.5.54-3.03-1.2-3.03-1.2-.41-1.04-1-1.32-1-1.32-.82-.56.06-.55.06-.55.9.06 1.38.93 1.38.93.8 1.37 2.1.98 2.62.75.08-.58.31-.98.57-1.2-2-.23-4.1-1-4.1-4.45 0-.98.35-1.78.93-2.41-.09-.23-.4-1.14.09-2.38 0 0 .76-.24 2.48.92a8.64 8.64 0 014.52 0c1.72-1.16 2.48-.92 2.48-.92.49 1.24.18 2.15.09 2.38.58.63.92 1.43.92 2.41 0 3.46-2.1 4.22-4.11 4.44.32.28.61.83.61 1.67v2.47c0 .24.16.52.62.43A9 9 0 0018 9c0-4.97-4.03-9-9-9z',
+    gitlab: 'M9 17.93L11.43 10.5H6.57L9 17.93zM1.26 10.5l-.95 2.92c-.09.27 0 .57.23.74L9 17.93 1.26 10.5zM1.26 10.5h5.31L4.3 3.8a.27.27 0 00-.52 0L1.26 10.5zM16.74 10.5l.95 2.92c.09.27 0 .57-.23.74L9 17.93l7.74-7.43zM16.74 10.5h-5.31l2.27-6.7a.27.27 0 01.52 0l2.52 6.7z',
+    google: 'M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 01-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z',
+    azure_ad: 'M0 4.5v9l7.5 4.5v-9L0 4.5zm9 0v9l7.5 4.5v-9L9 4.5zm0-4.5l-9 4.5 9 4.5 9-4.5L9 0z',
+    bitbucket: 'M.78 1.14c-.42 0-.78.37-.72.8l2.17 13.17c.07.39.4.69.8.69h12.02c.3 0 .56-.21.62-.5L17.95 1.93a.72.72 0 00-.72-.8H.78zM10.89 11h-3.8L6.23 7h5.54l-.88 4z'
+  }
+  return icons[provider.provider_type] || icons[provider.name] || ''
+}
+
+function getProviderColor(provider: OAuthProviderInfo) {
+  const colors: Record<string, string> = {
+    github: '#24292e',
+    gitlab: '#fc6d26',
+    google: '#4285F4',
+    azure_ad: '#0078d4',
+    bitbucket: '#0052cc'
+  }
+  return colors[provider.provider_type] || colors[provider.name] || '#666'
+}
 
 async function handleSubmit() {
   loading.value = true

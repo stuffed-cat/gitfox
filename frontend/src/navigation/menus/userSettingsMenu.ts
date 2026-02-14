@@ -34,6 +34,20 @@ export const userSettingsMenuConfig: NavSection[] = [
         to: '/-/profile/keys', 
         icon: 'key' 
       },
+      { 
+        id: 'access-tokens', 
+        label: '访问令牌', 
+        to: '/-/profile/tokens', 
+        icon: 'token',
+        activeMatch: /^\/-\/profile\/tokens/
+      },
+      { 
+        id: 'oauth-accounts', 
+        label: '已关联账号', 
+        to: '/-/profile/accounts', 
+        icon: 'oauth',
+        activeMatch: /^\/-\/profile\/accounts/
+      },
     ]
   }
 ]

@@ -10,6 +10,8 @@ pub mod webhook;
 pub mod namespace;
 pub mod ssh_key;
 pub mod issue;
+pub mod personal_access_token;
+pub mod oauth;
 
 pub use user::*;
 pub use project::*;
@@ -23,3 +25,5 @@ pub use webhook::*;
 pub use namespace::*;
 pub use ssh_key::*;
 pub use issue::*;
+pub use personal_access_token::*;
+pub use oauth::*;

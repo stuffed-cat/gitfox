@@ -65,4 +65,8 @@ export const navIcons: Record<string, string> = {
   preferences: 'M1 4h4m2 0h8M1 8h8m2 0h4M1 12h2m2 0h10M5 3v2M11 7v2M3 11v2',
   palette: 'M8 2a6 6 0 100 12 2 2 0 01-2-2c0-.5.2-1 .5-1.5S7 9.7 7 9a1 1 0 00-1-1H4a2 2 0 01-2-2 6 6 0 016-4zm0 3m-.5 0a.5.5 0 101 0 .5.5 0 10-1 0m2 0m-.5 0a.5.5 0 101 0 .5.5 0 10-1 0m2 2m-.5 0a.5.5 0 101 0 .5.5 0 10-1 0',
   language: 'M2 2h12v12H2zM2 6h12M6 2v4M5 9l2 3 2-3m-5 0h6',
+  
+  // OAuth 和访问令牌
+  oauth: 'M8 1a7 7 0 100 14A7 7 0 008 1zM8 4a1 1 0 110 2 1 1 0 010-2zm-2.5 6.5a2.5 2.5 0 015 0M4 8h1m6 0h1',
+  token: 'M12 1L8 5 4 1M8 5v6m-4 2h8a2 2 0 012 2v0H2v0a2 2 0 012-2z',
 }

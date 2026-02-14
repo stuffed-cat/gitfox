@@ -14,6 +14,8 @@ pub mod namespace;
 pub mod ssh_key;
 pub mod internal;
 pub mod issue;
+pub mod personal_access_token;
+pub mod oauth;
 
 use actix_web::{web, HttpResponse};
 use serde::Serialize;
@@ -66,6 +68,11 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // Internal API routes for GitFox Shell
     internal::configure_internal_routes(cfg);
     
+    // Standard OAuth2 endpoints (at root level, not under /api/v1)
+    cfg.route("/oauth/authorize", web::get().to(oauth::authorize))
+       .route("/oauth/authorize", web::post().to(oauth::authorize_grant))
+       .route("/oauth/token", web::post().to(oauth::token));
+    
     cfg.service(
         web::scope("/api/v1")
             // Server config route (public)
@@ -84,6 +91,12 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/admin/users/{id}", web::delete().to(admin::delete_user))
             .route("/admin/settings/configs", web::get().to(admin::get_configs))
             .route("/admin/settings/configs", web::put().to(admin::update_configs))
+            // Admin OAuth provider management
+            .route("/admin/oauth/providers", web::get().to(oauth::admin_list_providers))
+            .route("/admin/oauth/providers", web::post().to(oauth::admin_create_provider))
+            .route("/admin/oauth/providers/{id}", web::get().to(oauth::admin_get_provider))
+            .route("/admin/oauth/providers/{id}", web::put().to(oauth::admin_update_provider))
+            .route("/admin/oauth/providers/{id}", web::delete().to(oauth::admin_delete_provider))
             
             // User routes
             .route("/users", web::get().to(user::list_users))
@@ -97,6 +110,32 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/user/ssh_keys", web::post().to(ssh_key::create_ssh_key))
             .route("/user/ssh_keys/{id}", web::get().to(ssh_key::get_ssh_key))
             .route("/user/ssh_keys/{id}", web::delete().to(ssh_key::delete_ssh_key))
+            
+            // Personal Access Token routes for current user
+            .route("/user/access_tokens", web::get().to(personal_access_token::list_tokens))
+            .route("/user/access_tokens", web::post().to(personal_access_token::create_token))
+            .route("/user/access_tokens/scopes", web::get().to(personal_access_token::list_scopes))
+            .route("/user/access_tokens/{id}", web::get().to(personal_access_token::get_token))
+            .route("/user/access_tokens/{id}", web::delete().to(personal_access_token::revoke_token))
+            
+            // OAuth Identity routes for current user (linked social accounts)
+            .route("/user/identities", web::get().to(oauth::list_identities))
+            .route("/user/identities/{id}", web::delete().to(oauth::unlink_identity))
+            
+            // OAuth Application routes (GitFox as OAuth provider)
+            .route("/oauth/applications", web::get().to(oauth::list_applications))
+            .route("/oauth/applications", web::post().to(oauth::create_application))
+            .route("/oauth/applications/{id}", web::get().to(oauth::get_application))
+            .route("/oauth/applications/{id}", web::put().to(oauth::update_application))
+            .route("/oauth/applications/{id}", web::delete().to(oauth::delete_application))
+            .route("/oauth/applications/{id}/regenerate_secret", web::post().to(oauth::regenerate_secret))
+            
+            // OAuth providers list (for social login buttons)
+            .route("/oauth/providers", web::get().to(oauth::list_providers))
+            
+            // OAuth provider redirect endpoints (social login)
+            .route("/oauth/{provider}/authorize", web::get().to(oauth::provider_authorize))
+            .route("/oauth/{provider}/callback", web::get().to(oauth::provider_callback))
             
             // Project routes (style: /projects/:namespace/:project)
             .route("/projects", web::get().to(project::list_projects))

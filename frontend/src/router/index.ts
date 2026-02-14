@@ -15,6 +15,12 @@ const routes = [
     component: () => import('@/views/auth/RegisterView.vue'),
     meta: { guest: true }
   },
+  {
+    path: '/oauth/callback',
+    name: 'OAuthCallback',
+    component: () => import('@/views/auth/OAuthCallbackView.vue'),
+    meta: { guest: true }
+  },
   
   // Dashboard routes (must be before /:owner/:repo)
   {
@@ -111,6 +117,18 @@ const routes = [
     component: () => import('@/views/settings/UserPreferencesView.vue'),
     meta: { requiresAuth: true }
   },
+  {
+    path: '/-/profile/tokens',
+    name: 'PersonalAccessTokens',
+    component: () => import('@/views/settings/PersonalAccessTokensView.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/-/profile/accounts',
+    name: 'LinkedAccounts',
+    component: () => import('@/views/settings/LinkedAccountsView.vue'),
+    meta: { requiresAuth: true }
+  },
   
   // Admin routes (require admin role)
   {
@@ -141,6 +159,12 @@ const routes = [
     path: '/admin/settings',
     name: 'AdminSettings',
     component: () => import('@/views/admin/AdminSettingsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true }
+  },
+  {
+    path: '/admin/oauth-providers',
+    name: 'AdminOAuthProviders',
+    component: () => import('@/views/admin/AdminOAuthProvidersView.vue'),
     meta: { requiresAuth: true, requiresAdmin: true }
   },
   

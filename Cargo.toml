@@ -50,3 +50,12 @@ async-trait = "0.1"
 validator = { version = "0.16", features = ["derive"] }
 slug = "0.1.6"
 base64 = "0.22.1"
+
+# Crypto & Random
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+urlencoding = "2"
+
+# HTTP Client (for OAuth)
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }

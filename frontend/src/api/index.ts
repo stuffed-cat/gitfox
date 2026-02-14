@@ -33,6 +33,22 @@ import type {
   AdminUserListResponse,
   AdminUserInfo,
   AdminUpdateUserRequest,
+  // PAT types
+  PersonalAccessToken,
+  CreatePatRequest,
+  CreatePatResponse,
+  PatScopeInfo,
+  // OAuth types
+  OAuthProviderInfo,
+  OAuthApplication,
+  OAuthApplicationWithSecret,
+  CreateOAuthApplicationRequest,
+  UpdateOAuthApplicationRequest,
+  OAuthIdentity,
+  // Admin OAuth types
+  OAuthProviderAdmin,
+  CreateOAuthProviderRequest,
+  UpdateOAuthProviderRequest,
 } from '@/types'
 
 // 的项目路径
@@ -409,6 +425,101 @@ class ApiClient {
     updateConfigs: async (configs: Array<{ key: string; value: any }>): Promise<Record<string, any>> => {
       const response = await this.client.put('/admin/settings/configs', { configs })
       return response.data
+    },
+  }
+
+  // Personal Access Tokens
+  accessTokens = {
+    list: async (): Promise<PersonalAccessToken[]> => {
+      const response = await this.client.get('/user/access_tokens')
+      return response.data
+    },
+    create: async (data: CreatePatRequest): Promise<CreatePatResponse> => {
+      const response = await this.client.post('/user/access_tokens', data)
+      return response.data
+    },
+    get: async (id: number): Promise<PersonalAccessToken> => {
+      const response = await this.client.get(`/user/access_tokens/${id}`)
+      return response.data
+    },
+    revoke: async (id: number): Promise<void> => {
+      await this.client.delete(`/user/access_tokens/${id}`)
+    },
+    getScopes: async (): Promise<PatScopeInfo[]> => {
+      const response = await this.client.get('/user/access_tokens/scopes')
+      return response.data
+    },
+  }
+
+  // OAuth Applications (GitFox as OAuth Provider)
+  oauthApplications = {
+    list: async (): Promise<OAuthApplication[]> => {
+      const response = await this.client.get('/oauth/applications')
+      return response.data
+    },
+    create: async (data: CreateOAuthApplicationRequest): Promise<OAuthApplicationWithSecret> => {
+      const response = await this.client.post('/oauth/applications', data)
+      return response.data
+    },
+    get: async (id: number): Promise<OAuthApplication> => {
+      const response = await this.client.get(`/oauth/applications/${id}`)
+      return response.data
+    },
+    update: async (id: number, data: UpdateOAuthApplicationRequest): Promise<OAuthApplication> => {
+      const response = await this.client.put(`/oauth/applications/${id}`, data)
+      return response.data
+    },
+    delete: async (id: number): Promise<void> => {
+      await this.client.delete(`/oauth/applications/${id}`)
+    },
+    regenerateSecret: async (id: number): Promise<OAuthApplicationWithSecret> => {
+      const response = await this.client.post(`/oauth/applications/${id}/regenerate_secret`)
+      return response.data
+    },
+  }
+
+  // OAuth Providers (Social Login)
+  oauth = {
+    getProviders: async (): Promise<OAuthProviderInfo[]> => {
+      const response = await this.client.get('/oauth/providers')
+      return response.data.providers
+    },
+    getAuthorizeUrl: (provider: string): string => {
+      return `/api/v1/oauth/${provider}/authorize`
+    },
+  }
+
+  // OAuth Identities (Linked Social Accounts)
+  identities = {
+    list: async (): Promise<OAuthIdentity[]> => {
+      const response = await this.client.get('/user/identities')
+      return response.data
+    },
+    unlink: async (id: number): Promise<void> => {
+      await this.client.delete(`/user/identities/${id}`)
+    },
+  }
+
+  // Admin OAuth Providers Management
+  adminOAuth = {
+    listProviders: async (): Promise<OAuthProviderAdmin[]> => {
+      const response = await this.client.get('/admin/oauth/providers')
+      return response.data
+    },
+    getProvider: async (id: number): Promise<OAuthProviderAdmin> => {
+      const response = await this.client.get(`/admin/oauth/providers/${id}`)
+      return response.data
+    },
+    createProvider: async (data: CreateOAuthProviderRequest): Promise<OAuthProviderAdmin> => {
+      const response = await this.client.post('/admin/oauth/providers', data)
+      return response.data
+    },
+    updateProvider: async (id: number, data: UpdateOAuthProviderRequest): Promise<OAuthProviderAdmin> => {
+      const response = await this.client.put(`/admin/oauth/providers/${id}`, data)
+      return response.data
+    },
+    deleteProvider: async (id: number): Promise<void> => {
+      await this.client.delete(`/admin/oauth/providers/${id}`)
     },
   }
 }

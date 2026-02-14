@@ -71,7 +71,6 @@ function getItemPath(item: NavItem): string {
 .sidebar {
   display: flex;
   flex-direction: column;
-  height: 100%;
   background: $bg-sidebar;
   overflow: hidden;
   transition: width $transition-normal;

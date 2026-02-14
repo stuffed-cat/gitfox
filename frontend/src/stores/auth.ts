@@ -40,6 +40,12 @@ export const useAuthStore = defineStore('auth', () => {
     api.setAuthToken(null)
   }
 
+  function setToken(newToken: string) {
+    token.value = newToken
+    localStorage.setItem('token', newToken)
+    api.setAuthToken(newToken)
+  }
+
   // Initialize
   if (token.value) {
     api.setAuthToken(token.value)
@@ -54,6 +60,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     register,
     fetchCurrentUser,
-    logout
+    logout,
+    setToken
   }
 })

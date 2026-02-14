@@ -46,6 +46,19 @@ export const adminMenuConfig: NavSection[] = [
     ]
   },
   {
+    id: 'admin-security',
+    title: '安全与认证',
+    items: [
+      { 
+        id: 'admin-oauth-providers', 
+        label: 'OAuth 提供商', 
+        to: '/admin/oauth-providers', 
+        icon: 'oauth',
+        activeMatch: /^\/admin\/oauth/
+      },
+    ]
+  },
+  {
     id: 'admin-settings',
     title: '设置',
     items: [

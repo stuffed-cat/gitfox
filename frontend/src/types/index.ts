@@ -364,3 +364,193 @@ export interface AdminUpdateUserRequest {
 }
 
 export type SystemConfigMap = Record<string, any>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Personal Access Token Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type PatScope = 
+  | 'read_api' 
+  | 'write_api' 
+  | 'read_repository' 
+  | 'write_repository' 
+  | 'read_user' 
+  | 'write_user' 
+  | 'read_registry' 
+  | 'write_registry' 
+  | 'admin'
+
+export interface PatScopeInfo {
+  name: PatScope
+  description: string
+}
+
+export interface PersonalAccessToken {
+  id: number
+  name: string
+  token_last_four: string  // Also known as token_prefix
+  scopes: PatScope[]
+  expires_at?: string
+  last_used_at?: string
+  revoked: boolean
+  created_at: string
+}
+
+export interface CreatePatRequest {
+  name: string
+  scopes?: PatScope[]
+  expires_in_days?: number
+}
+
+export interface CreatePatResponse {
+  id: number
+  name: string
+  /** The raw token - only shown once! */
+  token: string
+  scopes: PatScope[]
+  expires_at?: string
+  created_at: string
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OAuth Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type OAuthProviderType = 'github' | 'gitlab' | 'google' | 'bitbucket' | 'azure_ad' | 'custom'
+
+export interface OAuthProviderInfo {
+  name: string
+  display_name: string
+  provider_type: string
+  icon?: string
+  authorize_url: string
+  enabled?: boolean
+}
+
+export interface OAuthProvider {
+  name: OAuthProviderType
+  display_name: string
+  authorize_url: string
+}
+
+export interface OAuthProvidersResponse {
+  providers: OAuthProviderInfo[]
+}
+
+export interface OAuthApplication {
+  id: number
+  name: string
+  client_id: string
+  redirect_uris: string[]
+  scopes: string[]
+  description?: string
+  homepage_url?: string
+  logo_url?: string
+  confidential: boolean
+  created_at: string
+}
+
+export interface OAuthApplicationWithSecret extends OAuthApplication {
+  client_secret: string
+}
+
+export interface CreateOAuthApplicationRequest {
+  name: string
+  redirect_uris: string[]
+  scopes?: string[]
+  description?: string
+  homepage_url?: string
+  confidential?: boolean
+}
+
+export interface UpdateOAuthApplicationRequest {
+  name?: string
+  redirect_uris?: string[]
+  scopes?: string[]
+  description?: string
+  homepage_url?: string
+}
+
+export interface OAuthIdentity {
+  id: number
+  provider_id: number
+  provider_name: string
+  provider_type: string
+  provider_display_name: string
+  external_uid: string
+  external_username?: string
+  external_email?: string
+  external_avatar_url?: string
+  last_sign_in_at?: string
+  created_at: string
+}
+
+export interface OAuthAuthorizeParams {
+  client_id: string
+  redirect_uri: string
+  response_type: 'code'
+  scope?: string
+  state?: string
+  code_challenge?: string
+  code_challenge_method?: 'plain' | 'S256'
+}
+
+export interface OAuthTokenResponse {
+  access_token: string
+  token_type: string
+  expires_in?: number
+  refresh_token?: string
+  scope: string
+  created_at?: number
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin OAuth Provider Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** OAuth 提供商管理信息（管理员视图） */
+export interface OAuthProviderAdmin {
+  id: number
+  name: string
+  display_name: string
+  provider_type: string
+  client_id: string
+  authorization_url: string
+  token_url: string
+  userinfo_url?: string
+  scopes: string[]
+  icon?: string
+  enabled: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+/** 创建 OAuth 提供商请求 */
+export interface CreateOAuthProviderRequest {
+  name: string
+  display_name: string
+  provider_type: string
+  client_id: string
+  client_secret: string
+  authorization_url?: string
+  token_url?: string
+  userinfo_url?: string
+  scopes?: string[]
+  icon?: string
+  enabled?: boolean
+}
+
+/** 更新 OAuth 提供商请求 */
+export interface UpdateOAuthProviderRequest {
+  display_name?: string
+  client_id?: string
+  client_secret?: string
+  authorization_url?: string
+  token_url?: string
+  userinfo_url?: string
+  scopes?: string[]
+  icon?: string
+  enabled?: boolean
+  sort_order?: number
+}

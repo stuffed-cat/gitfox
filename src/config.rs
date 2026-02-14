@@ -1,5 +1,80 @@
 use std::env;
 
+/// OAuth provider configuration
+#[derive(Clone, Debug, Default)]
+pub struct OAuthProviderConfig {
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    /// Custom base URL (for self-hosted GitLab, etc.)
+    pub base_url: Option<String>,
+    /// Azure AD tenant ID
+    pub tenant_id: Option<String>,
+}
+
+impl OAuthProviderConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.client_id.is_some() && self.client_secret.is_some()
+    }
+}
+
+/// All OAuth providers configuration
+#[derive(Clone, Debug, Default)]
+pub struct OAuthConfig {
+    pub github: OAuthProviderConfig,
+    pub gitlab: OAuthProviderConfig,
+    pub google: OAuthProviderConfig,
+    pub azure_ad: OAuthProviderConfig,
+    pub bitbucket: OAuthProviderConfig,
+}
+
+impl OAuthConfig {
+    pub fn from_env() -> Self {
+        Self {
+            github: OAuthProviderConfig {
+                client_id: env::var("OAUTH_GITHUB_CLIENT_ID").ok(),
+                client_secret: env::var("OAUTH_GITHUB_CLIENT_SECRET").ok(),
+                base_url: None,
+                tenant_id: None,
+            },
+            gitlab: OAuthProviderConfig {
+                client_id: env::var("OAUTH_GITLAB_CLIENT_ID").ok(),
+                client_secret: env::var("OAUTH_GITLAB_CLIENT_SECRET").ok(),
+                base_url: env::var("OAUTH_GITLAB_URL").ok(),
+                tenant_id: None,
+            },
+            google: OAuthProviderConfig {
+                client_id: env::var("OAUTH_GOOGLE_CLIENT_ID").ok(),
+                client_secret: env::var("OAUTH_GOOGLE_CLIENT_SECRET").ok(),
+                base_url: None,
+                tenant_id: None,
+            },
+            azure_ad: OAuthProviderConfig {
+                client_id: env::var("OAUTH_AZURE_CLIENT_ID").ok(),
+                client_secret: env::var("OAUTH_AZURE_CLIENT_SECRET").ok(),
+                base_url: None,
+                tenant_id: env::var("OAUTH_AZURE_TENANT_ID").ok(),
+            },
+            bitbucket: OAuthProviderConfig {
+                client_id: env::var("OAUTH_BITBUCKET_CLIENT_ID").ok(),
+                client_secret: env::var("OAUTH_BITBUCKET_CLIENT_SECRET").ok(),
+                base_url: None,
+                tenant_id: None,
+            },
+        }
+    }
+
+    /// Get list of enabled OAuth providers
+    pub fn enabled_providers(&self) -> Vec<&'static str> {
+        let mut providers = Vec::new();
+        if self.github.is_enabled() { providers.push("github"); }
+        if self.gitlab.is_enabled() { providers.push("gitlab"); }
+        if self.google.is_enabled() { providers.push("google"); }
+        if self.azure_ad.is_enabled() { providers.push("azure_ad"); }
+        if self.bitbucket.is_enabled() { providers.push("bitbucket"); }
+        providers
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub server_host: String,
@@ -35,6 +110,12 @@ pub struct Config {
     pub initial_admin_email: Option<String>,
     /// Initial admin password
     pub initial_admin_password: Option<String>,
+    /// OAuth configuration for external providers
+    pub oauth: OAuthConfig,
+    /// PAT default expiration in days (0 = no expiration)
+    pub pat_default_expiration_days: u32,
+    /// PAT maximum expiration in days (0 = no limit)
+    pub pat_max_expiration_days: u32,
 }
 
 impl Config {
@@ -91,6 +172,15 @@ impl Config {
             initial_admin_username: env::var("INITIAL_ADMIN_USERNAME").ok(),
             initial_admin_email: env::var("INITIAL_ADMIN_EMAIL").ok(),
             initial_admin_password: env::var("INITIAL_ADMIN_PASSWORD").ok(),
+            oauth: OAuthConfig::from_env(),
+            pat_default_expiration_days: env::var("PAT_DEFAULT_EXPIRATION_DAYS")
+                .unwrap_or_else(|_| "365".to_string())
+                .parse()
+                .unwrap_or(365),
+            pat_max_expiration_days: env::var("PAT_MAX_EXPIRATION_DAYS")
+                .unwrap_or_else(|_| "0".to_string())
+                .parse()
+                .unwrap_or(0),
         }
     }
 }
