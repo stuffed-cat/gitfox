@@ -8,10 +8,11 @@ import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useNamespaceStore } from '@/stores/namespace'
 import type { NavContext, NavSection, NavItem, ContextHeader } from './types'
-import { globalMenuConfig, guestMenuConfig } from './menus/globalMenu'
+import { globalMenuConfig, guestMenuConfig, adminEntrySection } from './menus/globalMenu'
 import { createProjectMenuConfig } from './menus/projectMenu'
 import { createGroupMenuConfig } from './menus/groupMenu'
 import { userSettingsMenuConfig } from './menus/userSettingsMenu'
+import { adminMenuConfig } from './menus/adminMenu'
 
 export interface UseNavigationReturn {
   /** 当前导航上下文 */
@@ -35,6 +36,11 @@ export function useNavigation(): UseNavigationReturn {
   // 解析当前导航上下文
   const context = computed<NavContext>(() => {
     const path = route.path
+    
+    // 管理员面板页面
+    if (path.startsWith('/admin')) {
+      return { type: 'admin' }
+    }
     
     // 用户设置页面
     if (path.startsWith('/-/profile')) {
@@ -78,6 +84,7 @@ export function useNavigation(): UseNavigationReturn {
   const sections = computed<NavSection[]>(() => {
     // 未登录用户在全局上下文使用访客菜单
     const isAuthenticated = authStore.isAuthenticated
+    const isAdmin = authStore.isAdmin
     
     switch (context.value.type) {
       case 'project':
@@ -86,9 +93,14 @@ export function useNavigation(): UseNavigationReturn {
         return createGroupMenuConfig(context.value)
       case 'user-settings':
         return userSettingsMenuConfig
+      case 'admin':
+        return adminMenuConfig
       default:
         // 未登录用户显示访客菜单
-        return isAuthenticated ? globalMenuConfig : guestMenuConfig
+        if (!isAuthenticated) return guestMenuConfig
+        // 管理员在全局菜单底部附加管理入口
+        if (isAdmin) return [...globalMenuConfig, adminEntrySection]
+        return globalMenuConfig
     }
   })
   
@@ -121,6 +133,15 @@ export function useNavigation(): UseNavigationReturn {
         title: '用户设置',
         subtitle: ctx.user.username,
         to: '/-/profile'
+      }
+    }
+    
+    if (ctx.type === 'admin') {
+      return {
+        avatar: '⚙',
+        title: '管理区域',
+        subtitle: '系统管理',
+        to: '/admin'
       }
     }
     

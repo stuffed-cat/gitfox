@@ -57,3 +57,18 @@ export const globalMenuConfig: NavSection[] = [
     ]
   }
 ]
+
+/** 管理员在全局菜单中额外显示的管理入口 */
+export const adminEntrySection: NavSection = {
+  id: 'admin',
+  title: '管理',
+  items: [
+    { 
+      id: 'admin-panel', 
+      label: '管理面板', 
+      to: '/admin', 
+      icon: 'shield',
+      activeMatch: /^\/admin/
+    },
+  ]
+}

@@ -29,6 +29,10 @@ import type {
   GroupMember,
   AddGroupMemberRequest,
   NamespaceOption,
+  SystemStats,
+  AdminUserListResponse,
+  AdminUserInfo,
+  AdminUpdateUserRequest,
 } from '@/types'
 
 // 的项目路径
@@ -373,6 +377,37 @@ class ApiClient {
     // Subgroups
     listSubgroups: async (path: string): Promise<Group[]> => {
       const response = await this.client.get(`/groups/${path}/subgroups`)
+      return response.data
+    },
+  }
+
+  // Admin
+  admin = {
+    getDashboard: async (): Promise<SystemStats> => {
+      const response = await this.client.get('/admin/dashboard')
+      return response.data
+    },
+    listUsers: async (params?: { page?: number; per_page?: number; search?: string; role?: string; status?: string }): Promise<AdminUserListResponse> => {
+      const response = await this.client.get('/admin/users', { params })
+      return response.data
+    },
+    getUser: async (id: string): Promise<AdminUserInfo> => {
+      const response = await this.client.get(`/admin/users/${id}`)
+      return response.data
+    },
+    updateUser: async (id: string, data: AdminUpdateUserRequest): Promise<User> => {
+      const response = await this.client.put(`/admin/users/${id}`, data)
+      return response.data
+    },
+    deleteUser: async (id: string): Promise<void> => {
+      await this.client.delete(`/admin/users/${id}`)
+    },
+    getConfigs: async (): Promise<Record<string, any>> => {
+      const response = await this.client.get('/admin/settings/configs')
+      return response.data
+    },
+    updateConfigs: async (configs: Array<{ key: string; value: any }>): Promise<Record<string, any>> => {
+      const response = await this.client.put('/admin/settings/configs', { configs })
       return response.data
     },
   }

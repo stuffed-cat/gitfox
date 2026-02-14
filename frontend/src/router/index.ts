@@ -112,6 +112,38 @@ const routes = [
     meta: { requiresAuth: true }
   },
   
+  // Admin routes (require admin role)
+  {
+    path: '/admin',
+    name: 'AdminDashboard',
+    component: () => import('@/views/admin/AdminDashboardView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true }
+  },
+  {
+    path: '/admin/users',
+    name: 'AdminUsers',
+    component: () => import('@/views/admin/AdminUsersView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true }
+  },
+  {
+    path: '/admin/projects',
+    name: 'AdminProjects',
+    component: () => import('@/views/admin/AdminProjectsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true }
+  },
+  {
+    path: '/admin/groups',
+    name: 'AdminGroups',
+    component: () => import('@/views/admin/AdminGroupsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true }
+  },
+  {
+    path: '/admin/settings',
+    name: 'AdminSettings',
+    component: () => import('@/views/admin/AdminSettingsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true }
+  },
+  
   // User/Group profile (single segment path - handles both users and groups)
   {
     path: '/:namespace',
@@ -246,6 +278,9 @@ router.beforeEach((to, _from, next) => {
     } else {
       next({ name: 'Login', query: { redirect: to.fullPath } })
     }
+  } else if (to.meta.requiresAdmin && !authStore.isAdmin) {
+    // 需要管理员权限但非管理员
+    next({ name: 'Home' })
   } else if (to.meta.guest && authStore.isAuthenticated) {
     next({ name: 'Home' })
   } else {

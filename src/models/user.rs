@@ -20,6 +20,7 @@ pub struct User {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "user_role", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum UserRole {
     Admin,
     Developer,
@@ -63,6 +64,7 @@ pub struct UserInfo {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub role: UserRole,
+    pub is_active: bool,
 }
 
 impl From<User> for UserInfo {
@@ -74,6 +76,7 @@ impl From<User> for UserInfo {
             display_name: user.display_name,
             avatar_url: user.avatar_url,
             role: user.role,
+            is_active: user.is_active,
         }
     }
 }

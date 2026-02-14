@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod auth;
 pub mod user;
 pub mod project;
@@ -74,6 +75,15 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/auth/register", web::post().to(auth::register))
             .route("/auth/login", web::post().to(auth::login))
             .route("/auth/me", web::get().to(auth::me))
+            
+            // Admin routes (require admin role)
+            .route("/admin/dashboard", web::get().to(admin::dashboard))
+            .route("/admin/users", web::get().to(admin::list_users))
+            .route("/admin/users/{id}", web::get().to(admin::get_user))
+            .route("/admin/users/{id}", web::put().to(admin::update_user))
+            .route("/admin/users/{id}", web::delete().to(admin::delete_user))
+            .route("/admin/settings/configs", web::get().to(admin::get_configs))
+            .route("/admin/settings/configs", web::put().to(admin::update_configs))
             
             // User routes
             .route("/users", web::get().to(user::list_users))

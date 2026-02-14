@@ -8,6 +8,7 @@ export const navIcons: Record<string, string> = {
   home: 'M8 1L1 6v8a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1V6L8 1z',
   search: 'M7 7m-5 0a5 5 0 1010 0a5 5 0 10-10 0M11 11l3 3',
   settings: 'M8 8m-2 0a2 2 0 104 0a2 2 0 10-4 0M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5l1.5 1.5M3 13l1.5-1.5M11.5 4.5l1.5-1.5',
+  dashboard: 'M2 2h5v6H2zM9 2h5v4H9zM9 8h5v6H9zM2 10h5v4H2z',
   
   // 项目相关
   project: 'M2 3a1 1 0 011-1h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3zM5 6h6M5 9h4',

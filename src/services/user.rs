@@ -28,6 +28,10 @@ impl UserService {
         let password_hash = hash(&req.password, DEFAULT_COST)?;
         let now = Utc::now();
 
+        // Normal registration always creates Developer users.
+        // Initial admin is seeded on server startup via INITIAL_ADMIN_* env vars.
+        let role = UserRole::Developer;
+
         let user = sqlx::query_as::<_, User>(
             r#"
             INSERT INTO users (username, email, password_hash, display_name, role, is_active, created_at, updated_at)
@@ -39,7 +43,7 @@ impl UserService {
         .bind(&req.email)
         .bind(&password_hash)
         .bind(&req.display_name)
-        .bind(UserRole::Developer)
+        .bind(role)
         .bind(now)
         .fetch_one(pool)
         .await?;
@@ -172,6 +176,80 @@ impl UserService {
             return Err(AppError::NotFound("User not found".to_string()));
         }
 
+        Ok(())
+    }
+
+    /// Seed the initial admin user on server startup.
+    /// Only creates the admin if:
+    /// 1. No admin user exists in the database
+    /// 2. INITIAL_ADMIN_USERNAME, INITIAL_ADMIN_EMAIL, INITIAL_ADMIN_PASSWORD are all set
+    /// This is idempotent — once an admin exists, it does nothing.
+    pub async fn seed_initial_admin(pool: &PgPool, config: &crate::config::AppConfig) -> AppResult<()> {
+        // Check if any admin already exists
+        let admin_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE role = 'admin')"
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if admin_exists {
+            log::debug!("Admin user already exists, skipping seed");
+            return Ok(());
+        }
+
+        // All three env vars must be set
+        let (username, email, password) = match (
+            &config.initial_admin_username,
+            &config.initial_admin_email,
+            &config.initial_admin_password,
+        ) {
+            (Some(u), Some(e), Some(p)) => (u.clone(), e.clone(), p.clone()),
+            _ => {
+                log::warn!(
+                    "No admin user exists and INITIAL_ADMIN_USERNAME/EMAIL/PASSWORD are not all set. \
+                     Please set these environment variables and restart, or create an admin via the API."
+                );
+                return Ok(());
+            }
+        };
+
+        // Check if username or email already taken (as non-admin)
+        let existing = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM users WHERE username = $1 OR email = $2"
+        )
+        .bind(&username)
+        .bind(&email)
+        .fetch_one(pool)
+        .await?;
+
+        if existing > 0 {
+            // User exists but is not admin — promote them
+            sqlx::query("UPDATE users SET role = 'admin', updated_at = NOW() WHERE username = $1 OR email = $2")
+                .bind(&username)
+                .bind(&email)
+                .execute(pool)
+                .await?;
+            log::info!("Promoted existing user '{}' to admin", username);
+            return Ok(());
+        }
+
+        // Create the admin user
+        let password_hash = hash(&password, DEFAULT_COST)?;
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"INSERT INTO users (username, email, password_hash, display_name, role, is_active, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, 'admin', true, $5, $5)"#
+        )
+        .bind(&username)
+        .bind(&email)
+        .bind(&password_hash)
+        .bind(&username)
+        .bind(now)
+        .execute(pool)
+        .await?;
+
+        log::info!("Created initial admin user '{}'", username);
         Ok(())
     }
 }

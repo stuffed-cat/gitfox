@@ -16,21 +16,6 @@
         <span class="logo-text">DevOps</span>
       </router-link>
       
-      <nav class="nav-links">
-        <router-link to="/" class="nav-link">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M8 1L1 6v8a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1V6L8 1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          首页
-        </router-link>
-        <router-link to="/projects" class="nav-link">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3z" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M5 6h6M5 9h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          项目
-        </router-link>
-      </nav>
     </div>
     
     <div class="header-center">
@@ -144,6 +129,15 @@
                 </svg>
                 偏好设置
               </router-link>
+              <template v-if="isAdmin">
+                <div class="dropdown-divider"></div>
+                <router-link to="/admin" class="dropdown-item admin-item" @click="userMenuOpen = false">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <path d="M8 1L2 4v4c0 4.5 2.5 7.5 6 9 3.5-1.5 6-4.5 6-9V4L8 1z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  管理面板
+                </router-link>
+              </template>
               <div class="dropdown-divider"></div>
               <button class="dropdown-item danger" @click="handleLogout">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -182,6 +176,7 @@ const userDropdownRef = ref<HTMLElement | null>(null)
 const createDropdownRef = ref<HTMLElement | null>(null)
 
 const isAuthenticated = computed(() => authStore.isAuthenticated)
+const isAdmin = computed(() => authStore.isAdmin)
 const user = computed(() => authStore.user)
 const userInitial = computed(() => {
   const name = user.value?.display_name || user.value?.username || 'U'
@@ -645,5 +640,14 @@ onUnmounted(() => {
 .dropdown-leave-to {
   opacity: 0;
   transform: translateY(-8px);
+}
+
+// Admin item highlight
+.admin-item {
+  color: #9f7aea !important;
+  
+  &:hover {
+    background: rgba(159, 122, 234, 0.1) !important;
+  }
 }
 </style>

@@ -42,6 +42,11 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Failed to run migrations");
 
+    // Seed initial admin user if configured and no admin exists
+    if let Err(e) = services::UserService::seed_initial_admin(&pg_pool, &config).await {
+        log::error!("Failed to seed initial admin: {}", e);
+    }
+
     // Start SSH server if enabled
     if config.ssh_enabled {
         let ssh_config = Arc::new(config.clone());

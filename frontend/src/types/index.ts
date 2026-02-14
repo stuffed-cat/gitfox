@@ -5,6 +5,7 @@ export interface User {
   display_name?: string
   avatar_url?: string
   role: 'admin' | 'developer' | 'viewer'
+  is_active: boolean
 }
 
 export interface LoginRequest {
@@ -325,3 +326,41 @@ export const ACCESS_LEVEL_LABELS: Record<number, string> = {
   40: '维护者',
   50: '所有者',
 }
+
+// Admin types
+export interface SystemStats {
+  total_users: number
+  active_users: number
+  total_projects: number
+  total_groups: number
+  admin_count: number
+}
+
+export interface AdminUserInfo {
+  id: string
+  username: string
+  email: string
+  display_name?: string
+  avatar_url?: string
+  role: 'admin' | 'developer' | 'viewer'
+  is_active: boolean
+  created_at: string
+  updated_at: string
+  projects_count: number
+}
+
+export interface AdminUserListResponse {
+  users: AdminUserInfo[]
+  total: number
+  page: number
+  per_page: number
+}
+
+export interface AdminUpdateUserRequest {
+  role?: 'admin' | 'developer' | 'viewer'
+  is_active?: boolean
+  display_name?: string
+  email?: string
+}
+
+export type SystemConfigMap = Record<string, any>
