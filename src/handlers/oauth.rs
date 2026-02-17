@@ -1,5 +1,6 @@
 use actix_web::{web, HttpResponse, HttpRequest};
 use chrono::{Duration, Utc};
+use jsonwebtoken::{encode, EncodingKey, Header, Algorithm};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -11,6 +12,7 @@ use crate::models::{
     OAuthApplication, OAuthApplicationInfo, OAuthApplicationWithSecret,
     CreateOAuthApplicationRequest, UpdateOAuthApplicationRequest,
     OAuthAuthorizeRequest, OAuthTokenRequest, OAuthTokenResponse,
+    OAuthTokenRevocationRequest, OAuthUserInfoResponse,
     OAuthProviderRecord, OAuthProviderInfo, OAuthProvidersResponse,
     OAuthIdentityInfo,
 };
@@ -65,6 +67,75 @@ fn verify_pkce(verifier: &str, challenge: &str, method: &str) -> bool {
 fn base64_url_encode(data: &[u8]) -> String {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     URL_SAFE_NO_PAD.encode(data)
+}
+
+/// Generate OIDC ID Token (JWT)
+fn generate_id_token(
+    config: &AppConfig,
+    user_id: i64,
+    username: &str,
+    email: Option<&str>,
+    client_id: &str,
+    scopes: &[String],
+) -> AppResult<Option<String>> {
+    // Only generate id_token if 'openid' scope is present
+    if !scopes.iter().any(|s| s == "openid") {
+        return Ok(None);
+    }
+
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct IdTokenClaims {
+        /// Issuer
+        iss: String,
+        /// Subject (user ID)
+        sub: String,
+        /// Audience (client ID)
+        aud: String,
+        /// Expiration time
+        exp: i64,
+        /// Issued at
+        iat: i64,
+        /// Authorized party
+        azp: String,
+        /// Username
+        preferred_username: String,
+        /// Email (if email scope is present)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        email: Option<String>,
+        /// Email verified
+        #[serde(skip_serializing_if = "Option::is_none")]
+        email_verified: Option<bool>,
+    }
+
+    let now = Utc::now().timestamp();
+    let exp = now + 3600; // 1 hour
+
+    let claims = IdTokenClaims {
+        iss: config.base_url.clone(),
+        sub: user_id.to_string(),
+        aud: client_id.to_string(),
+        exp,
+        iat: now,
+        azp: client_id.to_string(),
+        preferred_username: username.to_string(),
+        email: if scopes.iter().any(|s| s == "email") {
+            email.map(String::from)
+        } else {
+            None
+        },
+        email_verified: if email.is_some() { Some(true) } else { None },
+    };
+
+    let header = Header::new(Algorithm::HS256);
+    let token = encode(
+        &header,
+        &claims,
+        &EncodingKey::from_secret(config.jwt_secret.as_bytes()),
+    ).map_err(|e| AppError::InternalError(format!("Failed to generate id_token: {}", e)))?;
+
+    Ok(Some(token))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -436,7 +507,7 @@ async fn issue_authorization_code(
 /// POST /oauth/token - OAuth token endpoint
 pub async fn token(
     pool: web::Data<PgPool>,
-    _config: web::Data<AppConfig>,
+    config: web::Data<AppConfig>,
     req: HttpRequest,
     body: web::Form<OAuthTokenRequest>,
 ) -> AppResult<HttpResponse> {
@@ -444,10 +515,10 @@ pub async fn token(
 
     match token_req.grant_type.as_str() {
         "authorization_code" => {
-            exchange_authorization_code(pool.get_ref(), &req, token_req).await
+            exchange_authorization_code(pool.get_ref(), config.get_ref(), &req, token_req).await
         }
         "refresh_token" => {
-            refresh_access_token(pool.get_ref(), &req, token_req).await
+            refresh_access_token(pool.get_ref(), config.get_ref(), &req, token_req).await
         }
         _ => Err(AppError::BadRequest("Unsupported grant_type".to_string())),
     }
@@ -455,6 +526,7 @@ pub async fn token(
 
 async fn exchange_authorization_code(
     pool: &PgPool,
+    config: &AppConfig,
     req: &HttpRequest,
     token_req: OAuthTokenRequest,
 ) -> AppResult<HttpResponse> {
@@ -549,18 +621,40 @@ async fn exchange_authorization_code(
     .execute(pool)
     .await?;
 
+    // Get user info for id_token
+    let user = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT username, email FROM users WHERE id = $1"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    let (username, email) = user;
+
+    // Generate OIDC ID Token if 'openid' scope is present
+    let id_token = generate_id_token(
+        config,
+        user_id,
+        &username,
+        email.as_deref(),
+        &app.uid,
+        &scopes,
+    )?;
+
     Ok(HttpResponse::Ok().json(OAuthTokenResponse {
         access_token,
         token_type: "Bearer".to_string(),
         expires_in: Some(7200), // 2 hours
         refresh_token: Some(refresh_token),
         scope: scopes.join(" "),
+        id_token,
         created_at: Some(Utc::now().timestamp()),
     }))
 }
 
 async fn refresh_access_token(
     pool: &PgPool,
+    config: &AppConfig,
     req: &HttpRequest,
     token_req: OAuthTokenRequest,
 ) -> AppResult<HttpResponse> {
@@ -636,12 +730,33 @@ async fn refresh_access_token(
     .execute(pool)
     .await?;
 
+    // Get user info for id_token
+    let user = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT username, email FROM users WHERE id = $1"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    let (username, email) = user;
+
+    // Generate OIDC ID Token if 'openid' scope is present
+    let id_token = generate_id_token(
+        config,
+        user_id,
+        &username,
+        email.as_deref(),
+        &app.uid,
+        &scopes,
+    )?;
+
     Ok(HttpResponse::Ok().json(OAuthTokenResponse {
         access_token: new_access_token,
         token_type: "Bearer".to_string(),
         expires_in: Some(7200),
         refresh_token: Some(new_refresh_token),
         scope: scopes.join(" "),
+        id_token,
         created_at: Some(Utc::now().timestamp()),
     }))
 }
@@ -668,6 +783,169 @@ fn get_client_credentials(req: &HttpRequest, token_req: &OAuthTokenRequest) -> A
         .ok_or_else(|| AppError::BadRequest("client_id is required".to_string()))?;
     
     Ok((client_id, token_req.client_secret.clone()))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RFC 7009 Token Revocation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// POST /oauth/revoke - RFC 7009 Token Revocation Endpoint
+pub async fn revoke(
+    pool: web::Data<PgPool>,
+    req: HttpRequest,
+    body: web::Form<OAuthTokenRevocationRequest>,
+) -> AppResult<HttpResponse> {
+    let revoke_req = body.into_inner();
+
+    // Get client credentials (from body or Basic auth)
+    let (client_id, client_secret) = get_client_credentials_from_revoke_req(&req, &revoke_req)?;
+
+    // Find and validate application
+    let app = sqlx::query_as::<_, OAuthApplication>(
+        "SELECT * FROM oauth_applications WHERE uid = $1"
+    )
+    .bind(&client_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::Unauthorized("Invalid client_id".to_string()))?;
+
+    // Verify client secret for confidential clients
+    if app.confidential {
+        let secret = client_secret
+            .ok_or_else(|| AppError::Unauthorized("client_secret is required".to_string()))?;
+        if hash_secret(&secret) != app.secret_hash {
+            return Err(AppError::Unauthorized("Invalid client_secret".to_string()));
+        }
+    }
+
+    let token_hash = hash_secret(&revoke_req.token);
+
+    // Try to revoke the token (could be access_token or refresh_token)
+    // RFC 7009 states that the endpoint should return success even if token doesn't exist
+    let hint = revoke_req.token_type_hint.as_deref();
+    
+    if hint.is_none() || hint == Some("access_token") {
+        // Try as access token
+        let _ = sqlx::query(
+            "UPDATE oauth_access_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND application_id = $2 AND revoked_at IS NULL"
+        )
+        .bind(&token_hash)
+        .bind(app.id)
+        .execute(pool.get_ref())
+        .await?;
+    }
+    
+    if hint.is_none() || hint == Some("refresh_token") {
+        // Try as refresh token
+        let _ = sqlx::query(
+            "UPDATE oauth_access_tokens SET revoked_at = NOW() WHERE refresh_token_hash = $1 AND application_id = $2 AND revoked_at IS NULL"
+        )
+        .bind(&token_hash)
+        .bind(app.id)
+        .execute(pool.get_ref())
+        .await?;
+    }
+
+    // RFC 7009 mandates that we return 200 OK regardless of whether the token existed
+    Ok(HttpResponse::Ok().finish())
+}
+
+fn get_client_credentials_from_revoke_req(
+    req: &HttpRequest,
+    revoke_req: &OAuthTokenRevocationRequest,
+) -> AppResult<(String, Option<String>)> {
+    // Try Basic auth first
+    if let Some(auth_header) = req.headers().get("Authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if auth_str.starts_with("Basic ") {
+                use base64::{engine::general_purpose::STANDARD, Engine};
+                if let Ok(decoded) = STANDARD.decode(&auth_str[6..]) {
+                    if let Ok(credentials) = String::from_utf8(decoded) {
+                        if let Some((id, secret)) = credentials.split_once(':') {
+                            return Ok((id.to_string(), Some(secret.to_string())));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to body params
+    let client_id = revoke_req.client_id.clone()
+        .ok_or_else(|| AppError::BadRequest("client_id is required".to_string()))?;
+    
+    Ok((client_id, revoke_req.client_secret.clone()))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OIDC UserInfo Endpoint
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GET /oauth/userinfo - OIDC UserInfo Endpoint
+pub async fn userinfo(
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    req: HttpRequest,
+) -> AppResult<HttpResponse> {
+    // Extract access token from Authorization header
+    let auth_header = req.headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".to_string()))?;
+
+    if !auth_header.starts_with("Bearer ") {
+        return Err(AppError::Unauthorized("Invalid Authorization header".to_string()));
+    }
+
+    let access_token = &auth_header[7..];
+    let token_hash = hash_secret(access_token);
+
+    // Find and validate access token
+    let token_info = sqlx::query_as::<_, (i64, i64, serde_json::Value)>(
+        r#"
+        SELECT user_id, application_id, scopes FROM oauth_access_tokens
+        WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()
+        "#
+    )
+    .bind(&token_hash)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::Unauthorized("Invalid or expired access token".to_string()))?;
+
+    let (user_id, _app_id, scopes_json) = token_info;
+    let scopes: Vec<String> = serde_json::from_value(scopes_json).unwrap_or_default();
+
+    // Check if openid scope is present
+    if !scopes.iter().any(|s| s == "openid") {
+        return Err(AppError::Forbidden("Insufficient scope (openid required)".to_string()));
+    }
+
+    // Get user info
+    let user = sqlx::query_as::<_, (String, Option<String>, Option<String>, bool, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT username, display_name, email, is_active, created_at, updated_at FROM users WHERE id = $1"
+    )
+    .bind(user_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    let (username, display_name, email, _is_active, created_at, updated_at) = user;
+
+    // Build profile URL
+    let profile_url = format!("{}/{}", config.base_url, username);
+
+    let response = OAuthUserInfoResponse {
+        sub: user_id.to_string(),
+        preferred_username: username,
+        name: display_name,
+        email: if scopes.iter().any(|s| s == "email") { email.clone() } else { None },
+        email_verified: email.is_some(),
+        picture: None, // TODO: Add avatar support
+        profile: Some(profile_url),
+        created_at: Some(created_at.timestamp()),
+        updated_at: Some(updated_at.timestamp()),
+    };
+
+    Ok(HttpResponse::Ok().json(response))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

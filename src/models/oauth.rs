@@ -277,8 +277,47 @@ pub struct OAuthTokenResponse {
     pub expires_in: Option<i64>,
     pub refresh_token: Option<String>,
     pub scope: String,
+    /// OIDC ID Token (JWT)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
+}
+
+/// RFC 7009 Token Revocation Request
+#[derive(Debug, Deserialize)]
+pub struct OAuthTokenRevocationRequest {
+    /// The token to revoke (access_token or refresh_token)
+    pub token: String,
+    /// Hint about the type of token (access_token or refresh_token)
+    pub token_type_hint: Option<String>,
+    /// Client ID (required for public clients)
+    pub client_id: Option<String>,
+    /// Client secret (required for confidential clients)
+    pub client_secret: Option<String>,
+}
+
+/// OIDC UserInfo Response
+#[derive(Debug, Serialize)]
+pub struct OAuthUserInfoResponse {
+    /// Subject identifier (user ID)
+    pub sub: String,
+    /// Username
+    pub preferred_username: String,
+    /// Full name
+    pub name: Option<String>,
+    /// Email address
+    pub email: Option<String>,
+    /// Email verified flag
+    pub email_verified: bool,
+    /// Avatar URL
+    pub picture: Option<String>,
+    /// Profile URL
+    pub profile: Option<String>,
+    /// Account creation timestamp
+    pub created_at: Option<i64>,
+    /// Last update timestamp
+    pub updated_at: Option<i64>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

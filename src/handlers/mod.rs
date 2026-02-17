@@ -72,7 +72,11 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // Standard OAuth2 endpoints (at root level, not under /api/v1)
     cfg.route("/oauth/authorize", web::get().to(oauth::authorize))
        .route("/oauth/authorize", web::post().to(oauth::authorize_grant))
-       .route("/oauth/token", web::post().to(oauth::token));
+       .route("/oauth/token", web::post().to(oauth::token))
+       // RFC 7009 Token Revocation
+       .route("/oauth/revoke", web::post().to(oauth::revoke))
+       // OIDC UserInfo Endpoint
+       .route("/oauth/userinfo", web::get().to(oauth::userinfo));
     
     cfg.service(
         web::scope("/api/v1")
