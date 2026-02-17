@@ -668,7 +668,7 @@ async function savePasskeyName() {
 
   try {
     // 完成注册
-    await api.twoFactor.webauthnRegisterFinish({
+    const result = await api.twoFactor.webauthnRegisterFinish({
       state_key: pendingCredential.value.state_key,
       name: passkeyName.value,
       credential: pendingCredential.value.credential
@@ -678,7 +678,15 @@ async function savePasskeyName() {
     passkeyName.value = ''
     pendingCredential.value = null
     await loadStatus()
-    showToast('Passkey 添加成功')
+    
+    // 如果生成了新的恢复代码，显示给用户
+    if (result.recovery_codes_generated && result.recovery_codes) {
+      recoveryCodes.value = { codes: result.recovery_codes }
+      showRecoveryCodesModal.value = true
+      showToast('Passkey 添加成功，请保存恢复代码')
+    } else {
+      showToast('Passkey 添加成功')
+    }
   } catch (error: any) {
     console.error('Failed to save passkey:', error)
     passkeyError.value = error.response?.data?.error || error.message || '保存失败'

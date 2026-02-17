@@ -175,7 +175,7 @@ class ApiClient {
       const response = await this.client.post('/user/two-factor/webauthn/register/start', {})
       return response.data
     },
-    webauthnRegisterFinish: async (data: import('@/types').WebAuthnRegisterFinishRequest): Promise<{ message: string }> => {
+    webauthnRegisterFinish: async (data: import('@/types').WebAuthnRegisterFinishRequest): Promise<import('@/types').WebAuthnRegisterFinishResponse> => {
       const response = await this.client.post('/user/two-factor/webauthn/register/finish', data)
       return response.data
     },

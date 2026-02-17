@@ -635,6 +635,13 @@ export interface WebAuthnRegisterFinishRequest {
   credential: any // PublicKeyCredential
 }
 
+/** WebAuthn registration finish response */
+export interface WebAuthnRegisterFinishResponse {
+  message: string
+  recovery_codes_generated: boolean
+  recovery_codes?: string[]
+}
+
 /** WebAuthn authentication start request (for login) */
 export interface WebAuthnAuthStartRequest {
   temporary_token: string
