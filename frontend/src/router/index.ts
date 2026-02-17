@@ -22,6 +22,12 @@ const routes = [
     meta: { guest: true }
   },
   {
+    path: '/oauth/authorize',
+    name: 'OAuthAuthorize',
+    component: () => import('@/views/auth/OAuthAuthorizeView.vue'),
+    meta: { requiresAuth: false }  // Component handles auth internally
+  },
+  {
     path: '/confirm-email',
     name: 'ConfirmEmail',
     component: () => import('@/views/auth/ConfirmEmailView.vue'),

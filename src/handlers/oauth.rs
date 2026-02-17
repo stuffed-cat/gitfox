@@ -348,6 +348,103 @@ pub async fn regenerate_secret(
 /// This returns HTML for user consent (or redirects if already authorized)
 pub async fn authorize(
     pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    auth: crate::middleware::OptionalAuth,
+    query: web::Query<OAuthAuthorizeRequest>,
+    req: HttpRequest,
+) -> AppResult<HttpResponse> {
+    let oauth_req = query.into_inner();
+
+    // Check if user is authenticated
+    let user = match auth.user() {
+        Some(u) => u,
+        None => {
+            // User not logged in, redirect to login page with OAuth parameters preserved
+            // Encode the full OAuth request URL for redirect after login
+            let original_url = req.uri().to_string();
+            let encoded_redirect = urlencoding::encode(&original_url);
+            
+            // Determine base URL for redirect
+            let base_url = config.base_url.trim_end_matches('/');
+            let login_url = format!("{}/login?redirect={}", base_url, encoded_redirect);
+            
+            return Ok(HttpResponse::Found()
+                .insert_header(("Location", login_url))
+                .finish());
+        }
+    };
+
+    // Validate response_type
+    if oauth_req.response_type != "code" {
+        return Err(AppError::BadRequest("Unsupported response_type".to_string()));
+    }
+
+    // Find application
+    let app = sqlx::query_as::<_, OAuthApplication>(
+        "SELECT * FROM oauth_applications WHERE uid = $1"
+    )
+    .bind(&oauth_req.client_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::BadRequest("Invalid client_id".to_string()))?;
+
+    // Convert JSONB to Vec<String>
+    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone()).unwrap_or_default();
+    let app_scopes: Vec<String> = serde_json::from_value(app.scopes.clone()).unwrap_or_default();
+
+    // Validate redirect_uri
+    if !redirect_uris.contains(&oauth_req.redirect_uri) {
+        return Err(AppError::BadRequest("Invalid redirect_uri".to_string()));
+    }
+
+    // Parse requested scopes
+    let requested_scopes: Vec<String> = oauth_req.scope
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+
+    // Validate scopes against app's allowed scopes
+    for scope in &requested_scopes {
+        if !app_scopes.contains(scope) {
+            return Err(AppError::BadRequest(format!("Scope '{}' not allowed for this application", scope)));
+        }
+    }
+
+    // For trusted apps, skip consent and issue code directly
+    if app.trusted {
+        return issue_authorization_code(
+            pool.get_ref(),
+            &app,
+            user.user_id,
+            &oauth_req.redirect_uri,
+            &requested_scopes,
+            oauth_req.code_challenge,
+            oauth_req.code_challenge_method,
+            oauth_req.state,
+        ).await;
+    }
+
+    // For non-trusted apps, return info for consent screen
+    // In a real implementation, this would render an HTML consent page
+    // For API purposes, we return JSON that the frontend can use
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "application": {
+            "name": app.name,
+            "description": app.description,
+            "homepage_url": app.homepage_url,
+            "logo_url": app.logo_url,
+        },
+        "requested_scopes": requested_scopes,
+        "redirect_uri": oauth_req.redirect_uri,
+        "state": oauth_req.state,
+    })))
+}
+
+/// GET /api/v1/oauth/authorize/info - Get OAuth authorization info (for frontend)
+/// This endpoint requires authentication and returns authorization info for the consent screen
+pub async fn authorize_info(
+    pool: web::Data<PgPool>,
     auth: AuthenticatedUser,
     query: web::Query<OAuthAuthorizeRequest>,
 ) -> AppResult<HttpResponse> {
@@ -378,6 +475,7 @@ pub async fn authorize(
 
     // Parse requested scopes
     let requested_scopes: Vec<String> = req.scope
+        .clone()
         .unwrap_or_default()
         .split_whitespace()
         .map(String::from)
@@ -390,23 +488,7 @@ pub async fn authorize(
         }
     }
 
-    // For trusted apps, skip consent and issue code directly
-    if app.trusted {
-        return issue_authorization_code(
-            pool.get_ref(),
-            &app,
-            auth.user_id,
-            &req.redirect_uri,
-            &requested_scopes,
-            req.code_challenge,
-            req.code_challenge_method,
-            req.state,
-        ).await;
-    }
-
-    // For non-trusted apps, return info for consent screen
-    // In a real implementation, this would render an HTML consent page
-    // For API purposes, we return JSON that the frontend can use
+    // Return info for consent screen (including whether it's a trusted app)
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "application": {
             "name": app.name,
@@ -417,7 +499,51 @@ pub async fn authorize(
         "requested_scopes": requested_scopes,
         "redirect_uri": req.redirect_uri,
         "state": req.state,
+        "trusted": app.trusted,
+        "user": {
+            "id": auth.user_id,
+            "username": auth.username,
+        }
     })))
+}
+
+/// POST /api/v1/oauth/authorize/confirm - Confirm OAuth authorization (for frontend)
+pub async fn authorize_confirm(
+    pool: web::Data<PgPool>,
+    auth: AuthenticatedUser,
+    body: web::Json<OAuthAuthorizeRequest>,
+) -> AppResult<HttpResponse> {
+    let req = body.into_inner();
+
+    let app = sqlx::query_as::<_, OAuthApplication>(
+        "SELECT * FROM oauth_applications WHERE uid = $1"
+    )
+    .bind(&req.client_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::BadRequest("Invalid client_id".to_string()))?;
+
+    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone()).unwrap_or_default();
+    if !redirect_uris.contains(&req.redirect_uri) {
+        return Err(AppError::BadRequest("Invalid redirect_uri".to_string()));
+    }
+
+    let scopes: Vec<String> = req.scope
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+
+    issue_authorization_code(
+        pool.get_ref(),
+        &app,
+        auth.user_id,
+        &req.redirect_uri,
+        &scopes,
+        req.code_challenge,
+        req.code_challenge_method,
+        req.state,
+    ).await
 }
 
 /// POST /oauth/authorize - User grants authorization

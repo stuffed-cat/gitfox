@@ -17,6 +17,19 @@ export default defineConfig({
         target: 'http://localhost:8081',
         changeOrigin: true,
       },
+      // OAuth API 端点转发 (token, revoke, userinfo - 不包括 authorize)
+      '/oauth/token': {
+        target: 'http://localhost:8081',
+        changeOrigin: true,
+      },
+      '/oauth/revoke': {
+        target: 'http://localhost:8081',
+        changeOrigin: true,
+      },
+      '/oauth/userinfo': {
+        target: 'http://localhost:8081',
+        changeOrigin: true,
+      },
       // Git HTTP 协议转发 (clone/push/fetch)
       '^/[^/]+/[^/]+\\.git': {
         target: 'http://localhost:8081',

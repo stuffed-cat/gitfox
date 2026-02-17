@@ -51,10 +51,6 @@ import type {
   UpdateOAuthProviderRequest,
   // 2FA types
   TwoFactorRequiredResponse,
-  VerifyTwoFactorRequest,
-  TwoFactorStatus,
-  TotpSetupResponse,
-  RecoveryCodesResponse,
 } from '@/types'
 
 // 的项目路径

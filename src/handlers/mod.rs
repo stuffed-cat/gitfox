@@ -154,6 +154,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/oauth/applications/{id}", web::delete().to(oauth::delete_application))
             .route("/oauth/applications/{id}/regenerate_secret", web::post().to(oauth::regenerate_secret))
             
+            // OAuth Authorization API (for frontend consent screen)
+            .route("/oauth/authorize/info", web::get().to(oauth::authorize_info))
+            .route("/oauth/authorize/confirm", web::post().to(oauth::authorize_confirm))
+            
             // OAuth providers list (for social login buttons)
             .route("/oauth/providers", web::get().to(oauth::list_providers))
             

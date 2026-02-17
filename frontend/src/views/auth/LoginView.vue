@@ -266,13 +266,6 @@ function isSafeRedirect(path: string): boolean {
   return true
 }
 
-// OAuth redirect URI 验证（允许外部 URL，但需要来自 query 参数）
-function isOAuthContext(): boolean {
-  // OAuth 登录会通过 /oauth/:provider/authorize 路由
-  // 这里只是普通登录页面，不涉及 OAuth redirect
-  return false
-}
-
 // 登录后安全跳转
 function redirectAfterLogin() {
   const savedRedirect = sessionStorage.getItem('login_redirect')

@@ -101,25 +101,17 @@ onUnmounted(() => {
   transition: width $transition-normal, transform $transition-normal;
 }
 
-.sidebar-collapsed .app-sidebar {
-  width: $sidebar-collapsed-width;
-}
-
 .sidebar-hidden .app-sidebar {
   transform: translateX(-100%);
 }
 
 .app-main {
   flex: 1;
-  margin-left: 24px;
   transition: margin-left $transition-normal;
   background: $bg-secondary;
   min-height: calc(100vh - $header-height);
 }
 
-.sidebar-collapsed .app-main {
-  margin-left: $sidebar-collapsed-width;
-}
 
 .sidebar-hidden .app-main {
   margin-left: 0;

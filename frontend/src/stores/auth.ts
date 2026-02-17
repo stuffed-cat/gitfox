@@ -20,11 +20,12 @@ export const useAuthStore = defineStore('auth', () => {
       return response as TwoFactorRequiredResponse
     }
     
-    // Regular login without 2FA
-    token.value = response.token
-    user.value = response.user
-    localStorage.setItem('token', response.token)
-    api.setAuthToken(response.token)
+    // Regular login without 2FA - type assertion since we checked above
+    const loginResponse = response as { token: string; user: User }
+    token.value = loginResponse.token
+    user.value = loginResponse.user
+    localStorage.setItem('token', loginResponse.token)
+    api.setAuthToken(loginResponse.token)
     return response
   }
 
