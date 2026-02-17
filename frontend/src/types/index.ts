@@ -440,18 +440,19 @@ export interface OAuthProvidersResponse {
 export interface OAuthApplication {
   id: number
   name: string
-  client_id: string
+  uid: string  // Client ID
   redirect_uris: string[]
   scopes: string[]
   description?: string
   homepage_url?: string
   logo_url?: string
   confidential: boolean
+  trusted: boolean
   created_at: string
 }
 
 export interface OAuthApplicationWithSecret extends OAuthApplication {
-  client_secret: string
+  secret: string  // Client Secret (only shown once)
 }
 
 export interface CreateOAuthApplicationRequest {
@@ -460,6 +461,7 @@ export interface CreateOAuthApplicationRequest {
   scopes?: string[]
   description?: string
   homepage_url?: string
+  logo_url?: string
   confidential?: boolean
 }
 
@@ -469,6 +471,8 @@ export interface UpdateOAuthApplicationRequest {
   scopes?: string[]
   description?: string
   homepage_url?: string
+  logo_url?: string
+  confidential?: boolean
 }
 
 export interface OAuthIdentity {

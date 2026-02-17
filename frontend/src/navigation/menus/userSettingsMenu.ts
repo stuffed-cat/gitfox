@@ -49,5 +49,18 @@ export const userSettingsMenuConfig: NavSection[] = [
         activeMatch: /^\/-\/profile\/accounts/
       },
     ]
+  },
+  {
+    id: 'applications',
+    title: '应用',
+    items: [
+      { 
+        id: 'oauth-applications', 
+        label: 'OAuth 应用', 
+        to: '/-/profile/applications', 
+        icon: 'oauth',
+        activeMatch: /^\/-\/profile\/applications/
+      },
+    ]
   }
 ]

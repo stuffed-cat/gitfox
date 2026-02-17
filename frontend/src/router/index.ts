@@ -129,6 +129,12 @@ const routes = [
     component: () => import('@/views/settings/LinkedAccountsView.vue'),
     meta: { requiresAuth: true }
   },
+  {
+    path: '/-/profile/applications',
+    name: 'OAuthApplications',
+    component: () => import('@/views/settings/OAuthApplicationsView.vue'),
+    meta: { requiresAuth: true }
+  },
   
   // Admin routes (require admin role)
   {

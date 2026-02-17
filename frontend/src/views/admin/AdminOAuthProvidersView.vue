@@ -570,7 +570,6 @@ onMounted(() => {
       font-size: 24px;
       font-weight: 600;
       color: #303030;
-      margin: 0 0 8px 0;
     }
     
     .page-description {

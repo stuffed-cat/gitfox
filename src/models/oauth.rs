@@ -172,6 +172,7 @@ pub struct OAuthApplicationInfo {
     pub homepage_url: Option<String>,
     pub logo_url: Option<String>,
     pub confidential: bool,
+    pub trusted: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -187,6 +188,7 @@ impl From<OAuthApplication> for OAuthApplicationInfo {
             homepage_url: app.homepage_url,
             logo_url: app.logo_url,
             confidential: app.confidential,
+            trusted: app.trusted,
             created_at: app.created_at,
         }
     }
