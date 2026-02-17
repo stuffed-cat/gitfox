@@ -255,6 +255,17 @@ pub async fn update_application(
         }
     }
 
+    // Convert Vec<String> to JSON for JSONB columns
+    let redirect_uris_json = req.redirect_uris.as_ref().map(|uris| {
+        serde_json::to_value(uris)
+            .map_err(|e| AppError::InternalError(format!("JSON serialization error: {}", e)))
+    }).transpose()?;
+    
+    let scopes_json = req.scopes.as_ref().map(|scopes| {
+        serde_json::to_value(scopes)
+            .map_err(|e| AppError::InternalError(format!("JSON serialization error: {}", e)))
+    }).transpose()?;
+
     let app = sqlx::query_as::<_, OAuthApplication>(
         r#"
         UPDATE oauth_applications SET
@@ -271,8 +282,8 @@ pub async fn update_application(
     .bind(app_id)
     .bind(auth.user_id)
     .bind(&req.name)
-    .bind(&req.redirect_uris)
-    .bind(&req.scopes)
+    .bind(&redirect_uris_json)
+    .bind(&scopes_json)
     .bind(&req.description)
     .bind(&req.homepage_url)
     .fetch_optional(pool.get_ref())
@@ -389,8 +400,10 @@ pub async fn authorize(
     .ok_or_else(|| AppError::BadRequest("Invalid client_id".to_string()))?;
 
     // Convert JSONB to Vec<String>
-    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone()).unwrap_or_default();
-    let app_scopes: Vec<String> = serde_json::from_value(app.scopes.clone()).unwrap_or_default();
+    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone())
+        .map_err(|e| AppError::InternalError(format!("Failed to parse redirect_uris in authorize: {}", e)))?;
+    let app_scopes: Vec<String> = serde_json::from_value(app.scopes.clone())
+        .map_err(|e| AppError::InternalError(format!("Failed to parse scopes in authorize: {}", e)))?;
 
     // Validate redirect_uri
     if !redirect_uris.contains(&oauth_req.redirect_uri) {
@@ -465,8 +478,10 @@ pub async fn authorize_info(
     .ok_or_else(|| AppError::BadRequest("Invalid client_id".to_string()))?;
 
     // Convert JSONB to Vec<String>
-    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone()).unwrap_or_default();
-    let app_scopes: Vec<String> = serde_json::from_value(app.scopes.clone()).unwrap_or_default();
+    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone())
+        .map_err(|e| AppError::InternalError(format!("Failed to parse redirect_uris: {}", e)))?;
+    let app_scopes: Vec<String> = serde_json::from_value(app.scopes.clone())
+        .map_err(|e| AppError::InternalError(format!("Failed to parse scopes: {}", e)))?;
 
     // Validate redirect_uri
     if !redirect_uris.contains(&req.redirect_uri) {
@@ -480,6 +495,13 @@ pub async fn authorize_info(
         .split_whitespace()
         .map(String::from)
         .collect();
+    
+    // If no scopes requested, use app's default scopes
+    let requested_scopes = if requested_scopes.is_empty() {
+        app_scopes.clone()
+    } else {
+        requested_scopes
+    };
 
     // Validate scopes against app's allowed scopes
     for scope in &requested_scopes {
@@ -523,16 +545,34 @@ pub async fn authorize_confirm(
     .await?
     .ok_or_else(|| AppError::BadRequest("Invalid client_id".to_string()))?;
 
-    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone()).unwrap_or_default();
+    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone())
+        .map_err(|e| AppError::InternalError(format!("Failed to parse redirect_uris in authorize_confirm: {}", e)))?;
     if !redirect_uris.contains(&req.redirect_uri) {
         return Err(AppError::BadRequest("Invalid redirect_uri".to_string()));
     }
 
+    let app_scopes: Vec<String> = serde_json::from_value(app.scopes.clone())
+        .map_err(|e| AppError::InternalError(format!("Failed to parse scopes in authorize_confirm: {}", e)))?;
+
+    log::debug!("authorize_confirm: requested scope string: {:?}", req.scope);
+    
     let scopes: Vec<String> = req.scope
         .unwrap_or_default()
         .split_whitespace()
         .map(String::from)
         .collect();
+    
+    // If no scopes requested, use app's default scopes
+    let scopes = if scopes.is_empty() {
+        log::debug!("authorize_confirm: no scopes requested, using app defaults: {:?}", app_scopes);
+        app_scopes
+    } else {
+        scopes
+    };
+    
+    log::debug!("authorize_confirm: final scopes to issue: {:?}", scopes);
+    
+    log::debug!("authorize_confirm: final scopes: {:?}", scopes);
 
     issue_authorization_code(
         pool.get_ref(),
@@ -562,7 +602,8 @@ pub async fn authorize_grant(
     .await?
     .ok_or_else(|| AppError::BadRequest("Invalid client_id".to_string()))?;
 
-    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone()).unwrap_or_default();
+    let redirect_uris: Vec<String> = serde_json::from_value(app.redirect_uris.clone())
+        .map_err(|e| AppError::InternalError(format!("Failed to parse redirect_uris in authorize_grant: {}", e)))?;
     if !redirect_uris.contains(&req.redirect_uri) {
         return Err(AppError::BadRequest("Invalid redirect_uri".to_string()));
     }
@@ -599,6 +640,10 @@ async fn issue_authorization_code(
     let code_hash = hash_secret(&code);
     let expires_at = Utc::now() + Duration::minutes(10);
 
+    // Convert scopes to JSONB
+    let scopes_json = serde_json::to_value(scopes)
+        .map_err(|e| AppError::InternalError(format!("Failed to serialize scopes: {}", e)))?;
+
     sqlx::query(
         r#"
         INSERT INTO oauth_authorization_codes 
@@ -611,7 +656,7 @@ async fn issue_authorization_code(
     .bind(user_id)
     .bind(&code_hash)
     .bind(redirect_uri)
-    .bind(scopes)
+    .bind(scopes_json)
     .bind(&code_challenge)
     .bind(&code_challenge_method)
     .bind(expires_at)
@@ -667,7 +712,7 @@ async fn exchange_authorization_code(
 
     // Find and validate application
     let app = sqlx::query_as::<_, OAuthApplication>(
-        "SELECT * FROM oauth_applications WHERE client_id = $1"
+        "SELECT * FROM oauth_applications WHERE uid = $1"
     )
     .bind(&client_id)
     .fetch_optional(pool)
@@ -685,7 +730,7 @@ async fn exchange_authorization_code(
 
     // Find authorization code
     let code_hash = hash_secret(&code);
-    let auth_code = sqlx::query_as::<_, (i64, i64, String, Vec<String>, Option<String>, Option<String>)>(
+    let auth_code = sqlx::query_as::<_, (i64, i64, String, serde_json::Value, Option<String>, Option<String>)>(
         r#"
         SELECT user_id, application_id, redirect_uri, scopes, code_challenge, code_challenge_method
         FROM oauth_authorization_codes
@@ -698,7 +743,11 @@ async fn exchange_authorization_code(
     .await?
     .ok_or_else(|| AppError::BadRequest("Invalid or expired authorization code".to_string()))?;
 
-    let (user_id, _, stored_redirect_uri, scopes, code_challenge, code_challenge_method) = auth_code;
+    let (user_id, _, stored_redirect_uri, scopes_value, code_challenge, code_challenge_method) = auth_code;
+    
+    // Deserialize scopes from JSONB
+    let scopes: Vec<String> = serde_json::from_value(scopes_value)
+        .map_err(|e| AppError::InternalError(format!("Failed to deserialize scopes: {}", e)))?;
 
     // Validate redirect_uri matches
     if stored_redirect_uri != redirect_uri {
@@ -727,23 +776,25 @@ async fn exchange_authorization_code(
     let refresh_token = generate_access_token();
     let refresh_token_hash = hash_secret(&refresh_token);
     let expires_at = Utc::now() + Duration::hours(2);
-    let refresh_expires_at = Utc::now() + Duration::days(30);
+
+    // Convert scopes to JSONB
+    let scopes_json = serde_json::to_value(&scopes)
+        .map_err(|e| AppError::InternalError(format!("Failed to serialize scopes: {}", e)))?;
 
     sqlx::query(
         r#"
         INSERT INTO oauth_access_tokens 
             (application_id, user_id, token_hash, refresh_token_hash, scopes, 
-             expires_at, refresh_token_expires_at, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+             expires_at, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
         "#
     )
     .bind(app.id)
     .bind(user_id)
     .bind(&access_token_hash)
     .bind(&refresh_token_hash)
-    .bind(&scopes)
+    .bind(scopes_json)
     .bind(expires_at)
-    .bind(refresh_expires_at)
     .execute(pool)
     .await?;
 
@@ -809,11 +860,11 @@ async fn refresh_access_token(
 
     // Find and validate refresh token
     let refresh_token_hash = hash_secret(&refresh_token);
-    let token_info = sqlx::query_as::<_, (i64, i64, Vec<String>)>(
+    let token_info = sqlx::query_as::<_, (i64, i64, serde_json::Value)>(
         r#"
         SELECT id, user_id, scopes FROM oauth_access_tokens
         WHERE refresh_token_hash = $1 AND application_id = $2 
-          AND revoked_at IS NULL AND refresh_token_expires_at > NOW()
+          AND revoked_at IS NULL
         "#
     )
     .bind(&refresh_token_hash)
@@ -822,7 +873,11 @@ async fn refresh_access_token(
     .await?
     .ok_or_else(|| AppError::Unauthorized("Invalid or expired refresh token".to_string()))?;
 
-    let (old_token_id, user_id, scopes) = token_info;
+    let (old_token_id, user_id, scopes_value) = token_info;
+    
+    // Deserialize scopes from JSONB
+    let scopes: Vec<String> = serde_json::from_value(scopes_value)
+        .map_err(|e| AppError::InternalError(format!("Failed to deserialize scopes: {}", e)))?;
 
     // Revoke old token
     sqlx::query("UPDATE oauth_access_tokens SET revoked_at = NOW() WHERE id = $1")
@@ -836,23 +891,26 @@ async fn refresh_access_token(
     let new_refresh_token = generate_access_token();
     let new_refresh_token_hash = hash_secret(&new_refresh_token);
     let expires_at = Utc::now() + Duration::hours(2);
-    let refresh_expires_at = Utc::now() + Duration::days(30);
+
+    // Convert scopes to JSONB
+    let scopes_json = serde_json::to_value(&scopes)
+        .map_err(|e| AppError::InternalError(format!("Failed to serialize scopes: {}", e)))?;
 
     sqlx::query(
         r#"
         INSERT INTO oauth_access_tokens 
             (application_id, user_id, token_hash, refresh_token_hash, scopes, 
-             expires_at, refresh_token_expires_at, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+             expires_at, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
         "#
     )
     .bind(app.id)
     .bind(user_id)
     .bind(&new_access_token_hash)
     .bind(&new_refresh_token_hash)
-    .bind(&scopes)
+    .bind(scopes_json)
     .bind(expires_at)
-    .bind(refresh_expires_at)
+    .bind(expires_at)
     .execute(pool)
     .await?;
 
@@ -1039,11 +1097,15 @@ pub async fn userinfo(
     .ok_or_else(|| AppError::Unauthorized("Invalid or expired access token".to_string()))?;
 
     let (user_id, _app_id, scopes_json) = token_info;
-    let scopes: Vec<String> = serde_json::from_value(scopes_json).unwrap_or_default();
+    let scopes: Vec<String> = serde_json::from_value(scopes_json.clone()).unwrap_or_default();
+    
+    log::debug!("userinfo: scopes_json from DB: {:?}", scopes_json);
+    log::debug!("userinfo: parsed scopes: {:?}", scopes);
 
-    // Check if openid scope is present
-    if !scopes.iter().any(|s| s == "openid") {
-        return Err(AppError::Forbidden("Insufficient scope (openid required)".to_string()));
+    // Check if user info scope is present (openid for OIDC, or read_user for OAuth 2.0)
+    let has_user_scope = scopes.iter().any(|s| s == "openid" || s == "read_user");
+    if !has_user_scope {
+        return Err(AppError::Forbidden("Insufficient scope (openid or read_user required)".to_string()));
     }
 
     // Get user info
@@ -1063,7 +1125,8 @@ pub async fn userinfo(
         sub: user_id.to_string(),
         preferred_username: username,
         name: display_name,
-        email: if scopes.iter().any(|s| s == "email") { email.clone() } else { None },
+        // Return email if user has openid/read_user scope (email scope is for extra validation)
+        email: if has_user_scope { email.clone() } else { None },
         email_verified: email.is_some(),
         picture: None, // TODO: Add avatar support
         profile: Some(profile_url),
