@@ -25,11 +25,14 @@
           <path d="M11 11l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
         <input 
+          v-model="searchQuery"
           type="text" 
           placeholder="搜索或转到..."
           class="search-input"
           @focus="searchFocused = true"
           @blur="searchFocused = false"
+          @keyup.enter="handleSearch"
+          @click="handleSearchClick"
         />
         <span class="search-shortcut">/</span>
       </div>
@@ -178,6 +181,7 @@ const authStore = useAuthStore()
 const userMenuOpen = ref(false)
 const createMenuOpen = ref(false)
 const searchFocused = ref(false)
+const searchQuery = ref('')
 const userDropdownRef = ref<HTMLElement | null>(null)
 const createDropdownRef = ref<HTMLElement | null>(null)
 
@@ -209,6 +213,25 @@ function toggleUserMenu() {
 function toggleCreateMenu() {
   createMenuOpen.value = !createMenuOpen.value
   userMenuOpen.value = false
+}
+
+function handleSearch() {
+  if (searchQuery.value.trim()) {
+    router.push({
+      name: 'Search',
+      query: { q: searchQuery.value }
+    })
+  }
+}
+
+function handleSearchClick() {
+  // 如果点击搜索框时已有内容，跳转到搜索页面
+  if (searchQuery.value.trim()) {
+    router.push({
+      name: 'Search',
+      query: { q: searchQuery.value }
+    })
+  }
 }
 
 function handleLogout() {

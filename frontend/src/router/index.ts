@@ -90,6 +90,14 @@ const routes = [
     meta: { requiresAuth: true }
   },
   
+  // Search route
+  {
+    path: '/search',
+    name: 'Search',
+    component: () => import('@/views/SearchView.vue'),
+    meta: { requiresAuth: false }
+  },
+  
   // Explore routes
   {
     path: '/explore',

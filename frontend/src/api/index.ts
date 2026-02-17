@@ -631,6 +631,34 @@ class ApiClient {
     },
   }
 
+  // Global Search
+  search = {
+    all: async (query: string, options?: { scope?: string; page?: number; per_page?: number }): Promise<{
+      projects: Project[]
+      groups: Group[]
+      users: any[]
+      issues: any[]
+      merge_requests: any[]
+    }> => {
+      const params = new URLSearchParams({
+        q: query,
+        ...(options?.scope && { scope: options.scope }),
+        ...(options?.page && { page: options.page.toString() }),
+        ...(options?.per_page && { per_page: options.per_page.toString() })
+      })
+      
+      const response = await this.client.get(`/search?${params}`)
+      
+      return {
+        projects: response.data.projects || [],
+        groups: response.data.groups || [],
+        users: response.data.users || [],
+        issues: response.data.issues || [],
+        merge_requests: response.data.merge_requests || []
+      }
+    }
+  }
+
   // Admin OAuth Providers Management
   adminOAuth = {
     listProviders: async (): Promise<OAuthProviderAdmin[]> => {

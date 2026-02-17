@@ -17,6 +17,7 @@ pub mod issue;
 pub mod personal_access_token;
 pub mod oauth;
 pub mod two_factor;
+pub mod search;
 
 use actix_web::{web, HttpResponse};
 use serde::Serialize;
@@ -82,6 +83,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         web::scope("/api/v1")
             // Server config route (public)
             .route("/config", web::get().to(get_server_config))
+            
+            // Global search route (public)
+            .route("/search", web::get().to(search::search))
             
             // Auth routes
             .route("/auth/register", web::post().to(auth::register))
