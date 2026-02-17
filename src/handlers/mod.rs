@@ -16,6 +16,7 @@ pub mod internal;
 pub mod issue;
 pub mod personal_access_token;
 pub mod oauth;
+pub mod two_factor;
 
 use actix_web::{web, HttpResponse};
 use serde::Serialize;
@@ -81,6 +82,13 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // Auth routes
             .route("/auth/register", web::post().to(auth::register))
             .route("/auth/login", web::post().to(auth::login))
+            .route("/auth/verify-two-factor", web::post().to(auth::verify_two_factor))
+            // Passkey direct login (no password)
+            .route("/auth/passkey/login/start", web::post().to(auth::passkey_login_start))
+            .route("/auth/passkey/login/finish", web::post().to(auth::passkey_login_finish))
+            // WebAuthn for 2FA (after password login)
+            .route("/auth/webauthn/start", web::post().to(auth::webauthn_auth_start))
+            .route("/auth/webauthn/finish", web::post().to(auth::webauthn_auth_finish))
             .route("/auth/me", web::get().to(auth::me))
             .route("/auth/confirm-email", web::post().to(auth::confirm_email))
             .route("/auth/resend-confirmation", web::post().to(auth::resend_confirmation))
@@ -113,6 +121,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/users/{username}", web::get().to(user::get_user_by_username))
             .route("/users/{id}", web::put().to(user::update_user))
             .route("/users/{id}", web::delete().to(user::delete_user))
+            
+            // Two-Factor Authentication routes
+            .configure(two_factor::configure_routes)
             
             // SSH Key routes for current user
             .route("/user/ssh_keys", web::get().to(ssh_key::list_ssh_keys))

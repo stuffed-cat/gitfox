@@ -42,6 +42,13 @@ export const userSettingsMenuConfig: NavSection[] = [
         activeMatch: /^\/-\/profile\/tokens/
       },
       { 
+        id: 'two-factor', 
+        label: '双因素认证', 
+        to: '/-/profile/two-factor', 
+        icon: 'shield',
+        activeMatch: /^\/-\/profile\/two-factor/
+      },
+      { 
         id: 'oauth-accounts', 
         label: '已关联账号', 
         to: '/-/profile/accounts', 

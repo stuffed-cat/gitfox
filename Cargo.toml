@@ -51,6 +51,12 @@ validator = { version = "0.16", features = ["derive"] }
 slug = "0.1.6"
 base64 = "0.22.1"
 
+# Two-Factor Authentication
+totp-lite = "2"
+qrcode = "0.14"
+base32 = "0.4"
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+
 # Crypto & Random
 sha2 = "0.10"
 hex = "0.4"

@@ -559,3 +559,96 @@ export interface UpdateOAuthProviderRequest {
   enabled?: boolean
   sort_order?: number
 }
+
+// ─── Two-Factor Authentication ──────────────────────────────────────
+
+/** 2FA required response from login */
+export interface TwoFactorRequiredResponse {
+  requires_two_factor: boolean
+  available_methods: string[] // ['totp', 'webauthn', 'recovery']
+  temporary_token: string
+}
+
+/** Verify 2FA request */
+export interface VerifyTwoFactorRequest {
+  temporary_token: string
+  method: string // 'totp', 'webauthn', or 'recovery'
+  code?: string // For TOTP and recovery codes
+  webauthn_response?: string // For WebAuthn
+}
+
+/** 2FA status */
+export interface TwoFactorStatus {
+  enabled: boolean
+  totp_enabled: boolean
+  webauthn_credentials: WebAuthnCredentialInfo[]
+  recovery_codes_count: number
+}
+
+/** WebAuthn credential info */
+export interface WebAuthnCredentialInfo {
+  id: number
+  name: string
+  created_at: string
+  last_used_at?: string
+}
+
+/** TOTP setup response */
+export interface TotpSetupResponse {
+  state_key: string // Redis key for completing setup
+  secret: string
+  qr_code: string // Data URL
+  backup_codes: string[]
+}
+
+/** Enable TOTP request */
+export interface EnableTotpRequest {
+  state_key: string
+  totp_code: string
+}
+
+/** Disable TOTP request */
+export interface DisableTotpRequest {
+  totp_code: string
+}
+
+/** Recovery codes response */
+export interface RecoveryCodesResponse {
+  codes: string[]
+}
+
+/** WebAuthn registration start request */
+export interface WebAuthnRegisterStartRequest {
+  name: string
+}
+
+/** WebAuthn registration start response */
+export interface WebAuthnRegisterStartResponse {
+  challenge: PublicKeyCredentialCreationOptions
+  state_key: string
+}
+
+/** WebAuthn registration finish request */
+export interface WebAuthnRegisterFinishRequest {
+  state_key: string
+  name: string
+  credential: any // PublicKeyCredential
+}
+
+/** WebAuthn authentication start request (for login) */
+export interface WebAuthnAuthStartRequest {
+  temporary_token: string
+}
+
+/** WebAuthn authentication start response */
+export interface WebAuthnAuthStartResponse {
+  challenge: PublicKeyCredentialRequestOptions
+  state_key: string
+}
+
+/** WebAuthn authentication finish request */
+export interface WebAuthnAuthFinishRequest {
+  temporary_token: string
+  state_key: string
+  credential: any // PublicKeyCredential
+}

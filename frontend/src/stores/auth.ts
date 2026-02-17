@@ -1,21 +1,41 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api from '@/api'
-import type { User, LoginRequest, RegisterRequest } from '@/types'
+import type { User, LoginRequest, RegisterRequest, TwoFactorRequiredResponse, VerifyTwoFactorRequest } from '@/types'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
   const token = ref<string | null>(localStorage.getItem('token'))
+  const twoFactorRequired = ref<TwoFactorRequiredResponse | null>(null)
 
   const isAuthenticated = computed(() => !!token.value)
   const isAdmin = computed(() => user.value?.role?.toLowerCase() === 'admin')
 
   async function login(credentials: LoginRequest) {
     const response = await api.auth.login(credentials)
+    
+    // Check if 2FA is required
+    if ('requires_two_factor' in response && response.requires_two_factor) {
+      twoFactorRequired.value = response as TwoFactorRequiredResponse
+      return response as TwoFactorRequiredResponse
+    }
+    
+    // Regular login without 2FA
     token.value = response.token
     user.value = response.user
     localStorage.setItem('token', response.token)
     api.setAuthToken(response.token)
+    return response
+  }
+
+  async function verifyTwoFactor(request: VerifyTwoFactorRequest) {
+    const response = await api.auth.verifyTwoFactor(request)
+    token.value = response.token
+    user.value = response.user
+    localStorage.setItem('token', response.token)
+    api.setAuthToken(response.token)
+    twoFactorRequired.value = null
+    return response
   }
 
   async function register(data: RegisterRequest) {
@@ -55,9 +75,11 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     user,
     token,
+    twoFactorRequired,
     isAuthenticated,
     isAdmin,
     login,
+    verifyTwoFactor,
     register,
     fetchCurrentUser,
     logout,

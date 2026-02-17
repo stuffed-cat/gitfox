@@ -102,6 +102,12 @@ impl From<actix_web::Error> for AppError {
     }
 }
 
+impl From<validator::ValidationErrors> for AppError {
+    fn from(err: validator::ValidationErrors) -> Self {
+        AppError::ValidationError(err.to_string())
+    }
+}
+
 // Convenience constructors
 impl AppError {
     pub fn internal<S: Into<String>>(msg: S) -> Self {

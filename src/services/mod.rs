@@ -3,6 +3,7 @@ pub mod project;
 pub mod git;
 pub mod system_config;
 pub mod smtp;
+pub mod two_factor;
 
 pub use user::UserService;
 pub use project::ProjectService;

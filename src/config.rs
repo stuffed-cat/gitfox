@@ -173,6 +173,12 @@ pub struct Config {
     pub pat_max_expiration_days: u32,
     /// SMTP configuration for email sending
     pub smtp: SmtpConfig,
+    /// WebAuthn RP Name (Relying Party Display Name)
+    pub webauthn_rp_name: String,
+    /// WebAuthn RP ID (domain without protocol/port, e.g., "example.com")
+    pub webauthn_rp_id: String,
+    /// WebAuthn Origin (full URL including protocol, e.g., "https://example.com")
+    pub webauthn_origin: String,
 }
 
 impl Config {
@@ -239,6 +245,22 @@ impl Config {
                 .parse()
                 .unwrap_or(0),
             smtp: SmtpConfig::from_env(),
+            webauthn_rp_name: env::var("WEBAUTHN_RP_NAME")
+                .unwrap_or_else(|_| "GitFox".to_string()),
+            webauthn_rp_id: env::var("WEBAUTHN_RP_ID")
+                .unwrap_or_else(|_| {
+                    // Extract domain from base_url
+                    let base = env::var("GITFOX_BASE_URL")
+                        .unwrap_or_else(|_| "http://localhost:8080".to_string());
+                    base.split("://")
+                        .nth(1)
+                        .and_then(|s| s.split(':').next())
+                        .unwrap_or("localhost")
+                        .to_string()
+                }),
+            webauthn_origin: env::var("WEBAUTHN_ORIGIN")
+                .unwrap_or_else(|_| env::var("GITFOX_BASE_URL")
+                    .unwrap_or_else(|_| "http://localhost:8080".to_string())),
         }
     }
 }

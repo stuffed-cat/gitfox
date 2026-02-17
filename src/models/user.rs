@@ -26,6 +26,10 @@ pub struct User {
     #[serde(skip_serializing)]
     pub password_reset_token: Option<String>,
     pub password_reset_sent_at: Option<DateTime<Utc>>,
+    // Two-factor authentication
+    #[serde(default)]
+    pub two_factor_enabled: bool,
+    pub two_factor_required_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
@@ -100,4 +104,20 @@ pub struct Claims {
     pub role: UserRole,
     pub exp: i64,
     pub iat: i64,
+}
+
+// Two-factor authentication response during login
+#[derive(Debug, Serialize)]
+pub struct TwoFactorRequiredResponse {
+    pub requires_two_factor: bool,
+    pub available_methods: Vec<String>, // ["totp", "webauthn", "recovery"]
+    pub temporary_token: String, // Used for completing 2FA verification
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct VerifyTwoFactorRequest {
+    pub temporary_token: String,
+    pub method: String, // "totp", "webauthn", or "recovery"
+    pub code: Option<String>, // For TOTP and recovery codes
+    pub webauthn_response: Option<String>, // For WebAuthn
 }

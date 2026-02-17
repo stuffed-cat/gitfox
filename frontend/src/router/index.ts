@@ -130,6 +130,12 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/-/profile/two-factor',
+    name: 'TwoFactor',
+    component: () => import('@/views/settings/TwoFactorView.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/-/profile/preferences',
     name: 'UserPreferences',
     component: () => import('@/views/settings/UserPreferencesView.vue'),
@@ -316,6 +322,26 @@ const router = createRouter({
   routes
 })
 
+// 安全的 redirect 路径验证（防止 Open Redirect 攻击）
+function isSafeRedirect(path: string): boolean {
+  if (!path || typeof path !== 'string') return false
+  
+  // 只允许内部路径（以 / 开头，不包含协议）
+  if (!path.startsWith('/')) return false
+  if (path.includes('://')) return false
+  if (path.startsWith('//')) return false // 防止 protocol-relative URL
+  
+  return true
+}
+
+// OAuth redirect URL 验证（允许外部 URL，用于 OAuth 回调）
+// 注意：OAuth redirect_uri 的验证在后端完成（检查是否匹配注册的应用配置）
+// 这里只是传递给 OAuth 授权端点，不做验证
+function isOAuthFlow(to: any): boolean {
+  // OAuth2 授权流程会通过 query 参数传递 redirect_uri
+  return to.query && typeof to.query.redirect_uri === 'string'
+}
+
 router.beforeEach((to, _from, next) => {
   const authStore = useAuthStore()
   
@@ -324,7 +350,12 @@ router.beforeEach((to, _from, next) => {
     if (to.path === '/') {
       next({ name: 'ExploreProjects' })
     } else {
-      next({ name: 'Login', query: { redirect: to.fullPath } })
+      // 安全地保存 redirect 路径到 sessionStorage（不通过 URL 传递，防止 XSS）
+      // 注意：OAuth 流程除外，OAuth 使用 redirect_uri query 参数（后端验证）
+      if (!isOAuthFlow(to) && isSafeRedirect(to.fullPath)) {
+        sessionStorage.setItem('login_redirect', to.fullPath)
+      }
+      next({ name: 'Login' })
     }
   } else if (to.meta.requiresAdmin && !authStore.isAdmin) {
     // 需要管理员权限但非管理员

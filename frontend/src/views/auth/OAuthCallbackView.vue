@@ -49,6 +49,18 @@ const providerName = computed(() => {
   return names[provider] || provider || 'OAuth';
 });
 
+// 安全的 redirect 路径验证（防止 Open Redirect 攻击）
+function isSafeRedirect(path: string): boolean {
+  if (!path || typeof path !== 'string') return false
+  
+  // 只允许内部路径（以 / 开头，不包含协议）
+  if (!path.startsWith('/')) return false
+  if (path.includes('://')) return false
+  if (path.startsWith('//')) return false // 防止 protocol-relative URL
+  
+  return true
+}
+
 onMounted(async () => {
   try {
     const token = route.query.token as string;
@@ -71,9 +83,11 @@ onMounted(async () => {
     
     loading.value = false;
     
-    // Redirect to intended page or dashboard
-    const redirectTo = sessionStorage.getItem('oauth_redirect') || '/';
-    sessionStorage.removeItem('oauth_redirect');
+    // Redirect to intended page or dashboard (use login_redirect key, validate for security)
+    const savedRedirect = sessionStorage.getItem('login_redirect');
+    sessionStorage.removeItem('login_redirect');
+    
+    const redirectTo = (savedRedirect && isSafeRedirect(savedRedirect)) ? savedRedirect : '/';
     
     setTimeout(() => {
       router.push(redirectTo);

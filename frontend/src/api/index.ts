@@ -49,6 +49,12 @@ import type {
   OAuthProviderAdmin,
   CreateOAuthProviderRequest,
   UpdateOAuthProviderRequest,
+  // 2FA types
+  TwoFactorRequiredResponse,
+  VerifyTwoFactorRequest,
+  TwoFactorStatus,
+  TotpSetupResponse,
+  RecoveryCodesResponse,
 } from '@/types'
 
 // 的项目路径
@@ -84,7 +90,7 @@ class ApiClient {
 
   // Auth
   auth = {
-    login: async (data: LoginRequest): Promise<LoginResponse> => {
+    login: async (data: LoginRequest): Promise<LoginResponse | TwoFactorRequiredResponse> => {
       const response = await this.client.post('/auth/login', data)
       return response.data
     },
@@ -116,6 +122,70 @@ class ApiClient {
     },
     resetPassword: async (token: string, new_password: string): Promise<{ success: boolean; message: string; user: User }> => {
       const response = await this.client.post('/auth/reset-password', { token, new_password })
+      return response.data
+    },
+    // Two-factor authentication
+    verifyTwoFactor: async (data: import('@/types').VerifyTwoFactorRequest): Promise<LoginResponse> => {
+      const response = await this.client.post('/auth/verify-two-factor', data)
+      return response.data
+    },
+    // Passkey direct login (no password required)
+    passkeyLoginStart: async (): Promise<{ challenge: any, state_key: string }> => {
+      const response = await this.client.post('/auth/passkey/login/start')
+      return response.data
+    },
+    passkeyLoginFinish: async (data: { state_key: string, credential: any }): Promise<LoginResponse> => {
+      const response = await this.client.post('/auth/passkey/login/finish', data)
+      return response.data
+    },
+  }
+
+  // Two-Factor Authentication
+  twoFactor = {
+    getStatus: async (): Promise<import('@/types').TwoFactorStatus> => {
+      const response = await this.client.get('/user/two-factor/status')
+      return response.data
+    },
+    setupTotp: async (): Promise<import('@/types').TotpSetupResponse> => {
+      const response = await this.client.post('/user/two-factor/totp/setup')
+      return response.data
+    },
+    enableTotp: async (state_key: string, totp_code: string): Promise<{ message: string }> => {
+      const response = await this.client.post('/user/two-factor/totp/enable', { state_key, totp_code })
+      return response.data
+    },
+    disableTotp: async (totp_code: string): Promise<{ message: string }> => {
+      const response = await this.client.post('/user/two-factor/totp/disable', { totp_code })
+      return response.data
+    },
+    regenerateRecoveryCodes: async (): Promise<import('@/types').RecoveryCodesResponse> => {
+      const response = await this.client.post('/user/two-factor/recovery-codes/regenerate')
+      return response.data
+    },
+    getRecoveryCodesCount: async (): Promise<{ count: number }> => {
+      const response = await this.client.get('/user/two-factor/recovery-codes/count')
+      return response.data
+    },
+    deleteWebAuthnCredential: async (id: number): Promise<{ message: string }> => {
+      const response = await this.client.delete(`/user/two-factor/webauthn/${id}`)
+      return response.data
+    },
+    // WebAuthn registration
+    webauthnRegisterStart: async (): Promise<import('@/types').WebAuthnRegisterStartResponse> => {
+      const response = await this.client.post('/user/two-factor/webauthn/register/start', {})
+      return response.data
+    },
+    webauthnRegisterFinish: async (data: import('@/types').WebAuthnRegisterFinishRequest): Promise<{ message: string }> => {
+      const response = await this.client.post('/user/two-factor/webauthn/register/finish', data)
+      return response.data
+    },
+    // WebAuthn authentication (for login)
+    webauthnAuthStart: async (temporary_token: string): Promise<import('@/types').WebAuthnAuthStartResponse> => {
+      const response = await this.client.post('/auth/webauthn/start', { temporary_token })
+      return response.data
+    },
+    webauthnAuthFinish: async (data: import('@/types').WebAuthnAuthFinishRequest): Promise<import('@/types').LoginResponse> => {
+      const response = await this.client.post('/auth/webauthn/finish', data)
       return response.data
     }
   }

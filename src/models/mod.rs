@@ -12,6 +12,7 @@ pub mod ssh_key;
 pub mod issue;
 pub mod personal_access_token;
 pub mod oauth;
+pub mod two_factor;
 
 pub use user::*;
 pub use project::*;
@@ -27,3 +28,4 @@ pub use ssh_key::*;
 pub use issue::*;
 pub use personal_access_token::*;
 pub use oauth::*;
+pub use two_factor::*;
