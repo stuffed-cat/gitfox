@@ -1,0 +1,30 @@
+deploy:staging:
+  stage: deploy
+  script:
+    - echo "Deploying to staging environment"
+    - ./deploy.sh staging
+  when: manual
+  only:
+    - develop
+  environment:
+    name: staging
+    url: https://staging.gitfox.example.com
+  tags:
+    - deploy
+
+deploy:production:
+  stage: deploy
+  script:
+    - echo "Deploying to production environment"
+    - ./deploy.sh production
+  only:
+    - main
+  when: manual
+  environment:
+    name: production
+    url: https://gitfox.example.com
+  needs:
+    - test:unit
+    - test:clippy
+  tags:
+    - deploy

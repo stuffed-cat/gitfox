@@ -68,6 +68,13 @@ export const userSettingsMenuConfig: NavSection[] = [
         icon: 'oauth',
         activeMatch: /^\/-\/profile\/applications/
       },
+      { 
+        id: 'runners', 
+        label: '私有 Runners', 
+        to: '/-/profile/runners', 
+        icon: 'pipeline',
+        activeMatch: /^\/-\/profile\/runners/
+      },
     ]
   }
 ]

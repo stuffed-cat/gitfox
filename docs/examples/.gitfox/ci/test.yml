@@ -1,0 +1,25 @@
+test:unit:
+  stage: test
+  script:
+    - cargo test --all
+  needs:
+    - build
+  coverage: '/\d+\.\d+% coverage/'
+  tags:
+    - rust
+
+test:clippy:
+  stage: test
+  script:
+    - cargo clippy -- -D warnings
+  allow_failure: true
+  tags:
+    - rust
+
+test:fmt:
+  stage: test
+  script:
+    - cargo fmt -- --check
+  allow_failure: true
+  tags:
+    - rust

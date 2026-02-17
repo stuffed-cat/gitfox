@@ -173,6 +173,12 @@ const routes = [
     component: () => import('@/views/settings/OAuthApplicationsView.vue'),
     meta: { requiresAuth: true }
   },
+  {
+    path: '/-/profile/runners',
+    name: 'UserRunners',
+    component: () => import('@/views/settings/UserRunnersView.vue'),
+    meta: { requiresAuth: true }
+  },
   
   // Admin routes (require admin role)
   {
@@ -211,6 +217,12 @@ const routes = [
     component: () => import('@/views/admin/AdminOAuthProvidersView.vue'),
     meta: { requiresAuth: true, requiresAdmin: true }
   },
+  {
+    path: '/admin/runners',
+    name: 'AdminRunners',
+    component: () => import('@/views/admin/AdminRunnersView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true }
+  },
   
   // User/Group profile (single segment path - handles both users and groups)
   {
@@ -231,6 +243,12 @@ const routes = [
     path: '/:namespace/-/settings',
     name: 'GroupSettings',
     component: () => import('@/views/groups/GroupSettingsView.vue'),
+    meta: { requiresAuth: true, contextType: 'group' }
+  },
+  {
+    path: '/:namespace/-/runners',
+    name: 'GroupRunners',
+    component: () => import('@/views/groups/GroupRunnersView.vue'),
     meta: { requiresAuth: true, contextType: 'group' }
   },
   
@@ -315,6 +333,11 @@ const routes = [
         path: '-/pipelines/:pipelineId',
         name: 'PipelineDetail',
         component: () => import('@/views/pipelines/PipelineDetailView.vue')
+      },
+      {
+        path: '-/runners',
+        name: 'ProjectRunners',
+        component: () => import('@/views/projects/ProjectRunnersView.vue')
       },
       {
         path: '-/settings',

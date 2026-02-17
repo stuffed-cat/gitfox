@@ -38,6 +38,11 @@ import type {
   CreatePatRequest,
   CreatePatResponse,
   PatScopeInfo,
+  // Runner types
+  Runner,
+  CreateRunnerRequest,
+  UpdateRunnerRequest,
+  CreateRunnerResponse,
   // OAuth types
   OAuthProviderInfo,
   OAuthApplication,
@@ -659,6 +664,26 @@ class ApiClient {
     }
   }
 
+  // User Issues
+  issues = {
+    my: async (options?: { 
+      scope?: 'assigned' | 'created' | 'all'
+      state?: 'open' | 'closed' | 'all'
+      page?: number
+      per_page?: number 
+    }): Promise<any[]> => {
+      const params = new URLSearchParams({
+        ...(options?.scope && { scope: options.scope }),
+        ...(options?.state && { state: options.state }),
+        ...(options?.page && { page: options.page.toString() }),
+        ...(options?.per_page && { per_page: options.per_page.toString() })
+      })
+      
+      const response = await this.client.get(`/issues?${params}`)
+      return response.data
+    }
+  }
+
   // Admin OAuth Providers Management
   adminOAuth = {
     listProviders: async (): Promise<OAuthProviderAdmin[]> => {
@@ -679,6 +704,77 @@ class ApiClient {
     },
     deleteProvider: async (id: number): Promise<void> => {
       await this.client.delete(`/admin/oauth/providers/${id}`)
+    },
+  }
+
+  // CI/CD Runners
+  runners = {
+    // Admin - system-level runners
+    adminList: async (): Promise<Runner[]> => {
+      const response = await this.client.get('/admin/runners')
+      return response.data
+    },
+    adminCreate: async (data: CreateRunnerRequest): Promise<CreateRunnerResponse> => {
+      const response = await this.client.post('/admin/runners', data)
+      return response.data
+    },
+    adminUpdate: async (id: string, data: UpdateRunnerRequest): Promise<Runner> => {
+      const response = await this.client.put(`/admin/runners/${id}`, data)
+      return response.data
+    },
+    adminDelete: async (id: string): Promise<void> => {
+      await this.client.delete(`/admin/runners/${id}`)
+    },
+
+    // User - private runners
+    userList: async (): Promise<Runner[]> => {
+      const response = await this.client.get('/user/runners')
+      return response.data
+    },
+    userCreate: async (data: CreateRunnerRequest): Promise<CreateRunnerResponse> => {
+      const response = await this.client.post('/user/runners', data)
+      return response.data
+    },
+    userUpdate: async (id: string, data: UpdateRunnerRequest): Promise<Runner> => {
+      const response = await this.client.put(`/user/runners/${id}`, data)
+      return response.data
+    },
+    userDelete: async (id: string): Promise<void> => {
+      await this.client.delete(`/user/runners/${id}`)
+    },
+
+    // Namespace - group runners
+    namespaceList: async (namespace: string): Promise<Runner[]> => {
+      const response = await this.client.get(`/groups/${namespace}/runners`)
+      return response.data
+    },
+    namespaceCreate: async (namespace: string, data: CreateRunnerRequest): Promise<CreateRunnerResponse> => {
+      const response = await this.client.post(`/groups/${namespace}/runners`, data)
+      return response.data
+    },
+    namespaceUpdate: async (namespace: string, id: string, data: UpdateRunnerRequest): Promise<Runner> => {
+      const response = await this.client.put(`/groups/${namespace}/runners/${id}`, data)
+      return response.data
+    },
+    namespaceDelete: async (namespace: string, id: string): Promise<void> => {
+      await this.client.delete(`/groups/${namespace}/runners/${id}`)
+    },
+
+    // Project - project runners
+    projectList: async (path: ProjectPath): Promise<Runner[]> => {
+      const response = await this.client.get(`${this.projectPath(path)}/runners`)
+      return response.data
+    },
+    projectCreate: async (path: ProjectPath, data: CreateRunnerRequest): Promise<CreateRunnerResponse> => {
+      const response = await this.client.post(`${this.projectPath(path)}/runners`, data)
+      return response.data
+    },
+    projectUpdate: async (path: ProjectPath, id: string, data: UpdateRunnerRequest): Promise<Runner> => {
+      const response = await this.client.put(`${this.projectPath(path)}/runners/${id}`, data)
+      return response.data
+    },
+    projectDelete: async (path: ProjectPath, id: string): Promise<void> => {
+      await this.client.delete(`${this.projectPath(path)}/runners/${id}`)
     },
   }
 }

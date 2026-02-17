@@ -1,0 +1,17 @@
+build:
+  stage: build
+  script:
+    - cargo build --release
+    - cargo build --release --bin gitfox-shell
+  artifacts:
+    paths:
+      - target/release/devops
+      - target/release/gitfox-shell
+    expire_in: 1 day
+  cache:
+    key: cargo-cache-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cargo/
+      - target/
+  tags:
+    - rust

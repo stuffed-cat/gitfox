@@ -43,6 +43,13 @@ export const adminMenuConfig: NavSection[] = [
         icon: 'group',
         activeMatch: /^\/admin\/groups/
       },
+      { 
+        id: 'admin-runners', 
+        label: 'Runners', 
+        to: '/admin/runners', 
+        icon: 'pipeline',
+        activeMatch: /^\/admin\/runners/
+      },
     ]
   },
   {

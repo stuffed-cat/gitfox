@@ -85,6 +85,159 @@ pub async fn list_issues(
     Ok(HttpResponse::Ok().json(issues_with_author))
 }
 
+/// Get issues for the current user (assigned or created)
+pub async fn my_issues(
+    pool: web::Data<PgPool>,
+    query: web::Query<MyIssuesQuery>,
+    user: AuthenticatedUser,
+) -> AppResult<HttpResponse> {
+    let scope = query.scope.as_deref().unwrap_or("assigned");
+    let state_filter = query.state.as_deref().unwrap_or("open");
+    let page = query.page.unwrap_or(1);
+    let per_page = query.per_page.unwrap_or(20).max(1).min(100);
+    let offset = (page - 1) * per_page;
+
+    #[derive(Debug, FromRow)]
+    struct IssueWithProjectRow {
+        id: i64,
+        project_id: i64,
+        project_name: String,
+        namespace_path: String,
+        iid: i64,
+        title: String,
+        description: Option<String>,
+        state: String,
+        labels: Vec<String>,
+        due_date: Option<chrono::NaiveDate>,
+        weight: Option<i32>,
+        confidential: bool,
+        author_id: i64,
+        author_username: String,
+        author_display_name: Option<String>,
+        assignee_id: Option<i64>,
+        assignee_username: Option<String>,
+        assignee_display_name: Option<String>,
+        comment_count: Option<i64>,
+        created_at: chrono::DateTime<chrono::Utc>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+        closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
+    let query_str = match scope {
+        "created" => {
+            r#"
+            SELECT 
+                i.id, i.project_id, i.iid, i.title, i.description, i.state,
+                i.labels, i.due_date, i.weight, i.confidential,
+                i.author_id, i.assignee_id,
+                i.created_at, i.updated_at, i.closed_at,
+                p.name as project_name,
+                n.path as namespace_path,
+                u.username as author_username, u.display_name as author_display_name,
+                a.username as assignee_username, a.display_name as assignee_display_name,
+                (SELECT COUNT(*) FROM issue_comments WHERE issue_id = i.id) as comment_count
+            FROM issues i
+            JOIN projects p ON i.project_id = p.id
+            JOIN namespaces n ON p.namespace_id = n.id
+            JOIN users u ON i.author_id = u.id
+            LEFT JOIN users a ON i.assignee_id = a.id
+            WHERE i.author_id = $1 AND ($2 = 'all' OR i.state = $2)
+            ORDER BY i.updated_at DESC
+            LIMIT $3 OFFSET $4
+            "#
+        }
+        "assigned" => {
+            r#"
+            SELECT 
+                i.id, i.project_id, i.iid, i.title, i.description, i.state,
+                i.labels, i.due_date, i.weight, i.confidential,
+                i.author_id, i.assignee_id,
+                i.created_at, i.updated_at, i.closed_at,
+                p.name as project_name,
+                n.path as namespace_path,
+                u.username as author_username, u.display_name as author_display_name,
+                a.username as assignee_username, a.display_name as assignee_display_name,
+                (SELECT COUNT(*) FROM issue_comments WHERE issue_id = i.id) as comment_count
+            FROM issues i
+            JOIN projects p ON i.project_id = p.id
+            JOIN namespaces n ON p.namespace_id = n.id
+            JOIN users u ON i.author_id = u.id
+            LEFT JOIN users a ON i.assignee_id = a.id
+            WHERE i.assignee_id = $1 AND ($2 = 'all' OR i.state = $2)
+            ORDER BY i.updated_at DESC
+            LIMIT $3 OFFSET $4
+            "#
+        }
+        _ => {
+            // "all" - both created and assigned
+            r#"
+            SELECT 
+                i.id, i.project_id, i.iid, i.title, i.description, i.state,
+                i.labels, i.due_date, i.weight, i.confidential,
+                i.author_id, i.assignee_id,
+                i.created_at, i.updated_at, i.closed_at,
+                p.name as project_name,
+                n.path as namespace_path,
+                u.username as author_username, u.display_name as author_display_name,
+                a.username as assignee_username, a.display_name as assignee_display_name,
+                (SELECT COUNT(*) FROM issue_comments WHERE issue_id = i.id) as comment_count
+            FROM issues i
+            JOIN projects p ON i.project_id = p.id
+            JOIN namespaces n ON p.namespace_id = n.id
+            JOIN users u ON i.author_id = u.id
+            LEFT JOIN users a ON i.assignee_id = a.id
+            WHERE (i.author_id = $1 OR i.assignee_id = $1) AND ($2 = 'all' OR i.state = $2)
+            ORDER BY i.updated_at DESC
+            LIMIT $3 OFFSET $4
+            "#
+        }
+    };
+
+    let issues = sqlx::query_as::<_, IssueWithProjectRow>(query_str)
+        .bind(user.user_id)
+        .bind(state_filter)
+        .bind(per_page as i64)
+        .bind(offset as i64)
+        .fetch_all(pool.get_ref())
+        .await?;
+
+    let issues_with_project: Vec<IssueWithProject> = issues
+        .into_iter()
+        .map(|i| IssueWithProject {
+            id: i.id,
+            project_id: i.project_id,
+            project_name: i.project_name,
+            namespace_path: i.namespace_path,
+            iid: i.iid,
+            title: i.title,
+            description: i.description,
+            state: i.state,
+            labels: i.labels,
+            due_date: i.due_date,
+            weight: i.weight,
+            confidential: i.confidential,
+            author: IssueAuthor {
+                id: i.author_id,
+                username: i.author_username,
+                display_name: i.author_display_name,
+                avatar_url: None,
+            },
+            assignee: i.assignee_id.map(|aid| IssueAuthor {
+                id: aid,
+                username: i.assignee_username.unwrap_or_default(),
+                display_name: i.assignee_display_name,
+                avatar_url: None,
+            }),
+            comment_count: i.comment_count.unwrap_or(0),
+            created_at: i.created_at,
+            updated_at: i.updated_at,
+            closed_at: i.closed_at,
+        })
+        .collect();
+
+    Ok(HttpResponse::Ok().json(issues_with_project))
+}
+
 /// Get a single issue
 pub async fn get_issue(
     pool: web::Data<PgPool>,
@@ -462,6 +615,36 @@ pub struct ListIssuesQuery {
     pub state: Option<String>,
     pub page: Option<i32>,
     pub per_page: Option<i32>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct MyIssuesQuery {
+    pub scope: Option<String>,  // assigned, created, all
+    pub state: Option<String>,   // open, closed, all
+    pub page: Option<i32>,
+    pub per_page: Option<i32>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct IssueWithProject {
+    pub id: i64,
+    pub project_id: i64,
+    pub project_name: String,
+    pub namespace_path: String,
+    pub iid: i64,
+    pub title: String,
+    pub description: Option<String>,
+    pub state: String,
+    pub labels: Vec<String>,
+    pub due_date: Option<chrono::NaiveDate>,
+    pub weight: Option<i32>,
+    pub confidential: bool,
+    pub author: IssueAuthor,
+    pub assignee: Option<IssueAuthor>,
+    pub comment_count: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub closed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // Internal row types for queries

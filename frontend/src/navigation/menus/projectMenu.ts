@@ -87,6 +87,13 @@ export function createProjectMenuConfig(context: NavContext): NavSection[] {
           icon: 'pipeline',
           activeMatch: /\/-\/pipelines/
         },
+        { 
+          id: 'runners', 
+          label: 'Runners', 
+          to: `${basePath}/-/runners`, 
+          icon: 'pipeline',
+          activeMatch: /\/-\/runners/
+        },
       ]
     },
     {

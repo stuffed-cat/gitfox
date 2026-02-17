@@ -45,6 +45,19 @@ export function createGroupMenuConfig(context: NavContext): NavSection[] {
       ]
     },
     {
+      id: 'group-build',
+      title: '构建',
+      items: [
+        { 
+          id: 'group-runners', 
+          label: 'Runners', 
+          to: `${basePath}/-/runners`, 
+          icon: 'pipeline',
+          activeMatch: /\/-\/runners/
+        },
+      ]
+    },
+    {
       id: 'group-manage',
       title: '管理',
       items: [

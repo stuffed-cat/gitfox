@@ -251,6 +251,54 @@ export interface PipelineJob {
   updated_at: string
 }
 
+// CI/CD Runners
+export interface Runner {
+  id: string
+  name: string
+  description?: string
+  scope: 'system' | 'user' | 'namespace' | 'project'
+  user_id?: string
+  namespace_id?: string
+  project_id?: string
+  token_preview: string
+  is_active: boolean
+  status: 'idle' | 'running' | 'offline'
+  last_contact_at?: string
+  tags: string[]
+  run_untagged: boolean
+  locked: boolean
+  maximum_timeout?: number
+  version?: string
+  platform?: string
+  architecture?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateRunnerRequest {
+  name: string
+  description?: string
+  tags?: string[]
+  run_untagged?: boolean
+  locked?: boolean
+  maximum_timeout?: number
+}
+
+export interface UpdateRunnerRequest {
+  name?: string
+  description?: string
+  tags?: string[]
+  is_active?: boolean
+  run_untagged?: boolean
+  locked?: boolean
+  maximum_timeout?: number
+}
+
+export interface CreateRunnerResponse {
+  runner: Runner
+  token: string
+}
+
 export interface Webhook {
   id: string
   project_id: string

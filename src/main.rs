@@ -3,6 +3,7 @@ use actix_web::{middleware::Logger, web, App, HttpServer};
 use actix_files as fs;
 use dotenv::dotenv;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 mod config;
 mod db;
@@ -37,6 +38,9 @@ async fn main() -> std::io::Result<()> {
     // Initialize message queue
     let message_queue = RedisMessageQueue::new(redis_pool.clone());
 
+    // Initialize CI/CD Runner Manager
+    let runner_manager = Arc::new(RwLock::new(handlers::runner::RunnerManager::new()));
+
     // Run database migrations
     sqlx::migrate!("./migrations")
         .run(&pg_pool)
@@ -64,8 +68,7 @@ async fn main() -> std::io::Result<()> {
 
     log::info!("Starting GitFox HTTP server at {}", server_addr);
 
-    // Create assets directory if it doesn't exist
-    std::fs::create_dir_all("assets").ok();
+    let runner_manager_clone = runner_manager.clone();
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -81,6 +84,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(redis_pool.clone()))
             .app_data(web::Data::new(message_queue.clone()))
             .app_data(web::Data::new(config.clone()))
+            .app_data(web::Data::new(runner_manager_clone.clone()))
             .service(fs::Files::new("/assets", "./assets").show_files_listing())
             .configure(handlers::configure_routes)
     })

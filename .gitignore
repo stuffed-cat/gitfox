@@ -7,3 +7,4 @@
 .env
 /data
 assets
+/gitfox-runner/target

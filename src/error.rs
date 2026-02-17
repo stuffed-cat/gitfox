@@ -111,6 +111,18 @@ impl From<validator::ValidationErrors> for AppError {
     }
 }
 
+impl From<serde_json::Error> for AppError {
+    fn from(err: serde_json::Error) -> Self {
+        AppError::InternalError(format!("JSON error: {}", err))
+    }
+}
+
+impl From<serde_yaml::Error> for AppError {
+    fn from(err: serde_yaml::Error) -> Self {
+        AppError::InternalError(format!("YAML error: {}", err))
+    }
+}
+
 // Convenience constructors
 impl AppError {
     pub fn internal<S: Into<String>>(msg: S) -> Self {

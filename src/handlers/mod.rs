@@ -18,6 +18,7 @@ pub mod personal_access_token;
 pub mod oauth;
 pub mod two_factor;
 pub mod search;
+pub mod runner;
 
 use actix_web::{web, HttpResponse};
 use serde::Serialize;
@@ -87,6 +88,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // Global search route (public)
             .route("/search", web::get().to(search::search))
             
+            // User's issues (requires authentication)
+            .route("/issues", web::get().to(issue::my_issues))
+            
             // Auth routes
             .route("/auth/register", web::post().to(auth::register))
             .route("/auth/login", web::post().to(auth::login))
@@ -123,6 +127,12 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/admin/oauth/providers/{id}", web::put().to(oauth::admin_update_provider))
             .route("/admin/oauth/providers/{id}", web::delete().to(oauth::admin_delete_provider))
             
+            // Admin CI/CD Runner management (system-level runners)
+            .route("/admin/runners", web::get().to(runner::admin_list_runners))
+            .route("/admin/runners", web::post().to(runner::admin_create_runner))
+            .route("/admin/runners/{id}", web::put().to(runner::admin_update_runner))
+            .route("/admin/runners/{id}", web::delete().to(runner::admin_delete_runner))
+            
             // User routes
             .route("/users", web::get().to(user::list_users))
             .route("/users/avatars", web::post().to(user::get_avatars_by_emails))
@@ -153,6 +163,12 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // OAuth Identity routes for current user (linked social accounts)
             .route("/user/identities", web::get().to(oauth::list_identities))
             .route("/user/identities/{id}", web::delete().to(oauth::unlink_identity))
+            
+            // User CI/CD Runner management (user-level private runners)
+            .route("/user/runners", web::get().to(runner::user_list_runners))
+            .route("/user/runners", web::post().to(runner::user_create_runner))
+            .route("/user/runners/{id}", web::put().to(runner::user_update_runner))
+            .route("/user/runners/{id}", web::delete().to(runner::user_delete_runner))
             
             // OAuth Application routes (GitFox as OAuth provider)
             .route("/oauth/applications", web::get().to(oauth::list_applications))
@@ -253,6 +269,12 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/hooks/{id}", web::delete().to(webhook::delete_webhook))
             .route("/projects/{namespace}/{project}/hooks/{id}/test", web::post().to(webhook::test_webhook))
             
+            // Project CI/CD Runner management
+            .route("/projects/{namespace}/{project}/runners", web::get().to(runner::project_list_runners))
+            .route("/projects/{namespace}/{project}/runners", web::post().to(runner::project_create_runner))
+            .route("/projects/{namespace}/{project}/runners/{id}", web::put().to(runner::project_update_runner))
+            .route("/projects/{namespace}/{project}/runners/{id}", web::delete().to(runner::project_delete_runner))
+            
             // Namespace/Group routes - specific routes MUST come before generic {path:.*} routes
             .route("/groups", web::get().to(namespace::list_groups))
             .route("/groups", web::post().to(namespace::create_group))
@@ -262,6 +284,11 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/groups/{path:.*}/members", web::post().to(namespace::add_group_member))
             .route("/groups/{path:.*}/projects", web::get().to(namespace::list_group_projects))
             .route("/groups/{path:.*}/subgroups", web::get().to(namespace::list_subgroups))
+            // Namespace CI/CD Runner management
+            .route("/groups/{path:.*}/runners", web::get().to(runner::namespace_list_runners))
+            .route("/groups/{path:.*}/runners", web::post().to(runner::namespace_create_runner))
+            .route("/groups/{path:.*}/runners/{id}", web::put().to(runner::namespace_update_runner))
+            .route("/groups/{path:.*}/runners/{id}", web::delete().to(runner::namespace_delete_runner))
             // Generic group routes come last
             .route("/groups/{path:.*}", web::get().to(namespace::get_group))
             .route("/groups/{path:.*}", web::put().to(namespace::update_group))
@@ -271,5 +298,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/namespaces", web::get().to(namespace::list_namespaces))
             .route("/namespaces/for-project-creation", web::get().to(namespace::list_namespaces_for_project_creation))
             .route("/namespaces/{path:.*}", web::get().to(namespace::get_namespace))
+            
+            // CI/CD Runner WebSocket endpoint
+            .route("/runner/connect", web::get().to(runner::runner_connect))
     );
 }
