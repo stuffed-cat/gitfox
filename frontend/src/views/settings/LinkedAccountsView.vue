@@ -212,7 +212,6 @@ async function unlinkIdentity() {
   h1 {
     font-size: 24px;
     font-weight: 600;
-    margin: 0 0 8px;
   }
 
   .page-description {

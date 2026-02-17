@@ -1,6 +1,7 @@
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
+use rand::Rng;
 use sqlx::PgPool;
 
 
@@ -251,5 +252,165 @@ impl UserService {
 
         log::info!("Created initial admin user '{}'", username);
         Ok(())
+    }
+
+    // ─── Email Confirmation ────────────────────────────────
+
+    /// Generate a secure random token
+    fn generate_token() -> String {
+        let mut rng = rand::thread_rng();
+        let bytes: [u8; 32] = rng.gen();
+        hex::encode(bytes)
+    }
+
+    /// Generate email confirmation token for a user
+    pub async fn generate_email_confirmation_token(pool: &PgPool, user_id: i64) -> AppResult<String> {
+        let token = Self::generate_token();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"UPDATE users 
+               SET email_confirmation_token = $2, 
+                   email_confirmation_sent_at = $3,
+                   updated_at = $3
+               WHERE id = $1"#
+        )
+        .bind(user_id)
+        .bind(&token)
+        .bind(now)
+        .execute(pool)
+        .await?;
+
+        Ok(token)
+    }
+
+    /// Confirm email with token
+    pub async fn confirm_email(pool: &PgPool, token: &str) -> AppResult<User> {
+        let user = sqlx::query_as::<_, User>(
+            "SELECT * FROM users WHERE email_confirmation_token = $1"
+        )
+        .bind(token)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::BadRequest("Invalid or expired confirmation token".to_string()))?;
+
+        // Check if token is expired (24 hours)
+        if let Some(sent_at) = user.email_confirmation_sent_at {
+            if Utc::now() - sent_at > Duration::hours(24) {
+                return Err(AppError::BadRequest("Confirmation token has expired".to_string()));
+            }
+        }
+
+        let updated_user = sqlx::query_as::<_, User>(
+            r#"UPDATE users 
+               SET email_confirmed = true, 
+                   email_confirmation_token = NULL,
+                   updated_at = NOW()
+               WHERE id = $1
+               RETURNING *"#
+        )
+        .bind(user.id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(updated_user)
+    }
+
+    /// Resend email confirmation token
+    pub async fn resend_email_confirmation(pool: &PgPool, user_id: i64) -> AppResult<String> {
+        let user = Self::get_user_by_id(pool, user_id).await?;
+        
+        if user.email_confirmed {
+            return Err(AppError::BadRequest("Email is already confirmed".to_string()));
+        }
+
+        // Check rate limiting (minimum 1 minute between sends)
+        if let Some(sent_at) = user.email_confirmation_sent_at {
+            if Utc::now() - sent_at < Duration::minutes(1) {
+                return Err(AppError::BadRequest("Please wait before requesting another confirmation email".to_string()));
+            }
+        }
+
+        Self::generate_email_confirmation_token(pool, user_id).await
+    }
+
+    // ─── Password Reset ────────────────────────────────────
+
+    /// Generate password reset token for a user by email
+    pub async fn generate_password_reset_token(pool: &PgPool, email: &str) -> AppResult<(User, String)> {
+        let user = sqlx::query_as::<_, User>(
+            "SELECT * FROM users WHERE email = $1 AND is_active = true"
+        )
+        .bind(email)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("No active user found with this email".to_string()))?;
+
+        // Check rate limiting (minimum 1 minute between sends)
+        if let Some(sent_at) = user.password_reset_sent_at {
+            if Utc::now() - sent_at < Duration::minutes(1) {
+                return Err(AppError::BadRequest("Please wait before requesting another password reset".to_string()));
+            }
+        }
+
+        let token = Self::generate_token();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"UPDATE users 
+               SET password_reset_token = $2, 
+                   password_reset_sent_at = $3,
+                   updated_at = $3
+               WHERE id = $1"#
+        )
+        .bind(user.id)
+        .bind(&token)
+        .bind(now)
+        .execute(pool)
+        .await?;
+
+        Ok((user, token))
+    }
+
+    /// Verify password reset token and return user
+    pub async fn verify_password_reset_token(pool: &PgPool, token: &str) -> AppResult<User> {
+        let user = sqlx::query_as::<_, User>(
+            "SELECT * FROM users WHERE password_reset_token = $1"
+        )
+        .bind(token)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::BadRequest("Invalid or expired reset token".to_string()))?;
+
+        // Check if token is expired (24 hours)
+        if let Some(sent_at) = user.password_reset_sent_at {
+            if Utc::now() - sent_at > Duration::hours(24) {
+                return Err(AppError::BadRequest("Password reset token has expired".to_string()));
+            }
+        }
+
+        Ok(user)
+    }
+
+    /// Reset password with token
+    pub async fn reset_password(pool: &PgPool, token: &str, new_password: &str) -> AppResult<User> {
+        let user = Self::verify_password_reset_token(pool, token).await?;
+
+        let new_hash = hash(new_password, DEFAULT_COST)?;
+
+        let updated_user = sqlx::query_as::<_, User>(
+            r#"UPDATE users 
+               SET password_hash = $2, 
+                   password_reset_token = NULL,
+                   updated_at = NOW()
+               WHERE id = $1
+               RETURNING *"#
+        )
+        .bind(user.id)
+        .bind(new_hash)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(updated_user)
     }
 }

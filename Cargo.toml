@@ -59,3 +59,6 @@ urlencoding = "2"
 
 # HTTP Client (for OAuth)
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# Email
+lettre = { version = "0.11", features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder"], default-features = false }

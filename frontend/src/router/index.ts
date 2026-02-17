@@ -21,6 +21,24 @@ const routes = [
     component: () => import('@/views/auth/OAuthCallbackView.vue'),
     meta: { guest: true }
   },
+  {
+    path: '/confirm-email',
+    name: 'ConfirmEmail',
+    component: () => import('@/views/auth/ConfirmEmailView.vue'),
+    meta: { guest: true }
+  },
+  {
+    path: '/forgot-password',
+    name: 'ForgotPassword',
+    component: () => import('@/views/auth/ForgotPasswordView.vue'),
+    meta: { guest: true }
+  },
+  {
+    path: '/reset-password',
+    name: 'ResetPassword',
+    component: () => import('@/views/auth/ResetPasswordView.vue'),
+    meta: { guest: true }
+  },
   
   // Dashboard routes (must be before /:owner/:repo)
   {

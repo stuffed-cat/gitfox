@@ -95,6 +95,28 @@ class ApiClient {
     me: async (): Promise<User> => {
       const response = await this.client.get('/auth/me')
       return response.data
+    },
+    // Email confirmation
+    confirmEmail: async (token: string): Promise<{ success: boolean; message: string; user: User }> => {
+      const response = await this.client.post('/auth/confirm-email', { token })
+      return response.data
+    },
+    resendConfirmation: async (): Promise<{ success: boolean; message: string }> => {
+      const response = await this.client.post('/auth/resend-confirmation')
+      return response.data
+    },
+    // Password reset
+    forgotPassword: async (email: string): Promise<{ success: boolean; message: string }> => {
+      const response = await this.client.post('/auth/forgot-password', { email })
+      return response.data
+    },
+    verifyResetToken: async (token: string): Promise<{ valid: boolean; username: string }> => {
+      const response = await this.client.post('/auth/verify-reset-token', { token })
+      return response.data
+    },
+    resetPassword: async (token: string, new_password: string): Promise<{ success: boolean; message: string; user: User }> => {
+      const response = await this.client.post('/auth/reset-password', { token, new_password })
+      return response.data
     }
   }
 
@@ -424,6 +446,49 @@ class ApiClient {
     },
     updateConfigs: async (configs: Array<{ key: string; value: any }>): Promise<Record<string, any>> => {
       const response = await this.client.put('/admin/settings/configs', { configs })
+      return response.data
+    },
+    // SMTP settings
+    getSmtpConfig: async (): Promise<{
+      configured: boolean
+      enabled: boolean
+      host: string
+      port: number
+      from_email: string
+      from_name: string
+      use_tls: boolean
+      use_ssl: boolean
+    }> => {
+      const response = await this.client.get('/admin/settings/smtp')
+      return response.data
+    },
+    testSmtpConnection: async (settings: {
+      enabled: boolean
+      host: string
+      port: number
+      username: string
+      password: string
+      from_email: string
+      from_name: string
+      use_tls: boolean
+      use_ssl: boolean
+    }): Promise<{ success: boolean; message: string }> => {
+      const response = await this.client.post('/admin/settings/smtp/test', settings)
+      return response.data
+    },
+    sendTestEmail: async (settings: {
+      enabled: boolean
+      host: string
+      port: number
+      username: string
+      password: string
+      from_email: string
+      from_name: string
+      use_tls: boolean
+      use_ssl: boolean
+      test_email: string
+    }): Promise<{ success: boolean; message: string }> => {
+      const response = await this.client.post('/admin/settings/smtp/send-test', settings)
       return response.data
     },
   }

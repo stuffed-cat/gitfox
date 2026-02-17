@@ -174,6 +174,84 @@
           </div>
         </div>
       </div>
+
+      <!-- SMTP Settings Section -->
+      <div class="settings-section">
+        <div class="section-header" @click="toggleSection('smtp')">
+          <div class="section-title">
+            <h2>邮件服务 (SMTP)</h2>
+            <p>查看 SMTP 配置状态，配置需在 .env 文件中设置</p>
+          </div>
+          <svg class="chevron" :class="{ expanded: expandedSections.smtp }" width="16" height="16" viewBox="0 0 16 16">
+            <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div v-show="expandedSections.smtp" class="section-body">
+          <div class="smtp-status" :class="smtpConfig.configured ? 'configured' : 'not-configured'">
+            <div class="status-indicator">
+              <span class="status-dot"></span>
+              <span class="status-text">{{ smtpConfig.configured ? 'SMTP 已配置' : 'SMTP 未配置' }}</span>
+            </div>
+            <p class="status-hint" v-if="!smtpConfig.configured">
+              请在 .env 文件中设置 SMTP_HOST, SMTP_PORT, SMTP_USERNAME 等环境变量
+            </p>
+          </div>
+          
+          <div class="smtp-config-display" v-if="smtpConfig.configured">
+            <h3>当前配置（来自环境变量）</h3>
+            <div class="config-grid">
+              <div class="config-item">
+                <label>服务器</label>
+                <span>{{ smtpConfig.host }}:{{ smtpConfig.port }}</span>
+              </div>
+              <div class="config-item">
+                <label>发件人</label>
+                <span>{{ smtpConfig.from_name }} &lt;{{ smtpConfig.from_email }}&gt;</span>
+              </div>
+              <div class="config-item">
+                <label>加密方式</label>
+                <span>{{ smtpConfig.use_ssl ? 'SSL/TLS' : (smtpConfig.use_tls ? 'STARTTLS' : '无加密') }}</span>
+              </div>
+            </div>
+            
+            <!-- Test SMTP -->
+            <div class="smtp-test">
+              <h3>测试邮件发送</h3>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="test_email">测试邮箱</label>
+                  <input id="test_email" v-model="testEmail" type="email" placeholder="输入接收测试邮件的邮箱" />
+                </div>
+                <div class="test-actions">
+                  <button class="btn btn-secondary" @click="testSmtpConnection" :disabled="smtpTesting">
+                    {{ smtpTesting ? '测试中...' : '测试连接' }}
+                  </button>
+                  <button class="btn btn-secondary" @click="sendTestEmail" :disabled="smtpTesting || !testEmail">
+                    {{ smtpTesting ? '发送中...' : '发送测试邮件' }}
+                  </button>
+                </div>
+              </div>
+              <div v-if="smtpTestResult" class="smtp-test-result" :class="smtpTestResult.success ? 'success' : 'error'">
+                {{ smtpTestResult.message }}
+              </div>
+            </div>
+          </div>
+          
+          <div class="smtp-env-hint">
+            <h3>环境变量配置说明</h3>
+            <pre class="env-example">
+SMTP_ENABLED=true
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@example.com
+SMTP_PASSWORD=your-password
+SMTP_FROM_EMAIL=noreply@example.com
+SMTP_FROM_NAME=GitFox
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false</pre>
+          </div>
+        </div>
+      </div>
     </template>
 
     <!-- Success toast -->
@@ -202,6 +280,7 @@ const expandedSections = reactive({
   project: false,
   appearance: false,
   terms: false,
+  smtp: false,
 })
 
 const form = reactive({
@@ -217,6 +296,22 @@ const form = reactive({
   after_sign_in_path: '/',
   terms_of_service: '',
 })
+
+// SMTP config from environment (read-only)
+const smtpConfig = reactive({
+  configured: false,
+  enabled: false,
+  host: '',
+  port: 587,
+  from_email: '',
+  from_name: '',
+  use_tls: true,
+  use_ssl: false,
+})
+
+const testEmail = ref('')
+const smtpTesting = ref(false)
+const smtpTestResult = ref<{ success: boolean; message: string } | null>(null)
 
 function toggleSection(section: keyof typeof expandedSections) {
   expandedSections[section] = !expandedSections[section]
@@ -268,7 +363,80 @@ function showSuccess(msg: string) {
   setTimeout(() => { successMsg.value = '' }, 3000)
 }
 
-onMounted(loadConfigs)
+// SMTP functions - load config from environment via API
+async function loadSmtpConfig() {
+  try {
+    const config = await api.admin.getSmtpConfig()
+    smtpConfig.configured = config.configured
+    smtpConfig.enabled = config.enabled
+    smtpConfig.host = config.host
+    smtpConfig.port = config.port
+    smtpConfig.from_email = config.from_email
+    smtpConfig.from_name = config.from_name
+    smtpConfig.use_tls = config.use_tls
+    smtpConfig.use_ssl = config.use_ssl
+  } catch (err) {
+    console.error('Failed to load SMTP config:', err)
+  }
+}
+
+async function testSmtpConnection() {
+  smtpTesting.value = true
+  smtpTestResult.value = null
+  try {
+    await api.admin.testSmtpConnection({
+      enabled: smtpConfig.enabled,
+      host: smtpConfig.host,
+      port: smtpConfig.port,
+      username: '', // credentials come from env
+      password: '',
+      from_email: smtpConfig.from_email,
+      from_name: smtpConfig.from_name,
+      use_tls: smtpConfig.use_tls,
+      use_ssl: smtpConfig.use_ssl,
+    })
+    smtpTestResult.value = { success: true, message: '连接成功！SMTP 服务器配置正确。' }
+  } catch (err: any) {
+    const msg = err.response?.data?.message || err.response?.data?.error || err.message || '连接失败'
+    smtpTestResult.value = { success: false, message: `连接失败: ${msg}` }
+  } finally {
+    smtpTesting.value = false
+  }
+}
+
+async function sendTestEmail() {
+  if (!testEmail.value) {
+    alert('请输入测试邮箱地址')
+    return
+  }
+  smtpTesting.value = true
+  smtpTestResult.value = null
+  try {
+    await api.admin.sendTestEmail({
+      enabled: true,
+      host: smtpConfig.host,
+      port: smtpConfig.port,
+      username: '',
+      password: '',
+      from_email: smtpConfig.from_email,
+      from_name: smtpConfig.from_name,
+      use_tls: smtpConfig.use_tls,
+      use_ssl: smtpConfig.use_ssl,
+      test_email: testEmail.value,
+    })
+    smtpTestResult.value = { success: true, message: `测试邮件已发送到 ${testEmail.value}` }
+  } catch (err: any) {
+    const msg = err.response?.data?.message || err.response?.data?.error || err.message || '发送失败'
+    smtpTestResult.value = { success: false, message: `发送失败: ${msg}` }
+  } finally {
+    smtpTesting.value = false
+  }
+}
+
+onMounted(() => {
+  loadConfigs()
+  loadSmtpConfig()
+})
 </script>
 
 <style lang="scss" scoped>
@@ -458,4 +626,198 @@ onMounted(loadConfigs)
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+// SMTP section styles
+.smtp-status {
+  padding: $spacing-4;
+  border-radius: $border-radius;
+  margin-bottom: $spacing-4;
+  
+  &.configured {
+    background: rgba($color-success, 0.1);
+    border: 1px solid rgba($color-success, 0.2);
+  }
+  
+  &.not-configured {
+    background: rgba($color-warning, 0.1);
+    border: 1px solid rgba($color-warning, 0.2);
+  }
+  
+  .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: $spacing-2;
+    font-weight: $font-weight-medium;
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+  }
+  
+  &.configured .status-dot {
+    background: $color-success;
+  }
+  
+  &.not-configured .status-dot {
+    background: $color-warning;
+  }
+  
+  .status-hint {
+    margin-top: $spacing-2;
+    font-size: $font-size-sm;
+    color: $text-secondary;
+  }
+}
+
+.smtp-config-display {
+  h3 {
+    font-size: $font-size-base;
+    font-weight: $font-weight-medium;
+    margin-bottom: $spacing-3;
+    color: $text-primary;
+  }
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: $spacing-3;
+  margin-bottom: $spacing-4;
+  
+  .config-item {
+    label {
+      display: block;
+      font-size: $font-size-xs;
+      color: $text-secondary;
+      margin-bottom: $spacing-1;
+    }
+    
+    span {
+      font-size: $font-size-sm;
+      color: $text-primary;
+    }
+  }
+}
+
+.smtp-env-hint {
+  margin-top: $spacing-5;
+  padding-top: $spacing-5;
+  border-top: 1px solid $border-color-light;
+  
+  h3 {
+    font-size: $font-size-base;
+    font-weight: $font-weight-medium;
+    margin-bottom: $spacing-3;
+    color: $text-primary;
+  }
+  
+  .env-example {
+    background: $bg-tertiary;
+    border: 1px solid $border-color;
+    border-radius: $border-radius;
+    padding: $spacing-3;
+    font-family: $font-mono;
+    font-size: $font-size-sm;
+    line-height: 1.6;
+    overflow-x: auto;
+    color: $text-primary;
+  }
+}
+
+.smtp-config {
+  &.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: $spacing-4;
+  
+  @media (max-width: 600px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.form-group-small {
+  max-width: 120px;
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-2;
+  margin-top: $spacing-2;
+}
+
+.radio-label {
+  display: inline-flex;
+  align-items: center;
+  gap: $spacing-2;
+  cursor: pointer;
+  font-size: $font-size-sm;
+  color: $text-primary;
+
+  input[type="radio"] {
+    width: 16px;
+    height: 16px;
+    accent-color: $brand-primary;
+    cursor: pointer;
+  }
+
+  &:has(input:disabled) {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.smtp-test {
+  margin-top: $spacing-5;
+  padding-top: $spacing-5;
+  border-top: 1px solid $border-color-light;
+
+  .form-row {
+    align-items: flex-end;
+  }
+
+  .test-actions {
+    display: flex;
+    gap: $spacing-2;
+    padding-bottom: $spacing-5;
+  }
+}
+
+.smtp-test-result {
+  margin-top: $spacing-3;
+  padding: $spacing-3 $spacing-4;
+  border-radius: $border-radius;
+  font-size: $font-size-sm;
+  
+  &.success {
+    background: rgba($color-success, 0.1);
+    color: $color-success;
+    border: 1px solid rgba($color-success, 0.2);
+  }
+  
+  &.error {
+    background: rgba($color-danger, 0.1);
+    color: $color-danger;
+    border: 1px solid rgba($color-danger, 0.2);
+  }
+}
+
+.btn-secondary {
+  background: $bg-secondary;
+  color: $text-primary;
+  border: 1px solid $border-color;
+  
+  &:hover:not(:disabled) {
+    background: $bg-tertiary;
+    border-color: $border-color-dark;
+  }
+}
 </style>

@@ -90,6 +90,12 @@ impl From<bcrypt::BcryptError> for AppError {
     }
 }
 
+impl From<lettre::transport::smtp::Error> for AppError {
+    fn from(err: lettre::transport::smtp::Error) -> Self {
+        AppError::InternalError(format!("SMTP error: {}", err))
+    }
+}
+
 impl From<actix_web::Error> for AppError {
     fn from(err: actix_web::Error) -> Self {
         AppError::InternalError(err.to_string())

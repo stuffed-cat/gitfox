@@ -6,6 +6,7 @@ export interface User {
   avatar_url?: string
   role: 'admin' | 'developer' | 'viewer'
   is_active: boolean
+  email_confirmed?: boolean
 }
 
 export interface LoginRequest {

@@ -82,6 +82,11 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/auth/register", web::post().to(auth::register))
             .route("/auth/login", web::post().to(auth::login))
             .route("/auth/me", web::get().to(auth::me))
+            .route("/auth/confirm-email", web::post().to(auth::confirm_email))
+            .route("/auth/resend-confirmation", web::post().to(auth::resend_confirmation))
+            .route("/auth/forgot-password", web::post().to(auth::forgot_password))
+            .route("/auth/verify-reset-token", web::post().to(auth::verify_reset_token))
+            .route("/auth/reset-password", web::post().to(auth::reset_password))
             
             // Admin routes (require admin role)
             .route("/admin/dashboard", web::get().to(admin::dashboard))
@@ -91,6 +96,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/admin/users/{id}", web::delete().to(admin::delete_user))
             .route("/admin/settings/configs", web::get().to(admin::get_configs))
             .route("/admin/settings/configs", web::put().to(admin::update_configs))
+            // Admin SMTP settings
+            .route("/admin/settings/smtp", web::get().to(admin::get_smtp_config))
+            .route("/admin/settings/smtp/test", web::post().to(admin::test_smtp_connection))
+            .route("/admin/settings/smtp/send-test", web::post().to(admin::send_test_email))
             // Admin OAuth provider management
             .route("/admin/oauth/providers", web::get().to(oauth::admin_list_providers))
             .route("/admin/oauth/providers", web::post().to(oauth::admin_create_provider))

@@ -465,7 +465,6 @@ function copyToClipboard(text: string) {
   h1 {
     font-size: 24px;
     font-weight: 600;
-    margin: 0 0 8px;
   }
 
   .page-description {
@@ -497,7 +496,6 @@ function copyToClipboard(text: string) {
   .empty-title {
     font-size: 18px;
     font-weight: 600;
-    margin: 0 0 8px;
   }
 
   .empty-description {

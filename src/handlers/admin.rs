@@ -375,3 +375,109 @@ pub async fn update_configs(
     let configs = SystemConfigService::get_all(pool.get_ref(), redis.get_ref()).await?;
     Ok(HttpResponse::Ok().json(configs))
 }
+
+// ─── SMTP Settings ─────────────────────────────────────────
+
+use crate::config::AppConfig;
+use crate::services::{SmtpService, SmtpSettings};
+
+/// SMTP test request
+#[derive(Debug, serde::Deserialize)]
+pub struct SmtpTestRequest {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub from_email: String,
+    pub from_name: String,
+    pub use_tls: bool,
+    pub use_ssl: bool,
+    #[serde(default)]
+    pub test_email: Option<String>,
+}
+
+/// SMTP status response
+#[derive(Debug, serde::Serialize)]
+pub struct SmtpStatusResponse {
+    pub configured: bool,
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub from_email: String,
+    pub from_name: String,
+    pub use_tls: bool,
+    pub use_ssl: bool,
+}
+
+/// GET /api/v1/admin/settings/smtp - Get SMTP configuration status
+pub async fn get_smtp_config(
+    config: web::Data<AppConfig>,
+    _admin: AdminUser,
+) -> AppResult<HttpResponse> {
+    let settings = SmtpSettings::from_config(&config.smtp);
+    
+    Ok(HttpResponse::Ok().json(SmtpStatusResponse {
+        configured: settings.is_configured(),
+        enabled: settings.enabled,
+        host: settings.host,
+        port: settings.port,
+        from_email: settings.from_email,
+        from_name: settings.from_name,
+        use_tls: settings.use_tls,
+        use_ssl: settings.use_ssl,
+    }))
+}
+
+/// POST /api/v1/admin/settings/smtp/test - Test SMTP connection
+pub async fn test_smtp_connection(
+    _admin: AdminUser,
+    body: web::Json<SmtpTestRequest>,
+) -> AppResult<HttpResponse> {
+    let settings = SmtpSettings {
+        enabled: body.enabled,
+        host: body.host.clone(),
+        port: body.port,
+        username: body.username.clone(),
+        password: body.password.clone(),
+        from_email: body.from_email.clone(),
+        from_name: body.from_name.clone(),
+        use_tls: body.use_tls,
+        use_ssl: body.use_ssl,
+    };
+
+    SmtpService::test_connection(&settings).await?;
+    
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "message": "SMTP connection successful"
+    })))
+}
+
+/// POST /api/v1/admin/settings/smtp/send-test - Send test email
+pub async fn send_test_email(
+    _admin: AdminUser,
+    body: web::Json<SmtpTestRequest>,
+) -> AppResult<HttpResponse> {
+    let test_email = body.test_email.as_ref()
+        .ok_or_else(|| crate::error::AppError::BadRequest("test_email is required".to_string()))?;
+
+    let settings = SmtpSettings {
+        enabled: true, // Force enabled for test
+        host: body.host.clone(),
+        port: body.port,
+        username: body.username.clone(),
+        password: body.password.clone(),
+        from_email: body.from_email.clone(),
+        from_name: body.from_name.clone(),
+        use_tls: body.use_tls,
+        use_ssl: body.use_ssl,
+    };
+
+    SmtpService::send_test_email(&settings, test_email).await?;
+    
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "message": format!("Test email sent to {}", test_email)
+    })))
+}

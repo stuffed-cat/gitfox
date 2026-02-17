@@ -423,7 +423,8 @@ pub async fn list_group_projects(
     let projects = sqlx::query_as::<_, crate::models::project::ProjectWithOwner>(
         r#"
         SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
-               n.path as owner_name, n.avatar_url as owner_avatar
+               n.path as owner_name, n.avatar_url as owner_avatar,
+               p.stars_count, p.forks_count, p.forked_from_id
         FROM projects p
         JOIN namespaces n ON p.namespace_id = n.id
         WHERE p.namespace_id = $1 

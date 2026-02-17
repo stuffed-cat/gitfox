@@ -16,6 +16,16 @@ pub struct User {
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    // Email confirmation fields
+    #[serde(default)]
+    pub email_confirmed: bool,
+    #[serde(skip_serializing)]
+    pub email_confirmation_token: Option<String>,
+    pub email_confirmation_sent_at: Option<DateTime<Utc>>,
+    // Password reset fields
+    #[serde(skip_serializing)]
+    pub password_reset_token: Option<String>,
+    pub password_reset_sent_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
@@ -65,6 +75,7 @@ pub struct UserInfo {
     pub avatar_url: Option<String>,
     pub role: UserRole,
     pub is_active: bool,
+    pub email_confirmed: bool,
 }
 
 impl From<User> for UserInfo {
@@ -77,6 +88,7 @@ impl From<User> for UserInfo {
             avatar_url: user.avatar_url,
             role: user.role,
             is_active: user.is_active,
+            email_confirmed: user.email_confirmed,
         }
     }
 }

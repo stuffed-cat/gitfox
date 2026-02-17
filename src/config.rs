@@ -1,5 +1,60 @@
 use std::env;
 
+/// SMTP configuration for sending emails
+#[derive(Clone, Debug, Default)]
+pub struct SmtpConfig {
+    /// SMTP server host
+    pub host: Option<String>,
+    /// SMTP server port (default: 587 for TLS, 465 for SSL, 25 for plain)
+    pub port: u16,
+    /// SMTP username for authentication
+    pub username: Option<String>,
+    /// SMTP password for authentication
+    pub password: Option<String>,
+    /// Sender email address (From header)
+    pub from_email: String,
+    /// Sender display name
+    pub from_name: String,
+    /// Use TLS encryption (STARTTLS)
+    pub use_tls: bool,
+    /// Use SSL encryption (implicit TLS)
+    pub use_ssl: bool,
+    /// Enable SMTP (if false, emails won't be sent)
+    pub enabled: bool,
+}
+
+impl SmtpConfig {
+    pub fn from_env() -> Self {
+        Self {
+            host: env::var("SMTP_HOST").ok(),
+            port: env::var("SMTP_PORT")
+                .unwrap_or_else(|_| "587".to_string())
+                .parse()
+                .unwrap_or(587),
+            username: env::var("SMTP_USERNAME").ok(),
+            password: env::var("SMTP_PASSWORD").ok(),
+            from_email: env::var("SMTP_FROM_EMAIL")
+                .unwrap_or_else(|_| "noreply@gitfox.local".to_string()),
+            from_name: env::var("SMTP_FROM_NAME")
+                .unwrap_or_else(|_| "GitFox".to_string()),
+            use_tls: env::var("SMTP_USE_TLS")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true),
+            use_ssl: env::var("SMTP_USE_SSL")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(false),
+            enabled: env::var("SMTP_ENABLED")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(false),
+        }
+    }
+
+    /// Check if SMTP is properly configured and enabled
+    pub fn is_configured(&self) -> bool {
+        self.enabled && self.host.is_some()
+    }
+}
+
 /// OAuth provider configuration
 #[derive(Clone, Debug, Default)]
 pub struct OAuthProviderConfig {
@@ -116,6 +171,8 @@ pub struct Config {
     pub pat_default_expiration_days: u32,
     /// PAT maximum expiration in days (0 = no limit)
     pub pat_max_expiration_days: u32,
+    /// SMTP configuration for email sending
+    pub smtp: SmtpConfig,
 }
 
 impl Config {
@@ -181,6 +238,7 @@ impl Config {
                 .unwrap_or_else(|_| "0".to_string())
                 .parse()
                 .unwrap_or(0),
+            smtp: SmtpConfig::from_env(),
         }
     }
 }
