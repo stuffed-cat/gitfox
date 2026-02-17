@@ -13,6 +13,7 @@ pub enum AppError {
     GitError(String),
     QueueError(String),
     ValidationError(String),
+    TooManyRequests(String),
 }
 
 impl fmt::Display for AppError {
@@ -28,6 +29,7 @@ impl fmt::Display for AppError {
             AppError::GitError(msg) => write!(f, "Git error: {}", msg),
             AppError::QueueError(msg) => write!(f, "Queue error: {}", msg),
             AppError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+            AppError::TooManyRequests(msg) => write!(f, "Too many requests: {}", msg),
         }
     }
 }
@@ -45,6 +47,7 @@ impl ResponseError for AppError {
             AppError::GitError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "git_error"),
             AppError::QueueError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "queue_error"),
             AppError::ValidationError(_) => (StatusCode::BAD_REQUEST, "validation_error"),
+            AppError::TooManyRequests(_) => (StatusCode::TOO_MANY_REQUESTS, "rate_limit_exceeded"),
         };
 
         HttpResponse::build(status).json(serde_json::json!({

@@ -210,6 +210,16 @@ pub async fn verify_two_factor(
         AppError::Unauthorized("Invalid or expired 2FA token".to_string())
     })?;
     
+    // Check if account is locked due to too many 2FA failures
+    if crate::middleware::is_2fa_locked(redis.get_ref(), user_id).await? {
+        return Err(AppError::TooManyRequests(
+            "Account temporarily locked due to too many failed 2FA attempts. Please try again in 30 minutes.".to_string()
+        ));
+    }
+    
+    // Check rate limit (5 attempts per minute)
+    crate::middleware::check_2fa_rate_limit(redis.get_ref(), user_id).await?;
+    
     // Verify based on method
     let valid = match body.method.as_str() {
         "totp" => {
@@ -232,8 +242,13 @@ pub async fn verify_two_factor(
     };
     
     if !valid {
+        // Record failure and check if account should be locked
+        crate::middleware::record_2fa_failure(redis.get_ref(), user_id).await?;
         return Err(AppError::Unauthorized("Invalid 2FA code".to_string()));
     }
+    
+    // Reset failure counter on successful verification
+    crate::middleware::reset_2fa_failures(redis.get_ref(), user_id).await?;
     
     // Delete the temporary token from Redis
     deadpool_redis::redis::cmd("DEL")

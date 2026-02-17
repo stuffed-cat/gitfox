@@ -454,7 +454,7 @@ pub async fn finish_webauthn_registration(
     reg: &RegisterPublicKeyCredential,
     reg_state: &PasskeyRegistration,
     credential_name: &str,
-) -> AppResult<()> {
+) -> AppResult<Vec<String>> {
     let passkey = webauthn
         .finish_passkey_registration(reg, reg_state)
         .map_err(|e| AppError::BadRequest(format!("Failed to finish passkey registration: {}", e)))?;
@@ -482,7 +482,37 @@ pub async fn finish_webauthn_registration(
         .execute(pool)
         .await?;
     
-    Ok(())
+    // Check if user already has recovery codes
+    let existing_codes_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM user_recovery_codes WHERE user_id = $1"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    
+    // If no recovery codes exist, generate new ones
+    let recovery_codes = if existing_codes_count == 0 {
+        let codes = generate_recovery_codes();
+        
+        // Store recovery codes (hashed)
+        for code in &codes {
+            let code_hash = hash_recovery_code(code)?;
+            sqlx::query(
+                "INSERT INTO user_recovery_codes (user_id, code_hash) VALUES ($1, $2)"
+            )
+            .bind(user_id)
+            .bind(&code_hash)
+            .execute(pool)
+            .await?;
+        }
+        
+        codes
+    } else {
+        // Return empty vector if codes already exist (user won't see them again)
+        Vec::new()
+    };
+    
+    Ok(recovery_codes)
 }
 
 /// Get user's WebAuthn credentials
@@ -625,9 +655,15 @@ pub async fn delete_webauthn_credential(
     .fetch_one(pool)
     .await?;
     
-    // Disable 2FA if no other methods are enabled
+    // If no 2FA methods remain, disable 2FA and delete recovery codes
     if totp_count == 0 && webauthn_count == 0 {
         sqlx::query("UPDATE users SET two_factor_enabled = false WHERE id = $1")
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+        
+        // Delete all recovery codes (they're no longer needed)
+        sqlx::query("DELETE FROM user_recovery_codes WHERE user_id = $1")
             .bind(user_id)
             .execute(pool)
             .await?;

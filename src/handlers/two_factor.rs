@@ -245,8 +245,8 @@ pub async fn webauthn_register_finish(
         .await
         .ok();
     
-    // Finish registration
-    two_factor::finish_webauthn_registration(
+    // Finish registration (returns recovery codes if newly generated)
+    let recovery_codes = two_factor::finish_webauthn_registration(
         pool.as_ref(),
         &webauthn,
         auth.user_id,
@@ -255,9 +255,19 @@ pub async fn webauthn_register_finish(
         &req.name,
     ).await?;
     
-    Ok(HttpResponse::Ok().json(serde_json::json!({
-        "message": "WebAuthn credential registered successfully"
-    })))
+    // Return different response based on whether recovery codes were generated
+    if recovery_codes.is_empty() {
+        Ok(HttpResponse::Ok().json(serde_json::json!({
+            "message": "WebAuthn credential registered successfully",
+            "recovery_codes_generated": false
+        })))
+    } else {
+        Ok(HttpResponse::Ok().json(serde_json::json!({
+            "message": "WebAuthn credential registered successfully",
+            "recovery_codes_generated": true,
+            "recovery_codes": recovery_codes
+        })))
+    }
 }
 
 /// DELETE /api/v1/user/two-factor/webauthn/{id}
