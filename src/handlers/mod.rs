@@ -126,6 +126,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/users/{id}", web::put().to(user::update_user))
             .route("/users/{id}", web::delete().to(user::delete_user))
             
+            // Current user profile and avatar routes
+            .route("/user/profile", web::put().to(user::update_current_user_profile))
+            .route("/user/avatar", web::post().to(user::upload_avatar))
+            
             // Two-Factor Authentication routes
             .configure(two_factor::configure_routes)
             

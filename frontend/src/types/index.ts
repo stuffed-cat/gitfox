@@ -7,6 +7,11 @@ export interface User {
   role: 'admin' | 'developer' | 'viewer'
   is_active: boolean
   email_confirmed?: boolean
+  status_emoji?: string
+  status_message?: string
+  busy?: boolean
+  status_set_at?: string
+  status_clear_at?: string
 }
 
 export interface LoginRequest {

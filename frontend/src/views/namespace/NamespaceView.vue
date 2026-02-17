@@ -93,12 +93,18 @@
     <template v-else>
       <!-- User Profile -->
       <div class="namespace-header">
-        <div class="avatar">
-          {{ namespace?.name?.charAt(0).toUpperCase() || '?' }}
+        <div class="avatar" :class="{ 'has-image': namespace?.avatar_url }">
+          <img v-if="namespace?.avatar_url" :src="namespace.avatar_url" :alt="namespace?.username" />
+          <span v-else>{{ namespace?.name?.charAt(0).toUpperCase() || '?' }}</span>
         </div>
         <div class="info">
           <h1>{{ namespace?.name || namespace?.display_name || route.params.namespace }}</h1>
           <p class="username">@{{ route.params.namespace }}</p>
+          <div v-if="namespace?.status_emoji || namespace?.status_message" class="user-status">
+            <span v-if="namespace?.status_emoji" class="status-emoji">{{ namespace.status_emoji }}</span>
+            <span v-if="namespace?.status_message" class="status-message">{{ namespace.status_message }}</span>
+            <span v-if="namespace?.busy" class="busy-indicator">忙碌中</span>
+          </div>
         </div>
       </div>
       
@@ -266,6 +272,14 @@ onUnmounted(() => {
     font-size: 36px;
     font-weight: 600;
     flex-shrink: 0;
+    overflow: hidden;
+    position: relative;
+    
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
     
     &.group-avatar-shape { border-radius: $radius-lg; }
   }
@@ -288,6 +302,32 @@ onUnmounted(() => {
     .username {
       color: $text-secondary;
       margin-bottom: $spacing-1;
+    }
+    
+    .user-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: $spacing-2;
+      padding: 6px 10px;
+      background: rgba($brand-primary, 0.05);
+      border-radius: 4px;
+      width: fit-content;
+      
+      .status-emoji {
+        font-size: 16px;
+      }
+      
+      .status-message {
+        color: $text-primary;
+        font-size: 12px;
+      }
+      
+      .busy-indicator {
+        font-size: 11px;
+        color: $color-warning;
+        font-weight: 500;
+      }
     }
     
     .description {

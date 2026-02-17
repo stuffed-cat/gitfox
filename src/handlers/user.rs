@@ -1,10 +1,14 @@
 use actix_web::{web, HttpResponse};
+use actix_multipart::Multipart;
 use sqlx::PgPool;
+use std::io::Write;
+use std::path::Path;
+use futures::stream::TryStreamExt;
 
-
-use crate::error::AppResult;
+use crate::error::{AppResult, AppError};
 use crate::models::{UpdateUserRequest, UserInfo};
 use crate::services::UserService;
+use crate::middleware::auth::AuthenticatedUser;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ListQuery {
@@ -108,3 +112,101 @@ pub async fn get_avatars_by_emails(
     
     Ok(HttpResponse::Ok().json(avatars))
 }
+
+/// PUT /api/v1/user/profile - Update current user's profile including status
+pub async fn update_current_user_profile(
+    pool: web::Data<PgPool>,
+    auth: AuthenticatedUser,
+    body: web::Json<UpdateUserRequest>,
+) -> AppResult<HttpResponse> {
+    let user = UserService::update_user_profile(
+        pool.get_ref(),
+        auth.user_id,
+        body.display_name.clone(),
+        body.avatar_url.clone(),
+        body.status_emoji.clone(),
+        body.status_message.clone(),
+        body.busy,
+        body.clear_status_after.clone(),
+    ).await?;
+    
+    Ok(HttpResponse::Ok().json(UserInfo::from(user)))
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct AvatarUploadResponse {
+    pub avatar_url: String,
+}
+
+/// POST /api/v1/user/avatar - Upload user avatar
+pub async fn upload_avatar(
+    pool: web::Data<PgPool>,
+    auth: AuthenticatedUser,
+    mut payload: Multipart,
+) -> AppResult<HttpResponse> {
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        let content_disposition = field.content_disposition();
+        
+        // Only accept 'avatar' field
+        if content_disposition.get_name() != Some("avatar") {
+            continue;
+        }
+        
+        let content_type = field.content_type()
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        
+        // Determine file extension based on content type
+        let ext = match content_type.as_str() {
+            "image/jpeg" => "jpg",
+            "image/png" => "png",
+            "image/webp" => "webp",
+            "image/gif" => "gif",
+            _ => {
+                return Err(AppError::BadRequest(
+                    "Only image files are allowed (JPEG, PNG, WebP, GIF)".to_string()
+                ))
+            }
+        };
+        
+        // Read all chunks from the field
+        let mut bytes = Vec::new();
+        while let Ok(Some(chunk)) = field.try_next().await {
+            bytes.extend_from_slice(&chunk);
+        }
+        
+        if bytes.is_empty() {
+            return Err(AppError::BadRequest("Avatar file is empty".to_string()));
+        }
+        
+        // Generate avatar filename
+        let avatar_filename = format!("avatar_{}_{}.{}", auth.user_id, chrono::Utc::now().timestamp(), ext);
+        let assets_dir = Path::new("assets");
+        let full_path = assets_dir.join(&avatar_filename);
+        
+        // Create assets directory if it doesn't exist
+        std::fs::create_dir_all(assets_dir)?;
+        
+        // Save file
+        let mut file = std::fs::File::create(&full_path)?;
+        file.write_all(&bytes)?;
+        
+        // Build avatar URL
+        let avatar_url = format!("/assets/{}", avatar_filename);
+        
+        // Update user's avatar_url
+        UserService::update_user(
+            pool.get_ref(),
+            auth.user_id,
+            None,
+            Some(avatar_url.clone()),
+        ).await?;
+        
+        return Ok(HttpResponse::Ok().json(AvatarUploadResponse {
+            avatar_url,
+        }));
+    }
+    
+    Err(AppError::BadRequest("No avatar field in request".to_string()))
+}
+

@@ -144,6 +144,67 @@ impl UserService {
         Ok(user)
     }
 
+    pub async fn update_user_profile(
+        pool: &PgPool,
+        id: i64,
+        display_name: Option<String>,
+        avatar_url: Option<String>,
+        status_emoji: Option<String>,
+        status_message: Option<String>,
+        busy: Option<bool>,
+        clear_status_after: Option<String>,
+    ) -> AppResult<User> {
+        // Calculate status_clear_at based on clear_status_after value
+        let status_clear_at = match clear_status_after.as_deref() {
+            Some("never") | None => None,
+            Some("30m") => Some(Utc::now() + Duration::minutes(30)),
+            Some("1h") => Some(Utc::now() + Duration::hours(1)),
+            Some("4h") => Some(Utc::now() + Duration::hours(4)),
+            Some("today") => {
+                let now = Utc::now();
+                // Calculate end of today in UTC
+                let next_day = now + Duration::days(1);
+                Some(next_day.date_naive().and_hms_opt(0, 0, 0)
+                    .unwrap_or_default()
+                    .and_utc())
+            },
+            Some("1w") => Some(Utc::now() + Duration::days(7)),
+            _ => None,
+        };
+
+        let now = Utc::now();
+        let status_was_updated = status_message.is_some() || status_emoji.is_some();
+        
+        let user = sqlx::query_as::<_, User>(
+            r#"
+            UPDATE users
+            SET display_name = COALESCE($2, display_name),
+                avatar_url = COALESCE($3, avatar_url),
+                status_emoji = COALESCE($4, status_emoji),
+                status_message = COALESCE($5, status_message),
+                busy = COALESCE($6, busy),
+                status_set_at = CASE WHEN $7::BOOLEAN THEN NOW() ELSE status_set_at END,
+                status_clear_at = COALESCE($8::TIMESTAMPTZ, status_clear_at),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+            "#
+        )
+        .bind(id)
+        .bind(display_name)
+        .bind(avatar_url)
+        .bind(status_emoji)
+        .bind(status_message)
+        .bind(busy)
+        .bind(status_was_updated)
+        .bind(status_clear_at)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+
+        Ok(user)
+    }
+
     pub async fn change_password(
         pool: &PgPool,
         id: i64,

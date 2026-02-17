@@ -30,6 +30,13 @@ pub struct User {
     #[serde(default)]
     pub two_factor_enabled: bool,
     pub two_factor_required_at: Option<DateTime<Utc>>,
+    // User status fields
+    pub status_emoji: Option<String>,
+    pub status_message: Option<String>,
+    #[serde(default)]
+    pub busy: bool,
+    pub status_set_at: Option<DateTime<Utc>>,
+    pub status_clear_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
@@ -56,6 +63,10 @@ pub struct CreateUserRequest {
 pub struct UpdateUserRequest {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
+    pub status_emoji: Option<String>,
+    pub status_message: Option<String>,
+    pub busy: Option<bool>,
+    pub clear_status_after: Option<String>, // "never", "30m", "1h", "4h", "today", "1w"
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -80,6 +91,11 @@ pub struct UserInfo {
     pub role: UserRole,
     pub is_active: bool,
     pub email_confirmed: bool,
+    pub status_emoji: Option<String>,
+    pub status_message: Option<String>,
+    pub busy: bool,
+    pub status_set_at: Option<DateTime<Utc>>,
+    pub status_clear_at: Option<DateTime<Utc>>,
 }
 
 impl From<User> for UserInfo {
@@ -93,6 +109,11 @@ impl From<User> for UserInfo {
             role: user.role,
             is_active: user.is_active,
             email_confirmed: user.email_confirmed,
+            status_emoji: user.status_emoji,
+            status_message: user.status_message,
+            busy: user.busy,
+            status_set_at: user.status_set_at,
+            status_clear_at: user.status_clear_at,
         }
     }
 }

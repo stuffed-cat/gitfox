@@ -17,6 +17,10 @@ export default defineConfig({
         target: 'http://localhost:8081',
         changeOrigin: true,
       },
+      '/assets': {
+        target: 'http://localhost:8081',
+        changeOrigin: true,
+      },
       // OAuth API 端点转发 (token, revoke, userinfo - 不包括 authorize)
       '/oauth/token': {
         target: 'http://localhost:8081',

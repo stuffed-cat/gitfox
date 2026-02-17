@@ -91,7 +91,10 @@
         
         <div class="user-dropdown" ref="userDropdownRef">
           <button class="user-btn" @click="toggleUserMenu">
-            <span class="avatar avatar-md">{{ userInitial }}</span>
+            <div class="avatar avatar-md" :class="{ 'has-image': userAvatarUrl }">
+              <img v-if="userAvatarUrl" :src="userAvatarUrl" :alt="user?.display_name || user?.username" />
+              <span v-else>{{ userInitial }}</span>
+            </div>
             <svg class="chevron" :class="{ rotated: userMenuOpen }" width="12" height="12" viewBox="0 0 12 12">
               <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
@@ -101,12 +104,15 @@
             <div v-if="userMenuOpen" class="dropdown-menu">
               <div class="dropdown-header">
                 <div class="user-info">
-                  <span class="avatar avatar-lg">{{ userInitial }}</span>
-                  <div class="user-details">
-                    <div class="user-name">{{ user?.display_name || user?.username }}</div>
-                    <div class="user-email">{{ user?.email }}</div>
-                  </div>
+                <div class="avatar avatar-lg" :class="{ 'has-image': userAvatarUrl }">
+                  <img v-if="userAvatarUrl" :src="userAvatarUrl" :alt="user?.display_name || user?.username" />
+                  <span v-else>{{ userInitial }}</span>
                 </div>
+                <div class="user-details">
+                  <div class="user-name">{{ user?.display_name || user?.username }}</div>
+                  <div class="user-email">{{ user?.email }}</div>
+                </div>
+              </div>
               </div>
               <div class="dropdown-divider"></div>
               <button class="dropdown-item" @click="userMenuOpen = false">
@@ -181,6 +187,18 @@ const user = computed(() => authStore.user)
 const userInitial = computed(() => {
   const name = user.value?.display_name || user.value?.username || 'U'
   return name.charAt(0).toUpperCase()
+})
+const userAvatarUrl = computed(() => {
+  const avatar = user.value?.avatar_url
+  if (avatar) {
+    // If avatar starts with /, it's a relative path
+    if (avatar.startsWith('/')) {
+      return avatar
+    }
+    // Otherwise return as is
+    return avatar
+  }
+  return ''
 })
 
 function toggleUserMenu() {
@@ -456,6 +474,15 @@ onUnmounted(() => {
   background: $brand-gradient;
   color: white;
   font-weight: $font-weight-semibold;
+  overflow: hidden;
+  flex-shrink: 0;
+  position: relative;
+  
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
   
   &.avatar-md {
     width: 28px;
