@@ -2,7 +2,6 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use chrono::Utc;
 use sqlx::PgPool;
 
-
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::middleware::validate_token;
@@ -11,7 +10,7 @@ use crate::models::{
     PipelineTriggerType, TriggerPipelineRequest,
 };
 use crate::queue::{messages::PipelineTriggerMessage, RedisMessageQueue, QUEUE_PIPELINE};
-use crate::services::ProjectService;
+use crate::services::{ProjectService, ci_config::CiConfigParser};
 
 pub async fn list_pipelines(
     pool: web::Data<PgPool>,
@@ -68,33 +67,91 @@ pub async fn trigger_pipeline(
     let commit_sha = commits.first()
         .map(|c| c.sha.clone())
         .ok_or_else(|| AppError::NotFound("Reference not found".to_string()))?;
+
+    // 尝试解析 CI 配置
+    let ci_result = CiConfigParser::parse_from_repo(&repo, &commit_sha);
+    
+    let (status, error_message) = match &ci_result {
+        Ok(ci_config) => {
+            // 检查是否有 jobs
+            if ci_config.jobs.is_empty() {
+                (PipelineStatus::Failed, Some("No jobs defined in CI configuration".to_string()))
+            } else {
+                (PipelineStatus::Pending, None)
+            }
+        }
+        Err(e) => {
+            // CI 配置无效
+            (PipelineStatus::Failed, Some(format!("CI configuration error: {}", e)))
+        }
+    };
     
     let pipeline = sqlx::query_as::<_, Pipeline>(
         r#"
         INSERT INTO pipelines 
-        (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, error_message, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
         RETURNING *
         "#
     )
     .bind(project.id)
     .bind(&body.ref_name)
     .bind(&commit_sha)
-    .bind(PipelineStatus::Pending)
+    .bind(&status)
     .bind(PipelineTriggerType::Manual)
     .bind(claims.user_id)
+    .bind(&error_message)
     .bind(now)
     .fetch_one(pool.get_ref())
     .await?;
     
-    // Queue pipeline execution
-    let message = PipelineTriggerMessage {
-        pipeline_id: pipeline.id,
-        project_id: project.id,
-        ref_name: body.ref_name.clone(),
-        commit_sha,
-    };
-    queue.publish(QUEUE_PIPELINE, &message).await?;
+    // 如果 CI 配置有效，创建 jobs
+    if let Ok(ci_config) = ci_result {
+        for (job_name, job_def) in &ci_config.jobs {
+            // 检查是否应该运行这个 job
+            if !CiConfigParser::should_run_job(job_def, &body.ref_name) {
+                continue;
+            }
+            
+            let job_config = serde_json::json!({
+                "script": job_def.script,
+                "before_script": job_def.before_script.as_ref().or(ci_config.before_script.as_ref()),
+                "after_script": job_def.after_script.as_ref().or(ci_config.after_script.as_ref()),
+                "variables": job_def.variables.as_ref().or(ci_config.variables.as_ref()),
+                "artifacts": job_def.artifacts,
+                "cache": job_def.cache,
+                "retry": job_def.retry,
+                "timeout": job_def.timeout,
+            });
+            
+            sqlx::query(
+                r#"
+                INSERT INTO pipeline_jobs
+                (pipeline_id, project_id, name, stage, status, config, allow_failure, when_condition, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $8)
+                "#
+            )
+            .bind(pipeline.id)
+            .bind(project.id)
+            .bind(job_name)
+            .bind(&job_def.stage)
+            .bind(&job_config)
+            .bind(job_def.allow_failure)
+            .bind(&job_def.when)
+            .bind(now)
+            .execute(pool.get_ref())
+            .await?;
+        }
+        
+        // 只有在有 jobs 的情况下才发布队列消息
+        let message = PipelineTriggerMessage {
+            pipeline_id: pipeline.id,
+            project_id: project.id,
+            ref_name: body.ref_name.clone(),
+            commit_sha: commit_sha.clone(),
+        };
+        queue.publish(QUEUE_PIPELINE, &message).await?;
+    }
     
     Ok(HttpResponse::Created().json(pipeline))
 }

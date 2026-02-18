@@ -8,10 +8,8 @@
       <div class="pipeline-header">
         <div class="header-main">
           <h2>
-            <svg class="status-icon" :class="pipeline.status" viewBox="0 0 16 16" width="20" height="20">
-              <path :d="getStatusIconPath(pipeline.status)" fill="currentColor" />
-            </svg>
-            流水线 #{{ pipeline.id.substring(0, 8) }}
+            <CiStatusIcon :status="pipeline.status" :size="20" />
+            流水线 #{{ String(pipeline.id) }}
           </h2>
           <div class="pipeline-meta">
             <span class="ref">{{ pipeline.ref_name }}</span>
@@ -21,6 +19,13 @@
             <span>{{ formatDate(pipeline.created_at) }}</span>
             <span v-if="pipeline.duration_seconds" class="separator">·</span>
             <span v-if="pipeline.duration_seconds">耗时 {{ formatDuration(pipeline.duration_seconds) }}</span>
+          </div>
+          <div v-if="pipeline.error_message" class="error-banner">
+            <svg viewBox="0 0 16 16" width="16" height="16">
+              <circle cx="8" cy="8" r="7" fill="#dd2b0e"/>
+              <path d="M8 4v4M8 10v.5" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            {{ pipeline.error_message }}
           </div>
         </div>
         <div class="header-actions">
@@ -52,9 +57,7 @@
             :class="{ expanded: expandedJob === job.id }"
           >
             <div class="job-header" @click="toggleJob(job.id)">
-              <svg class="status-icon" :class="job.status" viewBox="0 0 16 16" width="16" height="16">
-                <path :d="getStatusIconPath(job.status)" fill="currentColor" />
-              </svg>
+              <CiStatusIcon :status="job.status" :size="16" />
               <span class="job-name">{{ job.name }}</span>
               <span class="job-stage">{{ job.stage }}</span>
               <span class="job-duration" v-if="job.duration">{{ formatDuration(job.duration) }}</span>
@@ -84,6 +87,7 @@ import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
 import type { Project, Pipeline } from '@/types'
 import { navIcons } from '@/navigation/icons'
+import CiStatusIcon from '@/components/CiStatusIcon.vue'
 
 const icons = navIcons
 
@@ -123,18 +127,6 @@ function formatDuration(seconds: number) {
   const hours = Math.floor(seconds / 3600)
   const mins = Math.floor((seconds % 3600) / 60)
   return `${hours}时${mins}分`
-}
-
-function getStatusIconPath(status: string): string {
-  const map: Record<string, string> = {
-    pending: icons.statusPending,
-    running: icons.statusRunning,
-    success: icons.statusSuccess,
-    failed: icons.statusFailed,
-    canceled: icons.statusCanceled,
-    skipped: icons.statusSkipped
-  }
-  return map[status] || icons.statusPending
 }
 
 async function toggleJob(jobId: string) {
@@ -235,26 +227,6 @@ watch([() => props.project?.owner_name, () => props.project?.name, () => route.p
   }
 }
 
-.status-icon {
-  font-size: 18px;
-  font-weight: bold;
-  
-  &.pending { color: #888; }
-  &.running { 
-    color: $primary-color;
-    animation: pulse 1.5s ease-in-out infinite;
-  }
-  &.success { color: #22c55e; }
-  &.failed { color: #ef4444; }
-  &.canceled { color: #6b7280; }
-  &.skipped { color: #9ca3af; }
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
 .pipeline-meta {
   font-size: $font-size-sm;
   color: $text-muted;
@@ -270,6 +242,23 @@ watch([() => props.project?.owner_name, () => props.project?.name, () => route.p
   
   code {
     font-size: $font-size-xs;
+  }
+}
+
+.error-banner {
+  margin-top: $spacing-sm;
+  padding: $spacing-sm $spacing-md;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: $border-radius;
+  color: #dd2b0e;
+  font-size: $font-size-sm;
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  
+  svg {
+    flex-shrink: 0;
   }
 }
 

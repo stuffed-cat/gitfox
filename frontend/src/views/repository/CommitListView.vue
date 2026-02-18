@@ -41,7 +41,10 @@
         <div class="commit-actions">
           <code class="commit-sha">{{ commit.sha.substring(0, 8) }}</code>
           <button class="btn btn-outline btn-sm" @click="copyCommit(commit.sha)" title="复制 SHA">
-            📋
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="5" y="2" width="9" height="11" rx="1"/>
+              <path d="M5 4H3a1 1 0 00-1 1v9a1 1 0 001 1h8a1 1 0 001-1v-2"/>
+            </svg>
           </button>
         </div>
       </div>

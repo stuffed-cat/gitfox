@@ -88,11 +88,32 @@ export function createProjectMenuConfig(context: NavContext): NavSection[] {
           activeMatch: /\/-\/pipelines/
         },
         { 
-          id: 'runners', 
-          label: 'Runners', 
-          to: `${basePath}/-/runners`, 
-          icon: 'pipeline',
-          activeMatch: /\/-\/runners/
+          id: 'jobs', 
+          label: '作业', 
+          to: `${basePath}/-/jobs`, 
+          icon: 'job',
+          activeMatch: /\/-\/jobs/
+        },
+        { 
+          id: 'ci-editor', 
+          label: '流水线编辑器', 
+          to: `${basePath}/-/ci/editor`, 
+          icon: 'edit',
+          activeMatch: /\/-\/ci\/editor/
+        },
+        { 
+          id: 'pipeline-schedules', 
+          label: '流水线计划', 
+          to: `${basePath}/-/pipeline_schedules`, 
+          icon: 'clock',
+          activeMatch: /\/-\/pipeline_schedules/
+        },
+        { 
+          id: 'artifacts', 
+          label: '产物', 
+          to: `${basePath}/-/artifacts`, 
+          icon: 'download',
+          activeMatch: /\/-\/artifacts/
         },
       ]
     },
@@ -105,6 +126,13 @@ export function createProjectMenuConfig(context: NavContext): NavSection[] {
           label: '通用', 
           to: `${basePath}/-/settings`, 
           icon: 'settings' 
+        },
+        { 
+          id: 'runners', 
+          label: 'CI/CD Runners', 
+          to: `${basePath}/-/runners`, 
+          icon: 'pipeline',
+          activeMatch: /\/-\/runners/
         },
       ]
     }

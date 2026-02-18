@@ -1,4 +1,5 @@
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+use git2::Repository;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use std::collections::HashMap;
@@ -76,6 +77,96 @@ pub enum RetryDefinition {
 }
 
 impl CiConfigParser {
+    /// 从 git 仓库的指定 commit 解析 CI 配置
+    pub fn parse_from_repo(repo: &Repository, commit_sha: &str) -> AppResult<CiConfig> {
+        use crate::services::GitService;
+        
+        // 尝试读取 .gitfox/ci/ 目录下的所有 yml/yaml 文件
+        let ci_dir_path = ".gitfox/ci";
+        
+        // 浏览树获取文件列表
+        let entries = match GitService::browse_tree(repo, commit_sha, Some(ci_dir_path)) {
+            Ok(entries) => entries,
+            Err(_) => {
+                return Err(AppError::BadRequest(
+                    "No CI configuration found. Please create .gitfox/ci/*.yml files.".to_string()
+                ));
+            }
+        };
+        
+        // 收集所有 yaml 文件
+        let mut yaml_files: Vec<(String, String)> = Vec::new();
+        for entry in entries {
+            if entry.entry_type == crate::models::FileEntryType::File {
+                let path = entry.path.to_lowercase();
+                if path.ends_with(".yml") || path.ends_with(".yaml") {
+                    let full_path = format!("{}/{}", ci_dir_path, entry.path);
+                    match GitService::get_file_content(repo, commit_sha, &full_path) {
+                        Ok(file_content) => {
+                            if !file_content.is_binary {
+                                yaml_files.push((entry.path.clone(), file_content.content));
+                            }
+                        }
+                        Err(e) => {
+                            return Err(AppError::BadRequest(
+                                format!("Failed to read CI file {}: {}", entry.path, e)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        
+        if yaml_files.is_empty() {
+            return Err(AppError::BadRequest(
+                "No valid CI configuration files found in .gitfox/ci/".to_string()
+            ));
+        }
+        
+        // 排序保证顺序
+        yaml_files.sort_by(|a, b| a.0.cmp(&b.0));
+        
+        let mut merged_config = CiConfig {
+            stages: Vec::new(),
+            jobs: HashMap::new(),
+            variables: None,
+            before_script: None,
+            after_script: None,
+        };
+        
+        // 解析并合并所有配置文件
+        for (filename, content) in yaml_files {
+            let config: Value = serde_yaml::from_str(&content)
+                .map_err(|e| AppError::BadRequest(
+                    format!("Invalid YAML syntax in {}: {}", filename, e)
+                ))?;
+            
+            Self::merge_config(&mut merged_config, config)
+                .map_err(|e| AppError::BadRequest(
+                    format!("Failed to parse CI config in {}: {}", filename, e)
+                ))?;
+        }
+        
+        // 如果没有定义 stages，从 jobs 中推断
+        if merged_config.stages.is_empty() {
+            let mut stages: Vec<String> = merged_config
+                .jobs
+                .values()
+                .map(|job| job.stage.clone())
+                .collect();
+            stages.sort();
+            stages.dedup();
+            if stages.is_empty() {
+                return Err(AppError::BadRequest(
+                    "No jobs defined in CI configuration".to_string()
+                ));
+            }
+            merged_config.stages = stages;
+        }
+        
+        Ok(merged_config)
+    }
+    
     /// 从 .gitfox/ci/ 目录解析所有 CI 配置
     pub async fn parse_from_directory<P: AsRef<Path>>(ci_dir: P) -> AppResult<CiConfig> {
         let ci_dir = ci_dir.as_ref();

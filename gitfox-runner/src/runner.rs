@@ -172,7 +172,7 @@ impl Runner {
         >,
     ) -> Result<()> {
         // Update job status to running
-        self.send_job_update(job.id, JobStatus::Running, None, write)
+        self.send_job_update(job.id, JobStatus::Running, None, None, write)
             .await?;
 
         // Create executor
@@ -202,12 +202,13 @@ impl Runner {
                     "Job {} completed with status: {:?} (exit code: {})",
                     job.id, status, exit_code
                 );
-                self.send_job_update(job.id, status, Some(exit_code), write)
+                self.send_job_update(job.id, status, Some(exit_code), None, write)
                     .await?;
             }
             Err(e) => {
                 error!("Job {} execution error: {}", job.id, e);
-                self.send_job_update(job.id, JobStatus::Failed, Some(-1), write)
+                let error_msg = format!("Execution error: {}", e);
+                self.send_job_update(job.id, JobStatus::Failed, Some(-1), Some(error_msg), write)
                     .await?;
             }
         }
@@ -220,6 +221,7 @@ impl Runner {
         job_id: i64,
         status: JobStatus,
         exit_code: Option<i32>,
+        error_message: Option<String>,
         write: &mut futures::stream::SplitSink<
             tokio_tungstenite::WebSocketStream<
                 tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -231,6 +233,7 @@ impl Runner {
             job_id,
             status,
             exit_code,
+            error_message,
         };
         let msg = serde_json::to_string(&update)?;
         write.send(Message::Text(msg)).await?;

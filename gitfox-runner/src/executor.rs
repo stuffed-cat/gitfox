@@ -53,11 +53,12 @@ impl Executor {
             .output()?;
 
         if !clone_result.status.success() {
+            let error_msg = String::from_utf8_lossy(&clone_result.stderr).to_string();
             log_callback(&format!(
                 "Clone failed: {}\n",
-                String::from_utf8_lossy(&clone_result.stderr)
+                error_msg
             ));
-            return Ok(clone_result.status.code().unwrap_or(1));
+            return Err(RunnerError::Execution(format!("Git clone failed: {}", error_msg)));
         }
 
         // Checkout specific commit
@@ -68,11 +69,12 @@ impl Executor {
             .output()?;
 
         if !checkout_result.status.success() {
+            let error_msg = String::from_utf8_lossy(&checkout_result.stderr).to_string();
             log_callback(&format!(
                 "Checkout failed: {}\n",
-                String::from_utf8_lossy(&checkout_result.stderr)
+                error_msg
             ));
-            return Ok(checkout_result.status.code().unwrap_or(1));
+            return Err(RunnerError::Execution(format!("Git checkout failed: {}", error_msg)));
         }
 
         // Execute scripts
@@ -120,7 +122,10 @@ impl Executor {
                 ));
                 // Cleanup
                 let _ = std::fs::remove_dir_all(&job_dir);
-                return Ok(exit_code);
+                return Err(RunnerError::Execution(format!(
+                    "Script '{}' failed with exit code {}",
+                    script_line, exit_code
+                )));
             }
         }
 

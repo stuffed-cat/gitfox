@@ -230,6 +230,7 @@ export interface Pipeline {
   started_at?: string
   finished_at?: string
   duration_seconds?: number
+  error_message?: string
   created_at: string
   updated_at: string
 }
@@ -247,6 +248,7 @@ export interface PipelineJob {
   finished_at?: string
   duration_seconds?: number
   allow_failure: boolean
+  error_message?: string
   created_at: string
   updated_at: string
 }

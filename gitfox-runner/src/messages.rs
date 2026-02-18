@@ -20,6 +20,7 @@ pub enum RunnerMessage {
         job_id: i64,
         status: JobStatus,
         exit_code: Option<i32>,
+        error_message: Option<String>,
     },
 
     /// Job log output

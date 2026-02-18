@@ -15,6 +15,7 @@ pub struct Pipeline {
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub duration_seconds: Option<i32>,
+    pub error_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -53,6 +54,7 @@ pub struct PipelineJob {
     pub finished_at: Option<DateTime<Utc>>,
     pub duration_seconds: Option<i32>,
     pub allow_failure: bool,
+    pub error_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

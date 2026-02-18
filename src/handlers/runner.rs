@@ -170,9 +170,9 @@ impl Handler<ProcessMessage> for RunnerWebSocket {
                     }
                 });
             }
-            RunnerMessage::JobUpdate { job_id, status, exit_code } => {
+            RunnerMessage::JobUpdate { job_id, status, exit_code, error_message } => {
                 actix_web::rt::spawn(async move {
-                    if let Err(e) = update_job_status(pool.get_ref(), job_id, &status, exit_code).await {
+                    if let Err(e) = update_job_status(pool.get_ref(), job_id, &status, exit_code, error_message.as_deref()).await {
                         error!("Failed to update job status: {}", e);
                     }
                     let ack = ServerMessage::Ack;
@@ -274,6 +274,7 @@ async fn update_job_status(
     job_id: i64,
     status: &str,
     exit_code: Option<i32>,
+    error_message: Option<&str>,
 ) -> AppResult<()> {
     if status == "running" {
         sqlx::query(
@@ -289,11 +290,13 @@ async fn update_job_status(
             UPDATE jobs 
             SET status = $1, 
                 finished_at = NOW(),
-                updated_at = NOW()
-            WHERE id = $2
+                updated_at = NOW(),
+                error_message = $2
+            WHERE id = $3
             "#
         )
         .bind(status)
+        .bind(error_message)
         .bind(job_id)
         .execute(pool)
         .await?;
@@ -466,6 +469,7 @@ pub enum RunnerMessage {
         job_id: i64,
         status: String,
         exit_code: Option<i32>,
+        error_message: Option<String>,
     },
     #[serde(rename = "job_log")]
     JobLog { job_id: i64, output: String },

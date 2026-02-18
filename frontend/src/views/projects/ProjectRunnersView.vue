@@ -590,12 +590,14 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '@/api'
-import type { Runner, CreateRunnerRequest, UpdateRunnerRequest } from '@/types'
+import type { Runner, CreateRunnerRequest, UpdateRunnerRequest, Project } from '@/types'
 
 const route = useRoute()
+const props = defineProps<{ project?: Project }>()
+
 const projectPath = computed(() => ({
-  namespace: route.params.namespace as string,
-  project: route.params.project as string
+  namespace: (props.project?.owner_name || route.params.owner || route.params.namespace) as string,
+  project: (props.project?.name || route.params.repo || route.params.project) as string
 }))
 
 // State
