@@ -282,23 +282,21 @@ impl GitService {
         let author = commit.author();
         let author_name = author.name().unwrap_or("").to_string();
         let author_email = author.email().unwrap_or("").to_string();
-        let authored_at = chrono::DateTime::from_timestamp(author.when().seconds(), 0)
-            .unwrap_or_default();
+        let authored_date = author.when().seconds();
         let committer = commit.committer();
         let committer_name = committer.name().unwrap_or("").to_string();
         let committer_email = committer.email().unwrap_or("").to_string();
-        let committed_at = chrono::DateTime::from_timestamp(committer.when().seconds(), 0)
-            .unwrap_or_default();
+        let committed_date = committer.when().seconds();
 
         Ok(CommitDetail {
             sha: sha_str,
             message,
             author_name,
             author_email,
-            authored_at: authored_at.into(),
+            authored_date,
             committer_name,
             committer_email,
-            committed_at: committed_at.into(),
+            committed_date,
             parent_shas,
             stats: CommitStats {
                 additions,
@@ -306,6 +304,69 @@ impl GitService {
                 files_changed: diffs.len() as u32,
             },
             diffs,
+        })
+    }
+
+    pub fn get_full_file_diff(
+        repo: &Repository,
+        sha: &str,
+        file_path: &str,
+    ) -> AppResult<crate::handlers::commit::FullFileDiff> {
+        let oid = Oid::from_str(sha)?;
+        let commit = repo.find_commit(oid)?;
+        let parent = commit.parent(0).ok();
+        
+        let tree = commit.tree()?;
+        let parent_tree = parent.as_ref().map(|p| p.tree()).transpose()?;
+        
+        // 读取原始文件内容（完整版）
+        let original_content = if let Some(parent_tree) = &parent_tree {
+            if let Ok(entry) = parent_tree.get_path(Path::new(file_path)) {
+                if let Ok(object) = entry.to_object(repo) {
+                    if let Some(blob) = object.as_blob() {
+                        std::str::from_utf8(blob.content())
+                            .ok()
+                            .map(|s| s.to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        // 读取修改后文件内容（完整版）
+        let modified_content = if let Ok(entry) = tree.get_path(Path::new(file_path)) {
+            if let Ok(object) = entry.to_object(repo) {
+                if let Some(blob) = object.as_blob() {
+                    std::str::from_utf8(blob.content())
+                        .ok()
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        let total_lines = modified_content
+            .as_ref()
+            .or(original_content.as_ref())
+            .map(|c| c.lines().count() as u32)
+            .unwrap_or(0);
+        
+        Ok(crate::handlers::commit::FullFileDiff {
+            original_content,
+            modified_content,
+            total_lines,
         })
     }
 
@@ -543,6 +604,9 @@ impl GitService {
         commit: &Commit,
         parent: Option<&Commit>,
     ) -> AppResult<Vec<DiffInfo>> {
+        const MAX_DIFF_LINES: usize = 1000; // 单个文件最大显示行数
+        const CONTEXT_LINES: usize = 100;   // 截断时显示的上下文行数
+        
         let tree = commit.tree()?;
         let parent_tree = parent.map(|p| p.tree()).transpose()?;
 
@@ -551,6 +615,7 @@ impl GitService {
 
         let mut diffs = Vec::new();
 
+        // Step 1: Collect file metadata and content
         diff.foreach(
             &mut |delta, _| {
                 let status = match delta.status() {
@@ -569,6 +634,98 @@ impl GitService {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default();
 
+                // 读取原始文件内容
+                let (original_content, orig_total_lines, orig_truncated) = if status != DiffStatus::Added {
+                    if let Some(path) = delta.old_file().path() {
+                        if let Some(parent_tree) = &parent_tree {
+                            if let Ok(entry) = parent_tree.get_path(path) {
+                                if let Ok(object) = entry.to_object(repo) {
+                                    if let Some(blob) = object.as_blob() {
+                                        if let Ok(content) = std::str::from_utf8(blob.content()) {
+                                            let lines: Vec<&str> = content.lines().collect();
+                                            let total_lines = lines.len();
+                                            
+                                            if total_lines > MAX_DIFF_LINES {
+                                                // 截断：显示前100行和后100行
+                                                let head = lines.iter().take(CONTEXT_LINES).copied().collect::<Vec<_>>().join("\n");
+                                                let tail = lines.iter().skip(total_lines - CONTEXT_LINES).copied().collect::<Vec<_>>().join("\n");
+                                                let truncated_content = format!(
+                                                    "{}\n\n... ({} 行已省略) ...\n\n{}",
+                                                    head,
+                                                    total_lines - CONTEXT_LINES * 2,
+                                                    tail
+                                                );
+                                                (Some(truncated_content), Some(total_lines as u32), true)
+                                            } else {
+                                                (Some(content.to_string()), Some(total_lines as u32), false)
+                                            }
+                                        } else {
+                                            (None, None, false)
+                                        }
+                                    } else {
+                                        (None, None, false)
+                                    }
+                                } else {
+                                    (None, None, false)
+                                }
+                            } else {
+                                (None, None, false)
+                            }
+                        } else {
+                            (None, None, false)
+                        }
+                    } else {
+                        (None, None, false)
+                    }
+                } else {
+                    (None, None, false)
+                };
+
+                // 读取修改后文件内容
+                let (modified_content, mod_total_lines, mod_truncated) = if status != DiffStatus::Deleted {
+                    if let Some(path) = delta.new_file().path() {
+                        if let Ok(entry) = tree.get_path(path) {
+                            if let Ok(object) = entry.to_object(repo) {
+                                if let Some(blob) = object.as_blob() {
+                                    if let Ok(content) = std::str::from_utf8(blob.content()) {
+                                        let lines: Vec<&str> = content.lines().collect();
+                                        let total_lines = lines.len();
+                                        
+                                        if total_lines > MAX_DIFF_LINES {
+                                            let head = lines.iter().take(CONTEXT_LINES).copied().collect::<Vec<_>>().join("\n");
+                                            let tail = lines.iter().skip(total_lines - CONTEXT_LINES).copied().collect::<Vec<_>>().join("\n");
+                                            let truncated_content = format!(
+                                                "{}\n\n... ({} 行已省略) ...\n\n{}",
+                                                head,
+                                                total_lines - CONTEXT_LINES * 2,
+                                                tail
+                                            );
+                                            (Some(truncated_content), Some(total_lines as u32), true)
+                                        } else {
+                                            (Some(content.to_string()), Some(total_lines as u32), false)
+                                        }
+                                    } else {
+                                        (None, None, false)
+                                    }
+                                } else {
+                                    (None, None, false)
+                                }
+                            } else {
+                                (None, None, false)
+                            }
+                        } else {
+                            (None, None, false)
+                        }
+                    } else {
+                        (None, None, false)
+                    }
+                } else {
+                    (None, None, false)
+                };
+
+                let is_truncated = orig_truncated || mod_truncated;
+                let total_lines = mod_total_lines.or(orig_total_lines);
+
                 diffs.push(DiffInfo {
                     old_path,
                     new_path,
@@ -576,6 +733,10 @@ impl GitService {
                     status,
                     additions: 0,
                     deletions: 0,
+                    original_content,
+                    modified_content,
+                    is_truncated,
+                    total_lines,
                 });
 
                 true
@@ -584,6 +745,52 @@ impl GitService {
             None,
             None,
         )?;
+
+        // Step 2: Generate patch for each file and count stats
+        let mut file_idx = 0;
+        let mut seen_first_file_header = false;
+        
+        diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            // File header marks the start of a new file
+            if line.origin() == 'F' {
+                if seen_first_file_header && file_idx + 1 < diffs.len() {
+                    file_idx += 1;
+                }
+                seen_first_file_header = true;
+                return true;
+            }
+
+            if file_idx >= diffs.len() {
+                return true;
+            }
+
+            let diff_info = &mut diffs[file_idx];
+
+            // Count additions and deletions
+            match line.origin() {
+                '+' => {
+                    if !line.content().starts_with(b"+++") {
+                        diff_info.additions += 1;
+                    }
+                }
+                '-' => {
+                    if !line.content().starts_with(b"---") {
+                        diff_info.deletions += 1;
+                    }
+                }
+                _ => {}
+            }
+
+            // Append line to diff string
+            if matches!(line.origin(), 'F' | 'H' | '+' | '-' | ' ') {
+                diff_info.diff.push(line.origin());
+                if let Ok(content) = std::str::from_utf8(line.content()) {
+                    diff_info.diff.push_str(content);
+                }
+            }
+
+            true
+        })?;
 
         Ok(diffs)
     }

@@ -325,6 +325,16 @@ class ApiClient {
       const response = await this.client.get(`${this.projectPath(path)}/repository/commits/${sha}`)
       return response.data
     },
+    getFullFileDiff: async (path: ProjectPath, sha: string, filePath: string): Promise<{
+      original_content?: string
+      modified_content?: string
+      total_lines: number
+    }> => {
+      const response = await this.client.get(
+        `${this.projectPath(path)}/repository/commits/${sha}/files/${filePath}`
+      )
+      return response.data
+    },
     compare: async (path: ProjectPath, from: string, to: string): Promise<CommitInfo[]> => {
       const response = await this.client.get(`${this.projectPath(path)}/repository/compare`, {
         params: { from, to }

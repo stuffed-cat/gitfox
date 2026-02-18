@@ -5,6 +5,7 @@ use crate::config::AppConfig;
 use crate::error::AppResult;
 use crate::models::{CommitListQuery, CompareQuery};
 use crate::services::{GitService, ProjectService};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ProjectPath {
@@ -83,4 +84,38 @@ pub async fn compare(
     
     let commits = GitService::compare_refs(&repo, &query.from, &query.to)?;
     Ok(HttpResponse::Ok().json(commits))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileDiffPath {
+    pub namespace: String,
+    pub project: String,
+    pub sha: String,
+    pub file_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FullFileDiff {
+    pub original_content: Option<String>,
+    pub modified_content: Option<String>,
+    pub total_lines: u32,
+}
+
+/// GET /projects/:namespace/:project/repository/commits/:sha/files/*file_path
+pub async fn get_full_file_diff(
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<(String, String, String, String)>,
+) -> AppResult<HttpResponse> {
+    let (namespace, project_name, sha, file_path) = path.into_inner();
+    
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &namespace, 
+        &project_name
+    ).await?;
+    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
+    
+    let file_diff = GitService::get_full_file_diff(&repo, &sha, &file_path)?;
+    Ok(HttpResponse::Ok().json(file_diff))
 }

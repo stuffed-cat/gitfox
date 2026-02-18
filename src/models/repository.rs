@@ -75,6 +75,10 @@ pub struct DiffInfo {
     pub status: DiffStatus,
     pub additions: u32,
     pub deletions: u32,
+    pub original_content: Option<String>,
+    pub modified_content: Option<String>,
+    pub is_truncated: bool,  // 内容是否被截断
+    pub total_lines: Option<u32>,  // 总行数
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]

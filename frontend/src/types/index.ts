@@ -133,6 +133,10 @@ export interface DiffInfo {
   status: 'Added' | 'Deleted' | 'Modified' | 'Renamed' | 'Copied'
   additions: number
   deletions: number
+  original_content?: string
+  modified_content?: string
+  is_truncated: boolean
+  total_lines?: number
 }
 
 export interface BranchInfo {

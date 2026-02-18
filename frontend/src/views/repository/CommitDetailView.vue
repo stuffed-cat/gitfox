@@ -37,10 +37,18 @@
       </div>
       
       <div class="diff-section">
-        <h3>更改的文件 ({{ diffs.length }})</h3>
+        <div class="diff-header">
+          <h3>更改的文件 ({{ diffs.length }})</h3>
+          <div class="diff-actions">
+            <button @click="toggleAllFiles" class="btn btn-secondary">
+              {{ allExpanded ? '全部收起' : '全部展开' }}
+            </button>
+          </div>
+        </div>
         
-        <div v-for="diff in diffs" :key="diff.file_path" class="diff-file">
-          <div class="diff-file-header">
+        <div v-for="(diff, index) in displayedDiffs" :key="diff.file_path" class="diff-file">
+          <div class="diff-file-header" @click="toggleFile(index)">
+            <span class="expand-icon">{{ expandedFiles.has(index) ? '▼' : '▶' }}</span>
             <span class="file-status" :class="diff.status">{{ statusText(diff.status) }}</span>
             <span class="file-path">{{ diff.file_path }}</span>
             <span class="diff-stats">
@@ -48,7 +56,52 @@
               <span class="deletions">-{{ diff.deletions }}</span>
             </span>
           </div>
-          <pre class="diff-content"><code v-html="formatDiff(diff.diff)"></code></pre>
+          
+          <div v-if="expandedFiles.has(index)" class="diff-content-wrapper">
+            <!-- 文件已截断警告 -->
+            <div v-if="diff.is_truncated" class="large-file-warning">
+              此文件内容较大 (共 {{ diff.total_lines }} 行)，已截断显示。
+              <button 
+                @click="showFullFile(index, diff)" 
+                class="btn-link"
+                :disabled="loadingFullFile.has(index)"
+              >
+                {{ loadingFullFile.has(index) ? '加载中...' : '显示完整内容' }}
+              </button>
+            </div>
+
+            <MonacoDiffEditor
+              v-if="diff.original_content !== undefined && diff.modified_content !== undefined && !isBinaryFile(diff)"
+              :original="diff.original_content || ''"
+              :modified="diff.modified_content || ''"
+              :language="getLanguageFromPath(diff.file_path)"
+              :height="calculateDiffHeight(diff)"
+              :minimap="false"
+            />
+            <div v-else-if="isBinaryFile(diff)" class="no-diff">
+              二进制文件，无法显示差异
+            </div>
+            <div v-else class="no-diff">无可显示的更改</div>
+          </div>
+        </div>
+
+        <!-- 分页 -->
+        <div v-if="totalPages > 1" class="pagination">
+          <button 
+            @click="currentPage--" 
+            :disabled="currentPage === 1"
+            class="btn btn-secondary"
+          >
+            上一页
+          </button>
+          <span class="page-info">第 {{ currentPage }} / {{ totalPages }} 页</span>
+          <button 
+            @click="currentPage++" 
+            :disabled="currentPage === totalPages"
+            class="btn btn-secondary"
+          >
+            下一页
+          </button>
         </div>
       </div>
     </template>
@@ -63,10 +116,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '@/api'
 import dayjs from 'dayjs'
+import MonacoDiffEditor from '@/components/editor/MonacoDiffEditor.vue'
 import type { Project, CommitDetail } from '@/types'
 
 interface DiffFile {
@@ -75,7 +129,14 @@ interface DiffFile {
   additions: number
   deletions: number
   diff: string
+  original_content?: string
+  modified_content?: string
+  is_truncated: boolean
+  total_lines?: number
 }
+
+const MAX_FILES_PER_PAGE = 20
+const MAX_FILES_AUTO_EXPAND = 10
 
 const props = defineProps<{
   project?: Project
@@ -86,6 +147,20 @@ const route = useRoute()
 const loading = ref(false)
 const commit = ref<CommitDetail | null>(null)
 const diffs = ref<DiffFile[]>([])
+const expandedFiles = ref<Set<number>>(new Set())
+const loadingFullFile = ref<Set<number>>(new Set()) // 正在加载完整文件的索引
+const currentPage = ref(1)
+
+const totalPages = computed(() => Math.ceil(diffs.value.length / MAX_FILES_PER_PAGE))
+const displayedDiffs = computed(() => {
+  const start = (currentPage.value - 1) * MAX_FILES_PER_PAGE
+  const end = start + MAX_FILES_PER_PAGE
+  return diffs.value.slice(start, end)
+})
+const allExpanded = computed(() => {
+  if (displayedDiffs.value.length === 0) return false
+  return displayedDiffs.value.every((_, i) => expandedFiles.value.has(i))
+})
 
 function formatCommitDate(timestamp?: number) {
   if (!timestamp) return '-'
@@ -102,30 +177,102 @@ function statusText(status: string) {
   return map[status] || status
 }
 
-function formatDiff(diff: string) {
-  if (!diff) return ''
-  return diff
-    .split('\n')
-    .map(line => {
-      if (line.startsWith('+') && !line.startsWith('+++')) {
-        return `<span class="line-add">${escapeHtml(line)}</span>`
-      }
-      if (line.startsWith('-') && !line.startsWith('---')) {
-        return `<span class="line-del">${escapeHtml(line)}</span>`
-      }
-      if (line.startsWith('@@')) {
-        return `<span class="line-info">${escapeHtml(line)}</span>`
-      }
-      return escapeHtml(line)
-    })
-    .join('\n')
+function getLanguageFromPath(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase() || ''
+  const langMap: Record<string, string> = {
+    js: 'javascript',
+    ts: 'typescript',
+    jsx: 'javascript',
+    tsx: 'typescript',
+    vue: 'vue',
+    py: 'python',
+    rs: 'rust',
+    go: 'go',
+    java: 'java',
+    c: 'c',
+    cpp: 'cpp',
+    cc: 'cpp',
+    cxx: 'cpp',
+    h: 'c',
+    hpp: 'cpp',
+    cs: 'csharp',
+    rb: 'ruby',
+    php: 'php',
+    sh: 'shell',
+    bash: 'shell',
+    yml: 'yaml',
+    yaml: 'yaml',
+    json: 'json',
+    xml: 'xml',
+    html: 'html',
+    css: 'css',
+    scss: 'scss',
+    sass: 'sass',
+    less: 'less',
+    md: 'markdown',
+    sql: 'sql',
+    txt: 'plaintext'
+  }
+  return langMap[ext] || 'plaintext'
 }
 
-function escapeHtml(text: string) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+function toggleFile(index: number) {
+  if (expandedFiles.value.has(index)) {
+    expandedFiles.value.delete(index)
+  } else {
+    expandedFiles.value.add(index)
+  }
+}
+
+function toggleAllFiles() {
+  if (allExpanded.value) {
+    expandedFiles.value.clear()
+  } else {
+    displayedDiffs.value.forEach((_, i) => expandedFiles.value.add(i))
+  }
+}
+
+function isBinaryFile(diff: DiffFile): boolean {
+  // 检查是否是二进制文件（没有文本内容）
+  return !diff.original_content && !diff.modified_content && diff.diff === ''
+}
+
+async function showFullFile(index: number, diff: DiffFile) {
+  if (!props.project?.owner_name || !props.project?.name || loadingFullFile.value.has(index)) return
+  
+  try {
+    loadingFullFile.value.add(index)
+    const fullDiff = await api.commits.getFullFileDiff(
+      { namespace: props.project.owner_name, project: props.project.name },
+      route.params.sha as string,
+      diff.file_path
+    )
+    
+    // 更新 diff 内容
+    const displayIndex = (currentPage.value - 1) * MAX_FILES_PER_PAGE + index
+    
+    if (displayIndex < diffs.value.length) {
+      diffs.value[displayIndex] = {
+        ...diffs.value[displayIndex],
+        original_content: fullDiff.original_content,
+        modified_content: fullDiff.modified_content,
+        is_truncated: false,
+        total_lines: fullDiff.total_lines
+      }
+    }
+  } catch (err: any) {
+    console.error('Failed to load full file:', err)
+    alert('加载完整文件失败: ' + (err.response?.data?.error || err.message))
+  } finally {
+    loadingFullFile.value.delete(index)
+  }
+}
+
+function calculateDiffHeight(diff: DiffFile): number {
+  const content = diff.modified_content || diff.original_content || ''
+  const lines = content.split('\n').length
+  // 每行约 19px 高度，最小 300px，最大 800px
+  return Math.min(800, Math.max(300, lines * 19 + 40))
 }
 
 async function loadCommit() {
@@ -141,10 +288,23 @@ async function loadCommit() {
     diffs.value = (detail.diffs || []).map(d => ({
       file_path: d.new_path || d.old_path,
       status: d.status.toLowerCase(),
-      additions: 0,
-      deletions: 0,
-      diff: d.diff
+      additions: d.additions || 0,
+      deletions: d.deletions || 0,
+      diff: d.diff,
+      original_content: d.original_content,
+      modified_content: d.modified_content,
+      is_truncated: d.is_truncated,
+      total_lines: d.total_lines
     }))
+    
+    // 重置状态
+    expandedFiles.value.clear()
+    currentPage.value = 1
+    
+    // 文件较少时自动展开
+    if (diffs.value.length <= MAX_FILES_AUTO_EXPAND) {
+      diffs.value.forEach((_, i) => expandedFiles.value.add(i))
+    }
   } catch (error) {
     console.error('Failed to load commit:', error)
     commit.value = null
@@ -241,8 +401,20 @@ watch([() => props.project?.owner_name, () => props.project?.name, () => route.p
 }
 
 .diff-section {
-  h3 {
+  .diff-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     margin-bottom: $spacing-md;
+    
+    h3 {
+      margin: 0;
+    }
+    
+    .diff-actions {
+      display: flex;
+      gap: $spacing-sm;
+    }
   }
 }
 
@@ -260,6 +432,20 @@ watch([() => props.project?.owner_name, () => props.project?.name, () => route.p
   padding: $spacing-sm $spacing-md;
   background: $bg-secondary;
   border-bottom: 1px solid $border-color;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s;
+  
+  &:hover {
+    background: darken($bg-secondary, 3%);
+  }
+  
+  .expand-icon {
+    width: 16px;
+    text-align: center;
+    color: $text-muted;
+    font-size: 12px;
+  }
 }
 
 .file-status {
@@ -285,16 +471,90 @@ watch([() => props.project?.owner_name, () => props.project?.name, () => route.p
   .deletions { color: $danger-color; }
 }
 
-.diff-content {
-  margin: 0;
-  padding: $spacing-md;
-  overflow-x: auto;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: $font-size-xs;
-  line-height: 1.6;
+.no-diff {
+  padding: $spacing-lg;
+  text-align: center;
+  color: $text-muted;
+  font-style: italic;
+}
+
+.warning-banner {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: $border-radius;
+  padding: $spacing-lg;
+  margin-bottom: $spacing-lg;
   
-  :deep(.line-add) { color: $success-color; display: block; }
-  :deep(.line-del) { color: $danger-color; display: block; }
-  :deep(.line-info) { color: $info-color; display: block; }
+  .warning-content {
+    display: flex;
+    gap: $spacing-md;
+    
+    .warning-icon {
+      width: 24px;
+      height: 24px;
+      color: #856404;
+      flex-shrink: 0;
+    }
+    
+    strong {
+      display: block;
+      margin-bottom: $spacing-sm;
+      color: #856404;
+    }
+    
+    p {
+      margin: $spacing-sm 0;
+      color: #856404;
+    }
+  }
+  
+  .warning-actions {
+    display: flex;
+    gap: $spacing-sm;
+    margin-top: $spacing-md;
+  }
+}
+
+.diff-content-wrapper {
+  position: relative;
+}
+
+.large-file-warning {
+  background: #e7f3ff;
+  border-bottom: 1px solid #b3d9ff;
+  padding: $spacing-sm $spacing-md;
+  font-size: $font-size-sm;
+  color: #004085;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  
+  .btn-link {
+    color: #0056b3;
+    text-decoration: underline;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: $font-size-sm;
+    
+    &:hover {
+      color: #003d82;
+    }
+  }
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: $spacing-md;
+  margin-top: $spacing-xl;
+  padding: $spacing-lg;
+  
+  .page-info {
+    color: $text-muted;
+    font-size: $font-size-sm;
+  }
 }
 </style>

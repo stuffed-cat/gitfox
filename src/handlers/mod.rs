@@ -225,6 +225,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             
             // Commit routes 
             .route("/projects/{namespace}/{project}/repository/commits", web::get().to(commit::list_commits))
+            .route("/projects/{namespace}/{project}/repository/commits/{sha}/files/{file_path:.*}", web::get().to(commit::get_full_file_diff))
             .route("/projects/{namespace}/{project}/repository/commits/{sha}", web::get().to(commit::get_commit))
             .route("/projects/{namespace}/{project}/repository/compare", web::get().to(commit::compare))
             
