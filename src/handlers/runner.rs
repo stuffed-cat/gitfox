@@ -214,7 +214,7 @@ impl Handler<ProcessMessage> for RunnerWebSocket {
                                 }
                             }
                             Err(e) => {
-                                error!("Failed to get pending job: {}", e);
+                                warn!("Failed to get pending job: {}", e);
                             }
                         }
                     });

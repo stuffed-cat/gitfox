@@ -8,7 +8,9 @@
       <div class="pipeline-header">
         <div class="header-main">
           <h2>
-            <span class="status-icon" :class="pipeline.status">{{ statusIcon(pipeline.status) }}</span>
+            <svg class="status-icon" :class="pipeline.status" viewBox="0 0 16 16" width="20" height="20">
+              <path :d="getStatusIconPath(pipeline.status)" fill="currentColor" />
+            </svg>
             流水线 #{{ pipeline.id.substring(0, 8) }}
           </h2>
           <div class="pipeline-meta">
@@ -50,11 +52,15 @@
             :class="{ expanded: expandedJob === job.id }"
           >
             <div class="job-header" @click="toggleJob(job.id)">
-              <span class="status-icon" :class="job.status">{{ statusIcon(job.status) }}</span>
+              <svg class="status-icon" :class="job.status" viewBox="0 0 16 16" width="16" height="16">
+                <path :d="getStatusIconPath(job.status)" fill="currentColor" />
+              </svg>
               <span class="job-name">{{ job.name }}</span>
               <span class="job-stage">{{ job.stage }}</span>
               <span class="job-duration" v-if="job.duration">{{ formatDuration(job.duration) }}</span>
-              <span class="expand-icon">{{ expandedJob === job.id ? '▼' : '▶' }}</span>
+              <svg class="expand-icon" viewBox="0 0 16 16" width="12" height="12">
+                <path :d="expandedJob === job.id ? icons.chevronDown : icons.chevronRight" fill="currentColor" />
+              </svg>
             </div>
             
             <div v-if="expandedJob === job.id" class="job-logs">
@@ -77,6 +83,9 @@ import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
 import type { Project, Pipeline } from '@/types'
+import { navIcons } from '@/navigation/icons'
+
+const icons = navIcons
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
@@ -116,16 +125,16 @@ function formatDuration(seconds: number) {
   return `${hours}时${mins}分`
 }
 
-function statusIcon(status: string) {
+function getStatusIconPath(status: string): string {
   const map: Record<string, string> = {
-    pending: '⏳',
-    running: '🔄',
-    success: '✅',
-    failed: '❌',
-    canceled: '⏹️',
-    skipped: '⏭️'
+    pending: icons.statusPending,
+    running: icons.statusRunning,
+    success: icons.statusSuccess,
+    failed: icons.statusFailed,
+    canceled: icons.statusCanceled,
+    skipped: icons.statusSkipped
   }
-  return map[status] || '❓'
+  return map[status] || icons.statusPending
 }
 
 async function toggleJob(jobId: string) {
@@ -227,14 +236,23 @@ watch([() => props.project?.owner_name, () => props.project?.name, () => route.p
 }
 
 .status-icon {
-  &.running {
-    animation: spin 1s linear infinite;
+  font-size: 18px;
+  font-weight: bold;
+  
+  &.pending { color: #888; }
+  &.running { 
+    color: $primary-color;
+    animation: pulse 1.5s ease-in-out infinite;
   }
+  &.success { color: #22c55e; }
+  &.failed { color: #ef4444; }
+  &.canceled { color: #6b7280; }
+  &.skipped { color: #9ca3af; }
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .pipeline-meta {

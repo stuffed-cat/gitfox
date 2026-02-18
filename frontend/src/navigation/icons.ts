@@ -32,6 +32,17 @@ export const navIcons: Record<string, string> = {
   pipeline: 'M2 4h4v4H2zM10 4h4v4h-4zM6 6h4M2 10h4v4H2zM10 10h4v4h-4zM6 12h4',
   job: 'M3 3h10v10H3zM6 6h4v4H6z',
   
+  // Pipeline/Job 状态图标
+  statusPending: 'M8 8m-6 0a6 6 0 1012 0a6 6 0 10-12 0',
+  statusRunning: 'M8 8m-6 0a6 6 0 1012 0a6 6 0 10-12 0M6 5v6l5-3z',
+  statusSuccess: 'M8 8m-6 0a6 6 0 1012 0a6 6 0 10-12 0M5 8l2 2 4-4',
+  statusFailed: 'M8 8m-6 0a6 6 0 1012 0a6 6 0 10-12 0M6 6l4 4M10 6l-4 4',
+  statusCanceled: 'M8 8m-6 0a6 6 0 1012 0a6 6 0 10-12 0M5 8h6',
+  statusSkipped: 'M8 8m-6 0a6 6 0 1012 0a6 6 0 10-12 0M6 5l3 3-3 3M9 5l3 3-3 3',
+  statusBlocked: 'M8 8m-6 0a6 6 0 1012 0a6 6 0 10-12 0M8 5v2M8 9v2',
+  statusWarning: 'M8 2L1 14h14L8 2zM8 6v4M8 11v1',
+  play: 'M4 3v10l9-5z',
+  
   // 用户相关
   user: 'M8 5m-3 0a3 3 0 106 0a3 3 0 10-6 0M2 14a6 6 0 0112 0',
   users: 'M5 5m-2 0a2 2 0 104 0a2 2 0 10-4 0M11 5m-2 0a2 2 0 104 0a2 2 0 10-4 0M1 12a4 4 0 018 0M7 12a4 4 0 018 0',

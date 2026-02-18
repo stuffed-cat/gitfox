@@ -1268,4 +1268,271 @@ onMounted(() => {
     font-size: 14px;
   }
 }
+
+// Modal styles
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+.modal {
+  background: $bg-primary;
+  border: 1px solid $border-color;
+  border-radius: 12px;
+  max-width: 600px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+
+  &.modal-small {
+    max-width: 480px;
+  }
+
+  &.modal-token {
+    max-width: 700px;
+  }
+}
+
+.modal-header {
+  padding: 24px;
+  border-bottom: 1px solid $border-color;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0;
+    color: $text-primary;
+  }
+
+  .btn-close {
+    background: transparent;
+    border: none;
+    font-size: 28px;
+    color: $text-secondary;
+    cursor: pointer;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+
+    &:hover {
+      background: $bg-secondary;
+      color: $text-primary;
+    }
+  }
+}
+
+.modal-body {
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.modal-footer {
+  padding: 16px 24px;
+  border-top: 1px solid $border-color;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+
+  label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: $text-primary;
+    font-size: 14px;
+  }
+
+  .form-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid $border-color;
+    border-radius: 6px;
+    font-size: 14px;
+    background: $bg-secondary;
+    color: $text-primary;
+    transition: border-color 0.2s;
+
+    &:focus {
+      outline: none;
+      border-color: $primary-color;
+    }
+  }
+
+  textarea.form-input {
+    resize: vertical;
+    min-height: 80px;
+  }
+
+  .form-help {
+    margin: 6px 0 0 0;
+    font-size: 13px;
+    color: $text-secondary;
+  }
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 400;
+
+  input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+  }
+}
+
+.tags-input {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid $border-color;
+  border-radius: 6px;
+  background: $bg-secondary;
+  min-height: 44px;
+
+  &:focus-within {
+    border-color: $primary-color;
+  }
+
+  .tag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: $bg-tertiary;
+    border: 1px solid $border-color;
+    border-radius: 4px;
+    font-size: 13px;
+    color: $text-primary;
+
+    .tag-remove {
+      background: transparent;
+      border: none;
+      color: $text-secondary;
+      cursor: pointer;
+      padding: 0;
+      font-size: 16px;
+      line-height: 1;
+
+      &:hover {
+        color: #ef4444;
+      }
+    }
+  }
+
+  input {
+    flex: 1;
+    min-width: 120px;
+    border: none;
+    background: transparent;
+    outline: none;
+    font-size: 14px;
+    color: $text-primary;
+  }
+}
+
+.token-display {
+  position: relative;
+  background: $bg-tertiary;
+  border: 1px solid $border-color;
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 24px;
+
+  code {
+    display: block;
+    font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+    font-size: 13px;
+    word-break: break-all;
+    color: $text-primary;
+    padding-right: 80px;
+  }
+
+  .btn-copy {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    padding: 6px 12px;
+    background: $bg-secondary;
+    border: 1px solid $border-color;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: $text-primary;
+    transition: all 0.2s;
+
+    &:hover {
+      background: $bg-secondary;
+    }
+
+    &.copied {
+      background: rgba(16, 185, 129, 0.1);
+      border-color: #10b981;
+      color: #10b981;
+    }
+  }
+}
+
+.setup-instructions {
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0 0 12px 0;
+    color: $text-primary;
+  }
+
+  ol {
+    margin: 0;
+    padding-left: 24px;
+
+    li {
+      margin-bottom: 12px;
+      color: $text-secondary;
+      line-height: 1.6;
+
+      pre {
+        margin-top: 8px;
+        padding: 12px;
+        background: $bg-tertiary;
+        border: 1px solid $border-color;
+        border-radius: 4px;
+        overflow-x: auto;
+
+        code {
+          font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+          font-size: 12px;
+          color: $text-primary;
+        }
+      }
+    }
+  }
+}
 </style>
