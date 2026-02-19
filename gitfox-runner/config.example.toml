@@ -9,9 +9,10 @@ name = "my-runner"
 # Runner tags for job selection
 tags = ["docker", "linux"]
 
-# Executor type: "shell" or "docker"
-# - shell: Runs scripts directly on the host (faster, less isolated)
-# - docker: Runs scripts in Docker containers (slower, better isolation)
+# Executor type: "shell", "docker" or "kubernetes" (alias: "k8s")
+# - shell:      Run scripts directly on the host (fast, less isolated)
+# - docker:     Run scripts inside Docker containers (isolated)
+# - kubernetes: Run scripts inside Kubernetes Pods (cloud-native, highly isolated)
 executor = "docker"
 
 # -----------------------------------------------------------------------------
@@ -42,10 +43,21 @@ clean_builds = true
 # Increase for multi-core machines, but consider memory/disk usage
 concurrent_jobs = 1
 
-# Default Docker image for docker executor
+# Default container image (for docker and kubernetes executors)
 # Default: "alpine:latest"
-# Can be overridden per job with CI_DOCKER_IMAGE variable
-default_docker_image = "alpine:latest"
+# Can be overridden per job with CI_DOCKER_IMAGE (docker) or CI_KUBERNETES_IMAGE (k8s) variable
+default_image = "alpine:latest"
+
+# -----------------------------------------------------------------------------
+# Kubernetes Executor Settings (only used when executor = "kubernetes")
+# -----------------------------------------------------------------------------
+
+# Kubernetes namespace to create Pods in
+# Default: "default"
+kubernetes_namespace = "default"
+
+# Path to kubeconfig file. If omitted, uses KUBECONFIG env var or in-cluster config
+# kubernetes_config = "/home/user/.kube/config"
 
 # -----------------------------------------------------------------------------
 # Security Notes
@@ -58,14 +70,20 @@ default_docker_image = "alpine:latest"
 # - Size limit prevents disk exhaustion
 # - No sudo/root access by default
 #
-# Docker Executor (Recommended):
-# - Full isolation per job
+# Docker Executor (Recommended for single-node CI):
+# - Full isolation per job via Docker containers
 # - No access to host filesystem (except /builds volume)
 # - Automatic cleanup after job completion
-# - Better security for untrusted code
+# - Requires Docker to be installed on the runner host
+#
+# Kubernetes Executor (Recommended for cloud/cluster CI):
+# - Each job runs in a dedicated Pod (strongest isolation)
+# - Requires kubectl accessible and cluster credentials configured
+# - Pods are deleted automatically after job completion
+# - Resource limits (memory: 2Gi, cpu: 2) applied per Pod
 #
 # Production Recommendations:
-# 1. Use docker executor for untrusted code
+# 1. Use docker or kubernetes executor for untrusted code
 # 2. Run runner as non-root user without sudo
 # 3. Set appropriate max_work_dir_size_mb based on disk capacity
 # 4. Enable clean_builds to prevent disk exhaustion

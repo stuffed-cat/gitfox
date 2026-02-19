@@ -22,9 +22,19 @@ pub struct RunnerConfig {
     #[serde(default = "default_concurrent_jobs")]
     pub concurrent_jobs: usize,
     
-    /// Default Docker image for docker executor
-    #[serde(default = "default_docker_image")]
-    pub default_docker_image: String,
+    /// Default container image for docker/kubernetes executor
+    /// 注册时如果选择 docker 或 kubernetes 执行器则必须提供
+    #[serde(default = "default_image", alias = "default_docker_image")]
+    pub default_image: String,
+
+    /// Kubernetes namespace (only used by kubernetes executor, default: "default")
+    #[serde(default = "default_kubernetes_namespace")]
+    pub kubernetes_namespace: String,
+
+    /// Path to kubeconfig file (only used by kubernetes executor, e.g. ~/.kube/config)
+    /// If None, uses the cluster's in-cluster config or KUBECONFIG env var
+    #[serde(default)]
+    pub kubernetes_config: Option<String>,
     
     /// Clean builds directory after job completion
     #[serde(default = "default_clean_builds")]
@@ -55,8 +65,12 @@ fn default_concurrent_jobs() -> usize {
     1
 }
 
-fn default_docker_image() -> String {
+fn default_image() -> String {
     String::from("alpine:latest")
+}
+
+fn default_kubernetes_namespace() -> String {
+    "default".to_string()
 }
 
 fn default_clean_builds() -> bool {
