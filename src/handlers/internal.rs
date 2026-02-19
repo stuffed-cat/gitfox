@@ -347,27 +347,18 @@ pub async fn post_receive(
             continue;
         }
 
-        // Check if this is a branch or tag update
-        if change.ref_name.starts_with("refs/heads/") || change.ref_name.starts_with("refs/tags/") {
-            // Try to trigger CI/CD pipeline
-            if project_id > 0 {
-                match try_trigger_pipeline(
-                    pool.get_ref(),
-                    config.get_ref(),
-                    project_id,
-                    user_id,
-                    &change.ref_name,
-                    &change.new_sha,
-                ).await {
-                    Ok(_) => info!("Pipeline triggered for {} at {}", change.ref_name, change.new_sha),
-                    Err(e) => warn!("Failed to trigger pipeline: {}", e),
-                }
-            }
-            
-            // Update branch record if it's a branch
-            if change.ref_name.starts_with("refs/heads/") {
-                let branch_name = change.ref_name.strip_prefix("refs/heads/").unwrap();
-                debug!("Branch {} updated to {}", branch_name, change.new_sha);
+        // Try to trigger CI/CD pipeline for any ref update (gitfox-shell sends short names like "master")
+        if project_id > 0 {
+            match try_trigger_pipeline(
+                pool.get_ref(),
+                config.get_ref(),
+                project_id,
+                user_id,
+                &change.ref_name,
+                &change.new_sha,
+            ).await {
+                Ok(_) => info!("Pipeline triggered for {} at {}", change.ref_name, change.new_sha),
+                Err(e) => warn!("Failed to trigger pipeline: {}", e),
             }
         }
     }
@@ -417,13 +408,11 @@ pub async fn check_ref_update(
         }
     };
 
-    // Check if this is a protected branch/tag
+    // Check if this is a protected branch/tag (now using short names)
     let ref_name = &body.ref_name;
-    let is_branch = ref_name.starts_with("refs/heads/");
-    let _is_tag = ref_name.starts_with("refs/tags/");
-
-    if is_branch {
-        let branch_name = ref_name.strip_prefix("refs/heads/").unwrap();
+    // Assume it's a branch unless it looks like a tag (no slashes, or check git)
+    // For simplicity, we'll just use ref_name as branch_name directly
+    let branch_name = ref_name;
 
         // Check branch protection rules
         let protection = sqlx::query_as::<_, (bool, bool)>(
@@ -460,22 +449,21 @@ pub async fn check_ref_update(
 
             // Check deletion
             if body.change_type == "delete" {
-                if !allow_deletion && !has_admin_access {
-                    return Ok(HttpResponse::Ok().json(CheckRefUpdateResponse {
-                        allowed: false,
-                        message: Some(format!(
-                            "Branch '{}' is protected: deletion is not allowed",
-                            branch_name
-                        )),
-                    }));
-                }
+            if !allow_deletion && !has_admin_access {
+                return Ok(HttpResponse::Ok().json(CheckRefUpdateResponse {
+                    allowed: false,
+                    message: Some(format!(
+                        "Branch '{}' is protected: deletion is not allowed",
+                        branch_name
+                    )),
+                }));
             }
+        }
 
-            // Check force push (would need to verify if old_sha is ancestor of new_sha)
-            if body.change_type == "update" && !allow_force_push && !has_admin_access {
-                // For simplicity, we'll skip the force push check here
-                // In production, you'd verify if it's actually a force push
-            }
+        // Check force push (would need to verify if old_sha is ancestor of new_sha)
+        if body.change_type == "update" && !allow_force_push && !has_admin_access {
+            // For simplicity, we'll skip the force push check here
+            // In production, you'd verify if it's actually a force push
         }
     }
 

@@ -322,7 +322,7 @@ async fn try_trigger_pipeline_for_merge(
     }
 
     let now = Utc::now();
-    let ref_name = format!("refs/heads/{}", target_branch);
+    let ref_name = target_branch.to_string();
 
     // Create pipeline
     let pipeline = sqlx::query_as::<_, Pipeline>(

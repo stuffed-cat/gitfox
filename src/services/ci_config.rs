@@ -301,12 +301,15 @@ impl CiConfigParser {
         for pattern in patterns {
             match pattern.as_str() {
                 "branches" => {
-                    if !ref_name.starts_with("refs/tags/") {
+                    // Assume it's a branch (tags usually have version-like names)
+                    // For now, just check if it doesn't look like a semantic version
+                    if !ref_name.chars().next().map_or(false, |c| c.is_numeric()) {
                         return true;
                     }
                 }
                 "tags" => {
-                    if ref_name.starts_with("refs/tags/") {
+                    // Assume it's a tag if it starts with a number (like v1.0.0 or 1.0.0)
+                    if ref_name.chars().next().map_or(false, |c| c.is_numeric() || c == 'v') {
                         return true;
                     }
                 }
