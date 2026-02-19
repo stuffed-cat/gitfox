@@ -3,6 +3,7 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, RunnerError>;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]  // Some variants reserved for future use
 pub enum RunnerError {
     #[error("WebSocket error: {0}")]
     WebSocket(#[from] tokio_tungstenite::tungstenite::Error),

@@ -1,7 +1,7 @@
 use crate::config::RunnerConfig;
 use crate::error::{Result, RunnerError};
 use crate::messages::Job;
-use crate::security::SecurityContext;
+use crate::security::{SecurityContext, IsolationGuard};
 use log::{info, warn};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -108,13 +108,22 @@ impl Executor {
                 .stderr(Stdio::piped());
 
             // Apply security isolation
+            // 返回的 guard 必须持有到 child.wait() 之后才能 drop
+            // FreeBSD: guard 持有 JailContext，Drop 时销毁 jail + 卸载挂载点
+            // 其他平台: guard 为空结构体，Drop 无副作用
+            let _guard: IsolationGuard;
             if self.config.security_enabled {
-                if let Err(e) = security_ctx.wrap_command(&mut cmd) {
-                    log_callback(&format!("\n⚠️  Security isolation failed: {}\n", e));
-                    log_callback("⚠️  Continuing without isolation...\n");
+                match security_ctx.wrap_command(&mut cmd) {
+                    Ok(guard) => _guard = guard,
+                    Err(e) => {
+                        log_callback(&format!("\n⚠️  Security isolation failed: {}\n", e));
+                        log_callback("⚠️  Continuing without isolation...\n");
+                        _guard = IsolationGuard::none();
+                    }
                 }
             } else {
                 log_callback("\n🚨 WARNING: Security isolation is DISABLED\n");
+                _guard = IsolationGuard::none();
             }
 
             let mut child = cmd.spawn()?;
@@ -283,6 +292,7 @@ impl Executor {
 }
 
 /// Check if a command is potentially dangerous
+#[allow(dead_code)]
 fn is_dangerous_command(cmd: &str) -> bool {
     let dangerous_patterns = [
         "rm -rf /",
