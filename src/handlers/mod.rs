@@ -300,7 +300,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/namespaces/for-project-creation", web::get().to(namespace::list_namespaces_for_project_creation))
             .route("/namespaces/{path:.*}", web::get().to(namespace::get_namespace))
             
-            // CI/CD Runner WebSocket endpoint
+            // CI/CD Runner endpoints
+            .route("/runner/register", web::post().to(runner::runner_register))
             .route("/runner/connect", web::get().to(runner::runner_connect))
     );
 }

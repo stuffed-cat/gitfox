@@ -245,28 +245,34 @@ async fn register_runner(
     tags: Vec<String>,
     executor: &str,
 ) -> AppResult<i64> {
-    let runner_id: i64 = sqlx::query_scalar(
+    // 使用认证 token 查找并更新 runner 状态
+    let result = sqlx::query_scalar::<_, i64>(
         r#"
-        INSERT INTO runners (name, token, tags, executor, status, last_contact)
-        VALUES ($1, $2, $3, $4, 'online', NOW())
-        ON CONFLICT (token) DO UPDATE
-        SET name = EXCLUDED.name,
-            tags = EXCLUDED.tags,
-            executor = EXCLUDED.executor,
+        UPDATE runners
+        SET name = $1,
+            tags = $2,
+            executor = $3,
             status = 'online',
             last_contact = NOW(),
             updated_at = NOW()
+        WHERE token = $4 AND is_active = true
         RETURNING id
         "#
     )
     .bind(name)
-    .bind(token)
     .bind(&tags)
     .bind(executor)
-    .fetch_one(pool)
+    .bind(token)
+    .fetch_optional(pool)
     .await?;
 
-    Ok(runner_id)
+    if let Some(runner_id) = result {
+        Ok(runner_id)
+    } else {
+        Err(crate::error::AppError::Unauthorized(
+            "Invalid authentication token".to_string()
+        ))
+    }
 }
 
 async fn update_job_status(
@@ -575,6 +581,92 @@ pub async fn runner_connect(
     let resp = ws::start(ws, &req, stream)?;
     Ok(resp)
 }
+
+// ==================== Runner 注册 API ====================
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterRunnerRequest {
+    pub token: String,  // 注册 token (glrt-xxx)
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub executor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegisterRunnerResponse {
+    pub runner_id: i64,
+    pub auth_token: String,  // 用于 WebSocket 认证
+    pub websocket_url: String,
+}
+
+/// POST /api/v1/runner/register - Runner 注册端点
+pub async fn runner_register(
+    pool: web::Data<PgPool>,
+    req: web::Json<RegisterRunnerRequest>,
+) -> AppResult<HttpResponse> {
+    // 验证注册 token 是否存在且有效
+    let runner_opt = sqlx::query_as::<_, RunnerInfo>(
+        r#"
+        SELECT 
+            id, name, description, scope, user_id, namespace_id, project_id,
+            tags, executor, status, is_active, run_untagged, locked,
+            maximum_timeout, last_contact, created_at
+        FROM runners
+        WHERE token = $1 AND is_active = true
+        "#
+    )
+    .bind(&req.token)
+    .fetch_optional(pool.get_ref())
+    .await?;
+
+    let runner_id: i64;
+    let auth_token: String;
+
+    if let Some(existing_runner) = runner_opt {
+        // Runner 已存在，更新信息并生成新的认证 token
+        runner_id = existing_runner.id;
+        auth_token = format!("glrt-auth-{}", Uuid::new_v4().simple());
+        
+        sqlx::query(
+            r#"
+            UPDATE runners
+            SET name = $1,
+                description = $2,
+                tags = $3,
+                executor = $4,
+                token = $5,
+                status = 'offline',
+                updated_at = NOW()
+            WHERE id = $6
+            "#
+        )
+        .bind(&req.name)
+        .bind(&req.description)
+        .bind(&req.tags.clone().unwrap_or_default())
+        .bind(&req.executor.clone().unwrap_or_else(|| "shell".to_string()))
+        .bind(&auth_token)
+        .bind(runner_id)
+        .execute(pool.get_ref())
+        .await?;
+
+        info!("Runner {} re-registered with new auth token", runner_id);
+    } else {
+        return Err(crate::error::AppError::Unauthorized(
+            "Invalid registration token".to_string()
+        ));
+    }
+
+    // 获取服务器配置以生成 WebSocket URL
+    let websocket_url = format!("ws://localhost:8081/api/v1/runner/connect");
+
+    Ok(HttpResponse::Ok().json(RegisterRunnerResponse {
+        runner_id,
+        auth_token,
+        websocket_url,
+    }))
+}
+
 // HTTP API 数据结构和处理函数（在 runner.rs 末尾添加）
 
 use chrono::{DateTime, Utc};

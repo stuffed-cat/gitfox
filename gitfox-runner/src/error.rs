@@ -19,6 +19,9 @@ pub enum RunnerError {
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 
+    #[error("Configuration error: {0}")]
+    Config(String),
+
     #[error("Connection error: {0}")]
     Connection(String),
 

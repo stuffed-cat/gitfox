@@ -183,6 +183,15 @@
   --gl-sidebar-width: 240px;
   --gl-content-max-width: 1280px;
   --gl-project-sidebar-width: 290px;
+  
+  // =================
+  // BACKGROUND COLORS
+  // =================
+  
+  --gl-background-color-default: var(--gl-color-neutral-0);
+  --gl-background-color-subtle: var(--gl-color-neutral-10);
+  --gl-text-color-default: var(--gl-color-neutral-950);
+  --gl-text-secondary: var(--gl-color-neutral-600);
 }
 
 // Dark Mode Support (Optional)

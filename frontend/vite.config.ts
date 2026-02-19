@@ -16,6 +16,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8081',
         changeOrigin: true,
+        ws: true,  // 启用 WebSocket 支持 (用于 runner 连接)
       },
       '/assets': {
         target: 'http://localhost:8081',
@@ -38,6 +39,7 @@ export default defineConfig({
       '^/[^/]+/[^/]+\\.git': {
         target: 'http://localhost:8081',
         changeOrigin: true,
+        ws: true,  // Git 协议也可能需要 WebSocket 支持
       },
       '^/[^/]+/[^/]+/info/': {
         target: 'http://localhost:8081',

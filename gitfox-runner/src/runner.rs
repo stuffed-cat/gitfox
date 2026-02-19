@@ -31,11 +31,8 @@ impl Runner {
     }
 
     async fn connect_and_run(&mut self) -> Result<()> {
-        // Build WebSocket URL
-        let ws_url = format!(
-            "{}/api/v1/runner/connect",
-            self.config.server_url.replace("http", "ws")
-        );
+        // 使用配置中的完整 WebSocket URL（已包含路径）
+        let ws_url = self.config.server_url.replace("http://", "ws://").replace("https://", "wss://");
 
         info!("Connecting to WebSocket: {}", ws_url);
 

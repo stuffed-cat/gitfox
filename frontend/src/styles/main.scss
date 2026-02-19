@@ -935,3 +935,77 @@ pre {
   background: $border-color;
   margin: $spacing-4 0;
 }
+// =================
+// MODAL STYLES
+// =================
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content,
+.modal {
+  background: var(--gl-background-color-default) !important;
+  color: var(--gl-text-color-default);
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+  
+  .modal-header,
+  .modal-body,
+  .modal-footer {
+    color: var(--gl-text-color-default);
+    
+    h1, h2, h3, h4, h5, h6 {
+      color: var(--gl-text-color-default);
+    }
+  }
+  
+  input, textarea, select {
+    background: var(--gl-background-color-default);
+    color: var(--gl-text-color-default);
+    border-color: var(--gl-border-color-default);
+  }
+}
+// Additional modal element overrides for better theme support
+.modal-content,
+.modal {
+  color: var(--gl-text-color-default) !important;
+  
+  input.form-control,
+  textarea.form-control,
+  select.form-control {
+    background: var(--gl-background-color-default) !important;
+    color: var(--gl-text-color-default) !important;
+    border-color: var(--gl-border-color-default) !important;
+    
+    &::placeholder {
+      color: var(--gl-text-secondary) !important;
+      opacity: 0.6;
+    }
+  }
+  
+  label,
+  .form-label {
+    color: var(--gl-text-color-default) !important;
+  }
+  
+  .text-muted,
+  .form-hint {
+    color: var(--gl-text-secondary) !important;
+  }
+  
+  h1, h2, h3, h4, h5, h6,
+  .modal-header h1,
+  .modal-header h2,
+  .modal-header h3,
+  .modal-header h4,
+  .modal-header h5,
+  .modal-header h6 {
+    color: var(--gl-text-color-default) !important;
+  }
+}

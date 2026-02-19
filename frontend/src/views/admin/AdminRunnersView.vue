@@ -1263,7 +1263,6 @@ onMounted(() => {
   }
 
   .error-message {
-    margin: 0 0 24px 0;
     color: #6b7280;
     font-size: 14px;
   }

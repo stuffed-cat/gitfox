@@ -1492,7 +1492,6 @@ onMounted(() => {
 
   p {
     color: $text-secondary;
-    margin: 0 0 24px 0;
   }
 }
 
