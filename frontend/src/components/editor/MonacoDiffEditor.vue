@@ -22,7 +22,7 @@ const props = withDefaults(defineProps<Props>(), {
   theme: 'vs-dark',
   height: 400,
   readonly: true,
-  renderSideBySide: true,
+  renderSideBySide: false,  // 默认 inline 模式
   minimap: false,
 })
 
@@ -47,7 +47,7 @@ function createDiffEditor() {
     readOnly: props.readonly,
     renderSideBySide: props.renderSideBySide,
     minimap: { enabled: props.minimap },
-    automaticLayout: true,
+    automaticLayout: false,  // 关闭自动布局
     scrollBeyondLastLine: false,
     renderLineHighlight: 'all',
     scrollbar: {
@@ -58,8 +58,30 @@ function createDiffEditor() {
     lineHeight: 19,
     padding: { top: 8, bottom: 8 },
     enableSplitViewResizing: true,
-    renderOverviewRuler: true,
+    renderOverviewRuler: false,  // 关闭概览尺
     diffWordWrap: 'on',
+    // 性能优化：禁用不必要功能
+    renderWhitespace: 'none',
+    occurrencesHighlight: 'off',
+    codeLens: false,
+    folding: false,
+    links: false,
+    matchBrackets: 'never',
+    hover: { enabled: false },
+    contextmenu: false,
+    // 关键：启用智能隐藏未修改区域（Monaco 0.44+ 支持）
+    hideUnchangedRegions: {
+      enabled: true,
+    },
+    // 性能：禁用语义标记和验证
+    unicodeHighlight: {
+      ambiguousCharacters: false,
+    },
+    quickSuggestions: false,
+    parameterHints: { enabled: false },
+    suggestOnTriggerCharacters: false,
+    acceptSuggestionOnEnter: 'off',
+    tabCompletion: 'off',
   }
 
   diffEditor.value = monaco.editor.createDiffEditor(containerRef.value, diffEditorOptions)
@@ -71,6 +93,9 @@ function createDiffEditor() {
     original: originalModel,
     modified: modifiedModel,
   })
+
+  // 手动触发布局计算
+  setTimeout(() => diffEditor.value?.layout(), 0)
 
   emit('editor-mounted', diffEditor.value)
 }

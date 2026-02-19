@@ -1,5 +1,5 @@
 use git2::{
-    BranchType, Commit, DiffOptions, ObjectType, Oid, Repository, Signature, Sort,
+    BranchType, Commit, DiffOptions, ObjectType, Oid, Repository, Signature, Sort, Tree,
 };
 use std::path::Path;
 
@@ -604,8 +604,7 @@ impl GitService {
         commit: &Commit,
         parent: Option<&Commit>,
     ) -> AppResult<Vec<DiffInfo>> {
-        const MAX_DIFF_LINES: usize = 1000; // 单个文件最大显示行数
-        const CONTEXT_LINES: usize = 100;   // 截断时显示的上下文行数
+        const MAX_DIFF_CHANGES: usize = 500; // 单个文件最大 diff 更改行数
         
         let tree = commit.tree()?;
         let parent_tree = parent.map(|p| p.tree()).transpose()?;
@@ -634,98 +633,6 @@ impl GitService {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default();
 
-                // 读取原始文件内容
-                let (original_content, orig_total_lines, orig_truncated) = if status != DiffStatus::Added {
-                    if let Some(path) = delta.old_file().path() {
-                        if let Some(parent_tree) = &parent_tree {
-                            if let Ok(entry) = parent_tree.get_path(path) {
-                                if let Ok(object) = entry.to_object(repo) {
-                                    if let Some(blob) = object.as_blob() {
-                                        if let Ok(content) = std::str::from_utf8(blob.content()) {
-                                            let lines: Vec<&str> = content.lines().collect();
-                                            let total_lines = lines.len();
-                                            
-                                            if total_lines > MAX_DIFF_LINES {
-                                                // 截断：显示前100行和后100行
-                                                let head = lines.iter().take(CONTEXT_LINES).copied().collect::<Vec<_>>().join("\n");
-                                                let tail = lines.iter().skip(total_lines - CONTEXT_LINES).copied().collect::<Vec<_>>().join("\n");
-                                                let truncated_content = format!(
-                                                    "{}\n\n... ({} 行已省略) ...\n\n{}",
-                                                    head,
-                                                    total_lines - CONTEXT_LINES * 2,
-                                                    tail
-                                                );
-                                                (Some(truncated_content), Some(total_lines as u32), true)
-                                            } else {
-                                                (Some(content.to_string()), Some(total_lines as u32), false)
-                                            }
-                                        } else {
-                                            (None, None, false)
-                                        }
-                                    } else {
-                                        (None, None, false)
-                                    }
-                                } else {
-                                    (None, None, false)
-                                }
-                            } else {
-                                (None, None, false)
-                            }
-                        } else {
-                            (None, None, false)
-                        }
-                    } else {
-                        (None, None, false)
-                    }
-                } else {
-                    (None, None, false)
-                };
-
-                // 读取修改后文件内容
-                let (modified_content, mod_total_lines, mod_truncated) = if status != DiffStatus::Deleted {
-                    if let Some(path) = delta.new_file().path() {
-                        if let Ok(entry) = tree.get_path(path) {
-                            if let Ok(object) = entry.to_object(repo) {
-                                if let Some(blob) = object.as_blob() {
-                                    if let Ok(content) = std::str::from_utf8(blob.content()) {
-                                        let lines: Vec<&str> = content.lines().collect();
-                                        let total_lines = lines.len();
-                                        
-                                        if total_lines > MAX_DIFF_LINES {
-                                            let head = lines.iter().take(CONTEXT_LINES).copied().collect::<Vec<_>>().join("\n");
-                                            let tail = lines.iter().skip(total_lines - CONTEXT_LINES).copied().collect::<Vec<_>>().join("\n");
-                                            let truncated_content = format!(
-                                                "{}\n\n... ({} 行已省略) ...\n\n{}",
-                                                head,
-                                                total_lines - CONTEXT_LINES * 2,
-                                                tail
-                                            );
-                                            (Some(truncated_content), Some(total_lines as u32), true)
-                                        } else {
-                                            (Some(content.to_string()), Some(total_lines as u32), false)
-                                        }
-                                    } else {
-                                        (None, None, false)
-                                    }
-                                } else {
-                                    (None, None, false)
-                                }
-                            } else {
-                                (None, None, false)
-                            }
-                        } else {
-                            (None, None, false)
-                        }
-                    } else {
-                        (None, None, false)
-                    }
-                } else {
-                    (None, None, false)
-                };
-
-                let is_truncated = orig_truncated || mod_truncated;
-                let total_lines = mod_total_lines.or(orig_total_lines);
-
                 diffs.push(DiffInfo {
                     old_path,
                     new_path,
@@ -733,10 +640,10 @@ impl GitService {
                     status,
                     additions: 0,
                     deletions: 0,
-                    original_content,
-                    modified_content,
-                    is_truncated,
-                    total_lines,
+                    original_content: None,
+                    modified_content: None,
+                    is_truncated: false,
+                    total_lines: None,
                 });
 
                 true
@@ -792,7 +699,45 @@ impl GitService {
             true
         })?;
 
+        // Step 3: 根据 diff 更改行数决定是否加载完整文件内容
+        for diff_info in &mut diffs {
+            let change_lines = diff_info.additions + diff_info.deletions;
+            
+            if change_lines as usize > MAX_DIFF_CHANGES {
+                // 更改行数过多，不加载完整文件内容
+                diff_info.is_truncated = true;
+                diff_info.total_lines = Some(change_lines as u32);
+                continue;
+            }
+            
+            // 更改行数适中，加载完整文件内容用于 Monaco Editor
+            // 读取原始文件
+            if diff_info.status != DiffStatus::Added {
+                if let Some(content) = Self::load_file_content(&parent_tree, &diff_info.old_path, repo) {
+                    diff_info.original_content = Some(content);
+                }
+            }
+            
+            // 读取修改后文件
+            if diff_info.status != DiffStatus::Deleted {
+                if let Some(content) = Self::load_file_content(&Some(tree.clone()), &diff_info.new_path, repo) {
+                    let line_count = content.lines().count();
+                    diff_info.modified_content = Some(content);
+                    diff_info.total_lines = Some(line_count as u32);
+                }
+            }
+        }
+
         Ok(diffs)
+    }
+
+    /// 辅助函数：从 Git tree 加载文件内容
+    fn load_file_content(tree: &Option<Tree>, path: &str, repo: &Repository) -> Option<String> {
+        let tree = tree.as_ref()?;
+        let entry = tree.get_path(Path::new(path)).ok()?;
+        let object = entry.to_object(repo).ok()?;
+        let blob = object.as_blob()?;
+        std::str::from_utf8(blob.content()).ok().map(|s| s.to_string())
     }
 
     fn commit_affects_path(repo: &Repository, commit: &Commit, path: &str) -> AppResult<bool> {

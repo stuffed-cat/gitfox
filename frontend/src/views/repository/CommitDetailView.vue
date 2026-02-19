@@ -41,6 +41,9 @@
           <h3>更改的文件 ({{ diffs.length }})</h3>
           <div class="diff-actions">
             <button @click="toggleAllFiles" class="btn btn-secondary">
+              <svg viewBox="0 0 16 16" width="14" height="14" style="vertical-align: middle; margin-right: 4px;">
+                <path :d="allExpanded ? icons.chevronRight : icons.chevronDown" fill="currentColor" />
+              </svg>
               {{ allExpanded ? '全部收起' : '全部展开' }}
             </button>
           </div>
@@ -58,26 +61,20 @@
           </div>
           
           <div v-if="expandedFiles.has(index)" class="diff-content-wrapper">
-            <!-- 文件已截断警告 -->
-            <div v-if="diff.is_truncated" class="large-file-warning">
-              此文件内容较大 (共 {{ diff.total_lines }} 行)，已截断显示。
-              <button 
-                @click="showFullFile(index, diff)" 
-                class="btn-link"
-                :disabled="loadingFullFile.has(index)"
-              >
-                {{ loadingFullFile.has(index) ? '加载中...' : '显示完整内容' }}
-              </button>
+            <!-- 操作按钮组 -->
+            <div v-if="diff.is_truncated" class="diff-actions-bar">
+              <span class="truncate-hint">
+                已截断 (更改行数: {{ diff.additions + diff.deletions }} 行)
+              </span>
             </div>
 
-            <MonacoDiffEditor
-              v-if="diff.original_content !== undefined && diff.modified_content !== undefined && !isBinaryFile(diff)"
-              :original="diff.original_content || ''"
-              :modified="diff.modified_content || ''"
+            <!-- GitLab 风格的 Unified Diff -->
+            <UnifiedDiffViewer
+              v-if="!isBinaryFile(diff) && diff.diff"
+              :diff="diff.diff"
               :language="getLanguageFromPath(diff.file_path)"
-              :height="calculateDiffHeight(diff)"
-              :minimap="false"
             />
+            
             <div v-else-if="isBinaryFile(diff)" class="no-diff">
               二进制文件，无法显示差异
             </div>
@@ -120,8 +117,11 @@ import { ref, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '@/api'
 import dayjs from 'dayjs'
-import MonacoDiffEditor from '@/components/editor/MonacoDiffEditor.vue'
+import UnifiedDiffViewer from '@/components/diff/UnifiedDiffViewer.vue'
+import { navIcons } from '@/navigation/icons'
 import type { Project, CommitDetail } from '@/types'
+
+const icons = navIcons
 
 interface DiffFile {
   file_path: string
@@ -148,7 +148,6 @@ const loading = ref(false)
 const commit = ref<CommitDetail | null>(null)
 const diffs = ref<DiffFile[]>([])
 const expandedFiles = ref<Set<number>>(new Set())
-const loadingFullFile = ref<Set<number>>(new Set()) // 正在加载完整文件的索引
 const currentPage = ref(1)
 
 const totalPages = computed(() => Math.ceil(diffs.value.length / MAX_FILES_PER_PAGE))
@@ -235,44 +234,6 @@ function toggleAllFiles() {
 function isBinaryFile(diff: DiffFile): boolean {
   // 检查是否是二进制文件（没有文本内容）
   return !diff.original_content && !diff.modified_content && diff.diff === ''
-}
-
-async function showFullFile(index: number, diff: DiffFile) {
-  if (!props.project?.owner_name || !props.project?.name || loadingFullFile.value.has(index)) return
-  
-  try {
-    loadingFullFile.value.add(index)
-    const fullDiff = await api.commits.getFullFileDiff(
-      { namespace: props.project.owner_name, project: props.project.name },
-      route.params.sha as string,
-      diff.file_path
-    )
-    
-    // 更新 diff 内容
-    const displayIndex = (currentPage.value - 1) * MAX_FILES_PER_PAGE + index
-    
-    if (displayIndex < diffs.value.length) {
-      diffs.value[displayIndex] = {
-        ...diffs.value[displayIndex],
-        original_content: fullDiff.original_content,
-        modified_content: fullDiff.modified_content,
-        is_truncated: false,
-        total_lines: fullDiff.total_lines
-      }
-    }
-  } catch (err: any) {
-    console.error('Failed to load full file:', err)
-    alert('加载完整文件失败: ' + (err.response?.data?.error || err.message))
-  } finally {
-    loadingFullFile.value.delete(index)
-  }
-}
-
-function calculateDiffHeight(diff: DiffFile): number {
-  const content = diff.modified_content || diff.original_content || ''
-  const lines = content.split('\n').length
-  // 每行约 19px 高度，最小 300px，最大 800px
-  return Math.min(800, Math.max(300, lines * 19 + 40))
 }
 
 async function loadCommit() {
@@ -517,6 +478,45 @@ watch([() => props.project?.owner_name, () => props.project?.name, () => route.p
 
 .diff-content-wrapper {
   position: relative;
+}
+
+.diff-actions-bar {
+  background: #f8f9fa;
+  border-bottom: 1px solid $border-color;
+  padding: $spacing-sm $spacing-md;
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  font-size: $font-size-sm;
+  
+  .btn-link {
+    color: #0056b3;
+    text-decoration: none;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: $spacing-xs $spacing-sm;
+    font-size: $font-size-sm;
+    transition: all 0.2s;
+    border-radius: $border-radius-sm;
+    
+    &:hover {
+      background: #e7f3ff;
+      color: #003d82;
+    }
+    
+    &:disabled {
+      color: $text-muted;
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+  }
+  
+  .truncate-hint {
+    color: $text-muted;
+    font-size: $font-size-xs;
+    margin-left: auto;
+  }
 }
 
 .large-file-warning {
