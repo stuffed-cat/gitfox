@@ -10,6 +10,8 @@ variables:
 
 before_script:
   - echo "Starting job..."
+  - echo "Branch: ${CI_COMMIT_REF_NAME}"
+  - echo "Commit: ${CI_COMMIT_SHA}"
 
 after_script:
   - echo "Job finished"
