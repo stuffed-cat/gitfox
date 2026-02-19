@@ -293,6 +293,17 @@ impl GitCommand {
         // Detect changes
         let mut changes = Vec::new();
         
+        // Helper function to convert full ref path to short name
+        let ref_to_short_name = |ref_path: &str| -> String {
+            if let Some(branch) = ref_path.strip_prefix("refs/heads/") {
+                branch.to_string()
+            } else if let Some(tag) = ref_path.strip_prefix("refs/tags/") {
+                tag.to_string()
+            } else {
+                ref_path.to_string()
+            }
+        };
+        
         // Find new or updated refs
         for (ref_name, new_sha) in &new_refs {
             if let Some(old_sha) = old_refs.get(ref_name) {
@@ -301,7 +312,7 @@ impl GitCommand {
                     changes.push(json!({
                         "old_sha": old_sha,
                         "new_sha": new_sha,
-                        "ref": ref_name
+                        "ref": ref_to_short_name(ref_name)  // Use short name
                     }));
                 }
             } else {
@@ -309,7 +320,7 @@ impl GitCommand {
                 changes.push(json!({
                     "old_sha": "0000000000000000000000000000000000000000",
                     "new_sha": new_sha,
-                    "ref": ref_name
+                    "ref": ref_to_short_name(ref_name)  // Use short name
                 }));
             }
         }
@@ -320,7 +331,7 @@ impl GitCommand {
                 changes.push(json!({
                     "old_sha": old_sha,
                     "new_sha": "0000000000000000000000000000000000000000",
-                    "ref": ref_name
+                    "ref": ref_to_short_name(ref_name)  // Use short name
                 }));
             }
         }
