@@ -1,0 +1,31 @@
+# .gitfox/ci/build.yml
+build:rust:
+  stage: build
+  script:
+    - cargo build --release
+  artifacts:
+    paths:
+      - target/release/
+    expire_in: 1 day
+  cache:
+    key: cargo-cache
+    paths:
+      - .cargo/
+      - target/
+  tags:
+    - rust
+
+build:frontend:
+  stage: build
+  script:
+    - cd frontend
+    - npm config set registry https://registry.npmmirror.com
+    - npm install
+    - npm run build
+  artifacts:
+    paths:
+      - frontend/dist/
+  cache:
+    key: npm-cache
+    paths:
+      - frontend/node_modules/

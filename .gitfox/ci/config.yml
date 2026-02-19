@@ -1,0 +1,15 @@
+# .gitfox/ci/config.yml
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
+  RUST_BACKTRACE: 1
+
+before_script:
+  - echo "Starting job..."
+
+after_script:
+  - echo "Job finished"
