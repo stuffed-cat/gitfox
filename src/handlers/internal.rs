@@ -206,6 +206,7 @@ pub async fn check_allowed(
         username,
         can_write,
         Some(project_id),
+        Some(config.base_url.clone()),
     )))
 }
 

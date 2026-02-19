@@ -94,6 +94,7 @@ impl AccessCheckResponse {
         username: String,
         can_write: bool,
         project_id: Option<i64>,
+        base_url: Option<String>,
     ) -> Self {
         Self {
             status: true,
@@ -104,7 +105,7 @@ impl AccessCheckResponse {
             project_id,
             repository_id: project_id,
             lfs_token: None,
-            base_url: None,
+            base_url,
             repository_status: Some("active".to_string()),
         }
     }
