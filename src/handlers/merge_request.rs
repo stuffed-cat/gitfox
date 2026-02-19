@@ -10,8 +10,9 @@ use crate::models::{
     CreateCommentRequest, CreateMergeRequestRequest, CreateReviewRequest, MergeOptions,
     MergeRequest, MergeRequestComment, MergeRequestListQuery, MergeRequestReview,
     MergeRequestStatus, ReviewStatus, UpdateMergeRequestRequest,
+    Pipeline, PipelineStatus, PipelineTriggerType,
 };
-use crate::services::{GitService, ProjectService};
+use crate::services::{GitService, ProjectService, CiConfigParser};
 
 pub async fn list_merge_requests(
     pool: web::Data<PgPool>,
@@ -262,10 +263,149 @@ pub async fn merge(
     .fetch_one(pool.get_ref())
     .await?;
     
+    // Trigger CI/CD pipeline for merged branch
+    if let Err(e) = try_trigger_pipeline_for_merge(
+        pool.get_ref(),
+        config.get_ref(),
+        project.id,
+        claims.user_id,
+        &mr.target_branch,
+        &merge_commit_sha,
+    ).await {
+        // Log error but don't fail the merge
+        log::warn!("Failed to trigger CI/CD after merge: {}", e);
+    }
+    
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "merge_request": updated_mr,
         "merge_commit_sha": merge_commit_sha
     })))
+}
+
+/// Try to trigger CI/CD pipeline after merge request is merged
+async fn try_trigger_pipeline_for_merge(
+    pool: &PgPool,
+    config: &AppConfig,
+    project_id: i64,
+    user_id: i64,
+    target_branch: &str,
+    merge_commit_sha: &str,
+) -> AppResult<()> {
+    // Get project info
+    let project = sqlx::query_as::<_, (String, String)>(
+        r#"
+        SELECT n.path, p.name
+        FROM projects p
+        JOIN namespaces n ON p.namespace_id = n.id
+        WHERE p.id = $1
+        "#
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
+
+    let (namespace_path, project_name) = project;
+
+    // Open repository and parse CI config
+    let repo = GitService::open_repository(config, &namespace_path, &project_name)?;
+
+    // Try to parse CI configuration
+    let ci_config = match CiConfigParser::parse_from_repo(&repo, merge_commit_sha) {
+        Ok(config) => config,
+        Err(_) => return Ok(()), // No CI config is not an error
+    };
+
+    // Check if there are any jobs
+    if ci_config.jobs.is_empty() {
+        return Ok(());
+    }
+
+    let now = Utc::now();
+    let ref_name = format!("refs/heads/{}", target_branch);
+
+    // Create pipeline
+    let pipeline = sqlx::query_as::<_, Pipeline>(
+        r#"
+        INSERT INTO pipelines
+        (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        RETURNING *
+        "#
+    )
+    .bind(project_id)
+    .bind(&ref_name)
+    .bind(merge_commit_sha)
+    .bind(PipelineStatus::Pending)
+    .bind(PipelineTriggerType::MergeRequest)
+    .bind(user_id)
+    .bind(now)
+    .fetch_one(pool)
+    .await?;
+
+    log::info!("Created pipeline {} for MR merge on {}", pipeline.id, ref_name);
+
+    // Create jobs for this pipeline
+    let mut jobs_created = 0;
+    for (job_name, job_def) in &ci_config.jobs {
+        // Check if job should run on this ref
+        if !CiConfigParser::should_run_job(job_def, &ref_name) {
+            continue;
+        }
+
+        // Build job config JSON
+        let job_config = serde_json::json!({
+            "script": job_def.script,
+            "before_script": job_def.before_script.as_ref().or(ci_config.before_script.as_ref()),
+            "after_script": job_def.after_script.as_ref().or(ci_config.after_script.as_ref()),
+            "variables": job_def.variables.as_ref().or(ci_config.variables.as_ref()),
+            "artifacts": job_def.artifacts,
+            "cache": job_def.cache,
+            "retry": job_def.retry,
+            "timeout": job_def.timeout,
+            "tags": job_def.tags,
+            "needs": job_def.needs,
+        });
+
+        // Insert job into database
+        sqlx::query(
+            r#"
+            INSERT INTO pipeline_jobs
+            (pipeline_id, project_id, name, stage, status, config, allow_failure, when_condition, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $8)
+            "#
+        )
+        .bind(pipeline.id)
+        .bind(project_id)
+        .bind(job_name)
+        .bind(&job_def.stage)
+        .bind(&job_config)
+        .bind(job_def.allow_failure)
+        .bind(&job_def.when)
+        .bind(now)
+        .execute(pool)
+        .await?;
+
+        jobs_created += 1;
+    }
+
+    log::info!("Created {} jobs for pipeline {}", jobs_created, pipeline.id);
+
+    // If no jobs were created, mark pipeline as skipped
+    if jobs_created == 0 {
+        sqlx::query(
+            r#"
+            UPDATE pipelines
+            SET status = 'skipped', updated_at = NOW()
+            WHERE id = $1
+            "#
+        )
+        .bind(pipeline.id)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
 }
 
 pub async fn close(
