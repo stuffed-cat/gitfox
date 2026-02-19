@@ -52,6 +52,14 @@ async fn main() -> std::io::Result<()> {
         log::error!("Failed to seed initial admin: {}", e);
     }
 
+    // Start Redis-based job timeout listener in background
+    let timeout_pool = pg_pool.clone();
+    let redis_url = config.redis_url.clone();
+    tokio::spawn(async move {
+        handlers::runner::start_redis_timeout_listener(timeout_pool, redis_url).await;
+    });
+    log::info!("Redis job timeout listener started");
+
     // Start SSH server if enabled
     if config.ssh_enabled {
         let ssh_config = Arc::new(config.clone());

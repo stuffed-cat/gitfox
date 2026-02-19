@@ -1,6 +1,7 @@
 use crate::config::RunnerConfig;
 use crate::error::{Result, RunnerError};
 use crate::messages::Job;
+use crate::security::SecurityContext;
 use log::{info, warn};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -88,22 +89,35 @@ impl Executor {
         // Execute scripts
         log_callback(&format!("\n=== Executing stage: {} ===\n", job.stage));
 
-        for (_idx, script_line) in job.script.iter().enumerate() {
-            // SECURITY: Check for dangerous commands
-            if is_dangerous_command(script_line) {
-                log_callback(&format!("\n⚠️  Warning: Potentially dangerous command detected\n"));
-            }
+        // Create security context for isolation
+        let security_ctx = SecurityContext::new(
+            self.config.security_enabled,
+            &job_dir,
+            &self.config.network_mode,
+        );
 
+        for (_idx, script_line) in job.script.iter().enumerate() {
             log_callback(&format!("$ {}\n", script_line));
 
-            let mut child = Command::new("sh")
-                .arg("-c")
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c")
                 .arg(script_line)
                 .current_dir(&job_dir)
                 .envs(&job.variables)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()?;
+                .stderr(Stdio::piped());
+
+            // Apply security isolation
+            if self.config.security_enabled {
+                if let Err(e) = security_ctx.wrap_command(&mut cmd) {
+                    log_callback(&format!("\n⚠️  Security isolation failed: {}\n", e));
+                    log_callback("⚠️  Continuing without isolation...\n");
+                }
+            } else {
+                log_callback("\n🚨 WARNING: Security isolation is DISABLED\n");
+            }
+
+            let mut child = cmd.spawn()?;
 
             // Stream stdout
             if let Some(stdout) = child.stdout.take() {

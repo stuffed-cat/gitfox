@@ -29,6 +29,18 @@ pub struct RunnerConfig {
     /// Clean builds directory after job completion
     #[serde(default = "default_clean_builds")]
     pub clean_builds: bool,
+    
+    /// Enable security isolation (STRONGLY RECOMMENDED, default: true)
+    #[serde(default = "default_security_enabled")]
+    pub security_enabled: bool,
+    
+    /// Script-level timeout in seconds (per command, default: 3600)
+    #[serde(default = "default_script_timeout")]
+    pub script_timeout_seconds: u64,
+    
+    /// Network access mode: "full", "restricted", "none" (default: "full")
+    #[serde(default = "default_network_mode")]
+    pub network_mode: String,
 }
 
 fn default_builds_dir() -> PathBuf {
@@ -49,6 +61,18 @@ fn default_docker_image() -> String {
 
 fn default_clean_builds() -> bool {
     true
+}
+
+fn default_security_enabled() -> bool {
+    true  // Security MUST be enabled by default
+}
+
+fn default_script_timeout() -> u64 {
+    3600  // 1 hour per script
+}
+
+fn default_network_mode() -> String {
+    "full".to_string()
 }
 
 impl RunnerConfig {

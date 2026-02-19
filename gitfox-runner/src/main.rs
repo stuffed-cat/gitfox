@@ -3,6 +3,7 @@ mod error;
 mod executor;
 mod messages;
 mod runner;
+mod security;
 
 use clap::{Parser, Subcommand};
 use config::RunnerConfig;
@@ -173,6 +174,9 @@ async fn register_runner(
         concurrent_jobs: 1,
         default_docker_image: String::from("alpine:latest"),
         clean_builds: true,
+        security_enabled: true,  // MANDATORY: Always enable security
+        script_timeout_seconds: 3600,  // 1 hour default
+        network_mode: String::from("full"),  // Allow network by default
     };
 
     config.save(&config_file)?;

@@ -1,4 +1,4 @@
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::middleware::auth::{AdminUser, AuthenticatedUser};
 use actix::{Actor, ActorContext, Addr, AsyncContext, Handler, Message as ActixMessage, StreamHandler};
 use actix_web::{web, HttpRequest, HttpResponse};
@@ -19,15 +19,17 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(90);
 pub struct RunnerWebSocket {
     id: Option<i64>,
     pool: web::Data<PgPool>,
+    redis: web::Data<deadpool_redis::Pool>,
     hb: Instant,
     runner_manager: Arc<RwLock<RunnerManager>>,
 }
 
 impl RunnerWebSocket {
-    pub fn new(pool: web::Data<PgPool>, runner_manager: Arc<RwLock<RunnerManager>>) -> Self {
+    pub fn new(pool: web::Data<PgPool>, redis: web::Data<deadpool_redis::Pool>, runner_manager: Arc<RwLock<RunnerManager>>) -> Self {
         Self {
             id: None,
             pool,
+            redis,
             hb: Instant::now(),
             runner_manager,
         }
@@ -171,10 +173,34 @@ impl Handler<ProcessMessage> for RunnerWebSocket {
                 });
             }
             RunnerMessage::JobUpdate { job_id, status, exit_code, error_message } => {
+                let redis_clone = self.redis.clone();
+                let pool_clone = self.pool.clone();
                 actix_web::rt::spawn(async move {
+                    // Update job status in database
                     if let Err(e) = update_job_status(pool.get_ref(), job_id, &status, exit_code, error_message.as_deref()).await {
                         error!("Failed to update job status: {}", e);
                     }
+                    
+                    // Handle Redis timeout key based on status
+                    if status == "running" {
+                        // Job started: set Redis timeout key
+                        match get_job_timeout(&pool_clone, &redis_clone, job_id).await {
+                            Ok(timeout) => {
+                                if let Err(e) = set_job_timeout_in_redis(&redis_clone, job_id, timeout).await {
+                                    error!("Failed to set Redis timeout for job {}: {}", job_id, e);
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to get timeout for job {}: {}", job_id, e);
+                            }
+                        }
+                    } else if status == "success" || status == "failed" || status == "canceled" || status == "skipped" {
+                        // Job finished: clear Redis timeout key
+                        if let Err(e) = clear_job_timeout_in_redis(&redis_clone, job_id).await {
+                            error!("Failed to clear Redis timeout for job {}: {}", job_id, e);
+                        }
+                    }
+                    
                     let ack = ServerMessage::Ack;
                     if let Ok(json) = serde_json::to_string(&ack) {
                         addr.do_send(SendText(json));
@@ -310,6 +336,91 @@ async fn update_job_status(
     Ok(())
 }
 
+/// Set job timeout in Redis when job starts running
+/// Redis will expire the key after timeout seconds, triggering timeout check
+async fn set_job_timeout_in_redis(
+    redis: &deadpool_redis::Pool,
+    job_id: i64,
+    timeout_seconds: i32,
+) -> AppResult<()> {
+    use deadpool_redis::redis::AsyncCommands;
+    
+    let mut conn = redis.get().await.map_err(|e| {
+        AppError::InternalError(format!("Redis connection failed: {}", e))
+    })?;
+    
+    // Set key with expiration (EX = seconds)
+    // Key format: job:timeout:{job_id}
+    // Value: job_id (for easy parsing in expiration listener)
+    let key = format!("job:timeout:{}", job_id);
+    let _: () = conn.set_ex(&key, job_id, timeout_seconds as u64).await.map_err(|e| {
+        AppError::InternalError(format!("Failed to set Redis timeout key: {}", e))
+    })?;
+    
+    info!("Set Redis timeout for job {} ({} seconds)", job_id, timeout_seconds);
+    Ok(())
+}
+
+/// Remove job timeout key from Redis when job completes
+async fn clear_job_timeout_in_redis(
+    redis: &deadpool_redis::Pool,
+    job_id: i64,
+) -> AppResult<()> {
+    use deadpool_redis::redis::AsyncCommands;
+    
+    let mut conn = redis.get().await.map_err(|e| {
+        AppError::InternalError(format!("Redis connection failed: {}", e))
+    })?;
+    
+    let key = format!("job:timeout:{}", job_id);
+    let _: () = conn.del(&key).await.map_err(|e| {
+        AppError::InternalError(format!("Failed to delete Redis timeout key: {}", e))
+    })?;
+    
+    Ok(())
+}
+
+/// Get timeout for a job (priority: job config > runner max > system default)
+async fn get_job_timeout(
+    pool: &PgPool,
+    redis: &deadpool_redis::Pool,
+    job_id: i64,
+) -> AppResult<i32> {
+    use crate::services::SystemConfigService;
+    
+    // Get default from config
+    let default_timeout = SystemConfigService::get(pool, redis, "ci_default_job_timeout")
+        .await
+        .and_then(|v| v.as_i64().ok_or_else(|| AppError::BadRequest("Invalid config".to_string())))
+        .unwrap_or(3600) as i32;
+    
+    // Query job config and runner max_timeout
+    let row = sqlx::query(
+        r#"
+        SELECT 
+            j.config->>'timeout' as job_timeout,
+            r.maximum_timeout
+        FROM jobs j
+        LEFT JOIN runners r ON j.runner_id = r.id
+        WHERE j.id = $1
+        "#
+    )
+    .bind(job_id)
+    .fetch_one(pool)
+    .await?;
+    
+    let job_timeout: Option<String> = row.try_get("job_timeout").ok().flatten();
+    let runner_max_timeout: Option<i32> = row.try_get("maximum_timeout").ok().flatten();
+    
+    // Priority: job config > runner > default
+    let timeout = job_timeout
+        .and_then(|s| s.parse::<i32>().ok())
+        .or(runner_max_timeout)
+        .unwrap_or(default_timeout);
+    
+    Ok(timeout)
+}
+
 async fn append_job_log(pool: &PgPool, job_id: i64, output: &str) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO job_logs (job_id, output) VALUES ($1, $2)"
@@ -332,23 +443,41 @@ async fn update_runner_contact(pool: &PgPool, runner_id: i64) -> AppResult<()> {
 }
 
 async fn get_pending_job(pool: &PgPool, runner_id: i64) -> AppResult<Option<Job>> {
-    // Get runner tags
-    let tags: Vec<String> = sqlx::query_scalar(
-        "SELECT tags FROM runners WHERE id = $1"
+    // Get runner info (tags and run_untagged)
+    let runner_info = sqlx::query_as::<_, (Vec<String>, bool)>(
+        "SELECT tags, run_untagged FROM runners WHERE id = $1"
     )
     .bind(runner_id)
     .fetch_one(pool)
     .await?;
+    
+    let (runner_tags, run_untagged) = runner_info;
 
-    // Find pending job (simple FIFO for now)
+    // Find pending job that matches runner tags
+    // Match logic:
+    // 1. Job has specific tags -> runner must have ALL those tags
+    // 2. Job has no tags && runner.run_untagged = true
+    // 3. Job has no tags && runner has no tags
     let job_record = sqlx::query(
         r#"
         UPDATE jobs
         SET status = 'running', runner_id = $1, started_at = NOW()
         WHERE id = (
-            SELECT id FROM jobs
-            WHERE status = 'pending'
-            ORDER BY created_at ASC
+            SELECT j.id FROM jobs j
+            WHERE j.status = 'pending'
+            AND (
+                -- Job has tags: runner must have all of them
+                (j.config->'tags' IS NOT NULL 
+                 AND j.config->'tags' != 'null'::jsonb
+                 AND $2::TEXT[] @> ARRAY(
+                   SELECT jsonb_array_elements_text(j.config->'tags')
+                 ))
+                OR
+                -- Job has no tags: runner can run untagged jobs
+                ((j.config->'tags' IS NULL OR j.config->'tags' = 'null'::jsonb OR jsonb_array_length(COALESCE(j.config->'tags', '[]'::jsonb)) = 0)
+                 AND ($3 = true OR $4 = 0))
+            )
+            ORDER BY j.created_at ASC
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
@@ -356,6 +485,9 @@ async fn get_pending_job(pool: &PgPool, runner_id: i64) -> AppResult<Option<Job>
         "#
     )
     .bind(runner_id)
+    .bind(&runner_tags)
+    .bind(run_untagged)
+    .bind(runner_tags.len() as i32)
     .fetch_optional(pool)
     .await?
     .map(|row| -> AppResult<(i64, i64, i64, String, String, serde_json::Value, Option<bool>, Option<String>)> {
@@ -529,6 +661,7 @@ pub struct JobConfig {
     pub cache: Option<CacheConfig>,
     pub retry: Option<RetryConfig>,
     pub timeout: Option<i32>,
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -575,9 +708,10 @@ pub async fn runner_connect(
     req: HttpRequest,
     stream: web::Payload,
     pool: web::Data<PgPool>,
+    redis: web::Data<deadpool_redis::Pool>,
     runner_manager: web::Data<Arc<RwLock<RunnerManager>>>,
 ) -> AppResult<HttpResponse> {
-    let ws = RunnerWebSocket::new(pool, runner_manager.get_ref().clone());
+    let ws = RunnerWebSocket::new(pool, redis, runner_manager.get_ref().clone());
     let resp = ws::start(ws, &req, stream)?;
     Ok(resp)
 }
@@ -1461,4 +1595,162 @@ pub async fn project_delete_runner(
             "error": "Runner not found or unauthorized"
         })))
     }
+}
+
+/// Start Redis keyspace notification listener for job timeouts
+/// When Redis key expires, it triggers timeout handling
+pub async fn start_redis_timeout_listener(pool: PgPool, redis_url: String) {
+    info!("Redis job timeout listener starting...");
+    
+    loop {
+        match listen_for_expired_keys(&pool, &redis_url).await {
+            Ok(_) => {
+                warn!("Redis listener disconnected, reconnecting...");
+            }
+            Err(e) => {
+                error!("Redis listener error: {}, retrying in 5s...", e);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
+}
+
+/// Subscribe to Redis keyspace notifications for expired keys
+async fn listen_for_expired_keys(pool: &PgPool, redis_url: &str) -> AppResult<()> {
+    use deadpool_redis::redis;
+    use futures::StreamExt;
+    
+    // Create dedicated Redis client for PubSub (cannot use pooled connection)
+    let client = redis::Client::open(redis_url).map_err(|e| {
+        AppError::InternalError(format!("Failed to create Redis client: {}", e))
+    })?;
+    
+    // First connection: configure Redis
+    let mut config_conn = client.get_async_connection().await.map_err(|e| {
+        AppError::InternalError(format!("Redis connection failed: {}", e))
+    })?;
+    
+    // Enable keyspace notifications for expired events
+    redis::cmd("CONFIG")
+        .arg("SET")
+        .arg("notify-keyspace-events")
+        .arg("Ex")
+        .query_async(&mut config_conn)
+        .await
+        .map_err(|e| {
+            AppError::InternalError(format!("Failed to configure Redis notifications: {}", e))
+        })?;
+    
+    info!("Redis keyspace notifications enabled (Ex)");
+    
+    // Second connection: create PubSub
+    let conn = client.get_async_connection().await.map_err(|e| {
+        AppError::InternalError(format!("Redis PubSub connection failed: {}", e))
+    })?;
+    
+    let mut pubsub = conn.into_pubsub();
+    pubsub.psubscribe("__keyevent@*__:expired").await.map_err(|e| {
+        AppError::InternalError(format!("Failed to subscribe to Redis expired events: {}", e))
+    })?;
+    
+    info!("Subscribed to __keyevent@*__:expired");
+    
+    let mut stream = pubsub.on_message();
+    
+    while let Some(msg) = stream.next().await {
+        let key: String = match msg.get_payload() {
+            Ok(k) => k,
+            Err(e) => {
+                warn!("Failed to parse expired key payload: {}", e);
+                continue;
+            }
+        };
+        
+        // Check if this is a job timeout key (format: job:timeout:{job_id})
+        if key.starts_with("job:timeout:") {
+            if let Some(job_id_str) = key.strip_prefix("job:timeout:") {
+                if let Ok(job_id) = job_id_str.parse::<i64>() {
+                    info!("Job {} timeout key expired, processing...", job_id);
+                    
+                    let pool_clone = pool.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_job_timeout(pool_clone, job_id).await {
+                            error!("Failed to handle timeout for job {}: {}", job_id, e);
+                        }
+                    });
+                } else {
+                    warn!("Invalid job_id in expired key: {}", key);
+                }
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+/// Handle job timeout: mark job as failed if still running
+async fn handle_job_timeout(pool: PgPool, job_id: i64) -> AppResult<()> {
+    // Check current job status
+    let job_status: String = sqlx::query_scalar(
+        "SELECT status FROM jobs WHERE id = $1"
+    )
+    .bind(job_id)
+    .fetch_one(&pool)
+    .await?;
+    
+    // If job already completed, no action needed
+    if job_status != "running" {
+        info!("Job {} already in '{}' state, skipping timeout", job_id, job_status);
+        return Ok(());
+    }
+    
+    warn!("Job {} timed out, marking as failed", job_id);
+    
+    // Get start time to calculate actual running duration
+    let started_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT started_at FROM jobs WHERE id = $1"
+    )
+    .bind(job_id)
+    .fetch_one(&pool)
+    .await?;
+    
+    let running_seconds = if let Some(started) = started_at {
+        (chrono::Utc::now() - started).num_seconds()
+    } else {
+        0
+    };
+    
+    // Update job status to failed
+    sqlx::query(
+        r#"
+        UPDATE jobs
+        SET 
+            status = 'failed',
+            finished_at = NOW(),
+            updated_at = NOW(),
+            error_message = 'Job exceeded maximum execution time limit'
+        WHERE id = $1
+        "#
+    )
+    .bind(job_id)
+    .execute(&pool)
+    .await?;
+    
+    // Log timeout event
+    let timeout_log = format!(
+        "\n\n=== Job Timeout ===\nJob exceeded maximum execution time limit\nJob ran for {} seconds before being terminated\n",
+        running_seconds
+    );
+    
+    sqlx::query(
+        "INSERT INTO job_logs (job_id, output, created_at) VALUES ($1, $2, NOW())"
+    )
+    .bind(job_id)
+    .bind(&timeout_log)
+    .execute(&pool)
+    .await?;
+    
+    info!("Job {} marked as failed due to timeout", job_id);
+    
+    Ok(())
 }

@@ -175,6 +175,75 @@
         </div>
       </div>
 
+      <!-- CI/CD Settings Section -->
+      <div class="settings-section">
+        <div class="section-header" @click="toggleSection('cicd')">
+          <div class="section-title">
+            <h2>CI/CD 持续集成</h2>
+            <p>作业超时、Runner 注册、流水线限制等设置</p>
+          </div>
+          <svg class="chevron" :class="{ expanded: expandedSections.cicd }" width="16" height="16" viewBox="0 0 16 16">
+            <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div v-show="expandedSections.cicd" class="section-body">
+          <div class="form-group">
+            <label for="ci_default_job_timeout">默认作业超时（秒）</label>
+            <input id="ci_default_job_timeout" v-model.number="form.ci_default_job_timeout" type="number" min="60" max="86400" />
+            <p class="form-hint">作业未指定超时时的默认值（3600 秒 = 1 小时）</p>
+          </div>
+          <div class="form-group">
+            <label for="ci_max_job_timeout">最大作业超时（秒）</label>
+            <input id="ci_max_job_timeout" v-model.number="form.ci_max_job_timeout" type="number" min="60" max="2592000" />
+            <p class="form-hint">单个作业允许的最长运行时间（86400 秒 = 24 小时）</p>
+          </div>
+          <div class="form-group">
+            <label for="ci_concurrent_jobs_limit">并发作业数限制</label>
+            <input id="ci_concurrent_jobs_limit" v-model.number="form.ci_concurrent_jobs_limit" type="number" min="1" max="1000" />
+            <p class="form-hint">实例级别的最大并发作业数</p>
+          </div>
+          <div class="form-group">
+            <label for="ci_max_pipeline_size">流水线最大作业数</label>
+            <input id="ci_max_pipeline_size" v-model.number="form.ci_max_pipeline_size" type="number" min="1" max="100" />
+            <p class="form-hint">单个流水线中允许定义的最大作业数量</p>
+          </div>
+          <div class="form-group">
+            <label for="ci_pipeline_retention_days">流水线保留天数</label>
+            <input id="ci_pipeline_retention_days" v-model.number="form.ci_pipeline_retention_days" type="number" min="1" max="365" />
+            <p class="form-hint">流水线记录在自动清理前保留的天数</p>
+          </div>
+          <div class="form-group">
+            <label for="ci_artifacts_retention_days">构建产物保留天数</label>
+            <input id="ci_artifacts_retention_days" v-model.number="form.ci_artifacts_retention_days" type="number" min="1" max="90" />
+            <p class="form-hint">作业产物在自动清理前保留的天数</p>
+          </div>
+          <div class="form-group">
+            <label for="ci_max_log_size_mb">最大日志大小（MB）</label>
+            <input id="ci_max_log_size_mb" v-model.number="form.ci_max_log_size_mb" type="number" min="1" max="1024" />
+            <p class="form-hint">单个作业日志文件的最大大小</p>
+          </div>
+          <div class="form-group checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="form.ci_runner_registration_enabled" />
+              <span>启用 Runner 注册</span>
+            </label>
+            <p class="form-hint">关闭后将禁止新的 Runner 注册到系统</p>
+          </div>
+          <div class="form-group checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="form.ci_log_streaming_enabled" />
+              <span>启用日志实时流</span>
+            </label>
+            <p class="form-hint">允许在作业运行时实时查看日志输出</p>
+          </div>
+          <div class="section-actions">
+            <button class="btn btn-primary" @click="saveSection('cicd')" :disabled="saving">
+              {{ saving ? '保存中...' : '保存更改' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- SMTP Settings Section -->
       <div class="settings-section">
         <div class="section-header" @click="toggleSection('smtp')">
@@ -280,6 +349,7 @@ const expandedSections = reactive({
   project: false,
   appearance: false,
   terms: false,
+  cicd: false,
   smtp: false,
 })
 
@@ -295,6 +365,16 @@ const form = reactive({
   home_page_url: '',
   after_sign_in_path: '/',
   terms_of_service: '',
+  // CI/CD settings
+  ci_default_job_timeout: 3600,
+  ci_max_job_timeout: 86400,
+  ci_concurrent_jobs_limit: 100,
+  ci_max_pipeline_size: 50,
+  ci_pipeline_retention_days: 90,
+  ci_artifacts_retention_days: 30,
+  ci_max_log_size_mb: 100,
+  ci_runner_registration_enabled: true,
+  ci_log_streaming_enabled: true,
 })
 
 // SMTP config from environment (read-only)
@@ -323,6 +403,17 @@ const sectionKeys: Record<string, string[]> = {
   project: ['default_project_visibility', 'max_attachment_size_mb'],
   appearance: ['gravatar_enabled', 'home_page_url', 'after_sign_in_path'],
   terms: ['terms_of_service'],
+  cicd: [
+    'ci_default_job_timeout',
+    'ci_max_job_timeout',
+    'ci_concurrent_jobs_limit',
+    'ci_max_pipeline_size',
+    'ci_pipeline_retention_days',
+    'ci_artifacts_retention_days',
+    'ci_max_log_size_mb',
+    'ci_runner_registration_enabled',
+    'ci_log_streaming_enabled',
+  ],
 }
 
 async function loadConfigs() {
