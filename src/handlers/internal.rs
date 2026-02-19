@@ -494,6 +494,8 @@ async fn try_trigger_pipeline(
     ref_name: &str,
     commit_sha: &str,
 ) -> Result<(), AppError> {
+    let now = Utc::now();
+    
     // Get project info
     let project = sqlx::query_as::<_, (String, String)>(
         r#"
@@ -515,12 +517,35 @@ async fn try_trigger_pipeline(
         }
     };
 
-    // Open repository and parse CI config
+    // Try to open repository and parse CI config
     let repo = match GitService::open_repository(config, &namespace_path, &project_name) {
         Ok(r) => r,
         Err(e) => {
-            debug!("Failed to open repository: {}", e);
-            return Ok(()); // Not an error, just skip CI
+            // Create failed pipeline with error message
+            let error_msg = format!("Failed to open repository: {}", e);
+            warn!("{}", error_msg);
+            
+            let pipeline = sqlx::query_as::<_, Pipeline>(
+                r#"
+                INSERT INTO pipelines
+                (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, error_message, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                RETURNING *
+                "#
+            )
+            .bind(project_id)
+            .bind(ref_name)
+            .bind(commit_sha)
+            .bind(PipelineStatus::Failed)
+            .bind(PipelineTriggerType::Push)
+            .bind(user_id)
+            .bind(&error_msg)
+            .bind(now)
+            .fetch_one(pool)
+            .await?;
+            
+            info!("Created failed pipeline {} with error", pipeline.id);
+            return Ok(());
         }
     };
 
@@ -528,18 +553,60 @@ async fn try_trigger_pipeline(
     let ci_config = match CiConfigParser::parse_from_repo(&repo, commit_sha) {
         Ok(config) => config,
         Err(e) => {
-            debug!("No CI config or parse error: {}", e);
-            return Ok(()); // No CI config is not an error
+            // Create failed pipeline with error message
+            let error_msg = format!("CI configuration error: {}", e);
+            warn!("{}", error_msg);
+            
+            let pipeline = sqlx::query_as::<_, Pipeline>(
+                r#"
+                INSERT INTO pipelines
+                (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, error_message, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                RETURNING *
+                "#
+            )
+            .bind(project_id)
+            .bind(ref_name)
+            .bind(commit_sha)
+            .bind(PipelineStatus::Failed)
+            .bind(PipelineTriggerType::Push)
+            .bind(user_id)
+            .bind(&error_msg)
+            .bind(now)
+            .fetch_one(pool)
+            .await?;
+            
+            info!("Created failed pipeline {} with CI config error", pipeline.id);
+            return Ok(());
         }
     };
 
     // Check if there are any jobs
     if ci_config.jobs.is_empty() {
         debug!("No jobs defined in CI config");
+        
+        // Create skipped pipeline
+        let pipeline = sqlx::query_as::<_, Pipeline>(
+            r#"
+            INSERT INTO pipelines
+            (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+            RETURNING *
+            "#
+        )
+        .bind(project_id)
+        .bind(ref_name)
+        .bind(commit_sha)
+        .bind(PipelineStatus::Skipped)
+        .bind(PipelineTriggerType::Push)
+        .bind(user_id)
+        .bind(now)
+        .fetch_one(pool)
+        .await?;
+        
+        info!("Created skipped pipeline {} (no jobs defined)", pipeline.id);
         return Ok(());
     }
-
-    let now = Utc::now();
 
     // Create pipeline
     let pipeline = sqlx::query_as::<_, Pipeline>(
