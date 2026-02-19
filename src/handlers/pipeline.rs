@@ -126,7 +126,7 @@ pub async fn trigger_pipeline(
             
             sqlx::query(
                 r#"
-                INSERT INTO pipeline_jobs
+                INSERT INTO jobs
                 (pipeline_id, project_id, name, stage, status, config, allow_failure, when_condition, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $8)
                 "#
@@ -172,12 +172,19 @@ pub async fn get_pipeline(
     .await?
     .ok_or_else(|| AppError::NotFound("Pipeline not found".to_string()))?;
     
-    let jobs = sqlx::query_as::<_, PipelineJob>(
-        "SELECT * FROM pipeline_jobs WHERE pipeline_id = $1 ORDER BY created_at"
+    let mut jobs = sqlx::query_as::<_, PipelineJob>(
+        "SELECT * FROM jobs WHERE pipeline_id = $1 ORDER BY created_at"
     )
     .bind(pipeline.id)
     .fetch_all(pool.get_ref())
     .await?;
+    
+    // 计算 duration_seconds
+    for job in &mut jobs {
+        if let (Some(started), Some(finished)) = (job.started_at, job.finished_at) {
+            job.duration_seconds = Some((finished - started).num_seconds() as i32);
+        }
+    }
     
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "pipeline": pipeline,
@@ -208,7 +215,7 @@ pub async fn cancel_pipeline(
     
     // Cancel all pending/running jobs
     sqlx::query(
-        "UPDATE pipeline_jobs SET status = 'canceled', updated_at = NOW() WHERE pipeline_id = $1 AND status IN ('pending', 'running')"
+        "UPDATE jobs SET status = 'canceled', updated_at = NOW() WHERE pipeline_id = $1 AND status IN ('pending', 'running')"
     )
     .bind(pipeline.id)
     .execute(pool.get_ref())
@@ -289,12 +296,19 @@ pub async fn list_jobs(
     .await?
     .ok_or_else(|| AppError::NotFound("Pipeline not found".to_string()))?;
     
-    let jobs = sqlx::query_as::<_, PipelineJob>(
-        "SELECT * FROM pipeline_jobs WHERE pipeline_id = $1 ORDER BY stage, created_at"
+    let mut jobs = sqlx::query_as::<_, PipelineJob>(
+        "SELECT * FROM jobs WHERE pipeline_id = $1 ORDER BY stage, created_at"
     )
     .bind(pipeline_id)
     .fetch_all(pool.get_ref())
     .await?;
+    
+    // 计算 duration_seconds
+    for job in &mut jobs {
+        if let (Some(started), Some(finished)) = (job.started_at, job.finished_at) {
+            job.duration_seconds = Some((finished - started).num_seconds() as i32);
+        }
+    }
     
     Ok(HttpResponse::Ok().json(jobs))
 }
@@ -317,13 +331,13 @@ pub async fn get_job_log(
     .ok_or_else(|| AppError::NotFound("Pipeline not found".to_string()))?;
     
     let logs = sqlx::query_as::<_, PipelineJobLog>(
-        "SELECT * FROM pipeline_job_logs WHERE job_id = $1 ORDER BY created_at"
+        "SELECT * FROM job_logs WHERE job_id = $1 ORDER BY created_at"
     )
     .bind(job_id)
     .fetch_all(pool.get_ref())
     .await?;
     
-    let combined_log: String = logs.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
+    let combined_log: String = logs.iter().map(|l| l.output.as_str()).collect::<Vec<_>>().join("\n");
     
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "job_id": job_id,

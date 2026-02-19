@@ -259,8 +259,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/pipelines/{id}", web::get().to(pipeline::get_pipeline))
             .route("/projects/{namespace}/{project}/pipelines/{id}/cancel", web::post().to(pipeline::cancel_pipeline))
             .route("/projects/{namespace}/{project}/pipelines/{id}/retry", web::post().to(pipeline::retry_pipeline))
-            .route("/projects/{namespace}/{project}/jobs", web::get().to(pipeline::list_jobs))
-            .route("/projects/{namespace}/{project}/jobs/{job_id}/trace", web::get().to(pipeline::get_job_log))
+            .route("/projects/{namespace}/{project}/pipelines/{id}/jobs", web::get().to(pipeline::list_jobs))
+            .route("/projects/{namespace}/{project}/pipelines/{id}/jobs/{job_id}/log", web::get().to(pipeline::get_job_log))
             
             // Webhook/Hooks routes 
             .route("/projects/{namespace}/{project}/hooks", web::get().to(webhook::list_webhooks))

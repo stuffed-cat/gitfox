@@ -46,24 +46,33 @@ pub enum PipelineTriggerType {
 pub struct PipelineJob {
     pub id: i64,
     pub pipeline_id: i64,
+    pub project_id: i64,
+    pub runner_id: Option<i64>,
     pub name: String,
     pub stage: String,
-    pub status: PipelineStatus,
-    pub runner_id: Option<i64>,
+    pub status: String,
+    pub config: serde_json::Value,
+    pub artifacts_path: Option<String>,
+    pub coverage: Option<f32>,
+    pub allow_failure: bool,
+    pub when_condition: Option<String>,
+    pub retry_count: Option<i32>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
-    pub duration_seconds: Option<i32>,
-    pub allow_failure: bool,
-    pub error_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub error_message: Option<String>,
+    
+    // 计算字段（不在数据库中）
+    #[sqlx(skip)]
+    pub duration_seconds: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PipelineJobLog {
     pub id: i64,
     pub job_id: i64,
-    pub content: String,
+    pub output: String,
     pub created_at: DateTime<Utc>,
 }
 
