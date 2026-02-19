@@ -173,7 +173,7 @@ impl Runner {
             .await?;
 
         // Create executor
-        let executor = Executor::new(&self.config.executor);
+        let executor = Executor::new(self.config.clone());
 
         // Execute job and stream logs
         let result = executor.execute(&job, |log_line| {

@@ -168,6 +168,11 @@ async fn register_runner(
         name: runner_name,
         tags,
         executor,
+        builds_dir: std::path::PathBuf::from("./builds"),
+        max_work_dir_size_mb: 10 * 1024, // 10 GB
+        concurrent_jobs: 1,
+        default_docker_image: String::from("alpine:latest"),
+        clean_builds: true,
     };
 
     config.save(&config_file)?;

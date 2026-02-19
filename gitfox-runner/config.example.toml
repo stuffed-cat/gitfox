@@ -1,0 +1,72 @@
+# GitFox Runner Configuration Example
+# Copy this file to config.toml and customize for your environment
+
+# Server connection settings
+server_url = "ws://localhost:8080/api/v1/runner/ws"
+token = "your-runner-token-here"
+name = "my-runner"
+
+# Runner tags for job selection
+tags = ["docker", "linux"]
+
+# Executor type: "shell" or "docker"
+# - shell: Runs scripts directly on the host (faster, less isolated)
+# - docker: Runs scripts in Docker containers (slower, better isolation)
+executor = "docker"
+
+# -----------------------------------------------------------------------------
+# Directory Configuration
+# -----------------------------------------------------------------------------
+
+# Work directory for job builds
+# Default: "./builds" (relative to runner executable)
+# WARNING: Do NOT use /tmp as it may be cleaned by system
+builds_dir = "./builds"
+
+# Maximum work directory size in MB per job
+# Default: 10240 (10 GB)
+# Jobs exceeding this limit will be terminated
+max_work_dir_size_mb = 10240
+
+# Clean builds directory after job completion
+# Default: true
+# Set to false to preserve build artifacts for debugging
+clean_builds = true
+
+# -----------------------------------------------------------------------------
+# Execution Configuration
+# -----------------------------------------------------------------------------
+
+# Maximum concurrent jobs
+# Default: 1
+# Increase for multi-core machines, but consider memory/disk usage
+concurrent_jobs = 1
+
+# Default Docker image for docker executor
+# Default: "alpine:latest"
+# Can be overridden per job with CI_DOCKER_IMAGE variable
+default_docker_image = "alpine:latest"
+
+# -----------------------------------------------------------------------------
+# Security Notes
+# -----------------------------------------------------------------------------
+# 
+# Shell Executor:
+# - Runs scripts with runner process permissions
+# - Uses dedicated builds directory (not /tmp)
+# - Detects dangerous commands (rm -rf /, fork bombs, etc.)
+# - Size limit prevents disk exhaustion
+# - No sudo/root access by default
+#
+# Docker Executor (Recommended):
+# - Full isolation per job
+# - No access to host filesystem (except /builds volume)
+# - Automatic cleanup after job completion
+# - Better security for untrusted code
+#
+# Production Recommendations:
+# 1. Use docker executor for untrusted code
+# 2. Run runner as non-root user without sudo
+# 3. Set appropriate max_work_dir_size_mb based on disk capacity
+# 4. Enable clean_builds to prevent disk exhaustion
+# 5. Use dedicated disk/partition for builds_dir

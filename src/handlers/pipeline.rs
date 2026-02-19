@@ -344,3 +344,35 @@ pub async fn get_job_log(
         "log": combined_log
     })))
 }
+
+pub async fn download_job_log(
+    pool: web::Data<PgPool>,
+    path: web::Path<(String, String, i64, i64)>,
+) -> AppResult<HttpResponse> {
+    let (namespace, project_name, pipeline_id, job_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
+    
+    // Verify pipeline belongs to project
+    let _ = sqlx::query_as::<_, Pipeline>(
+        "SELECT * FROM pipelines WHERE id = $1 AND project_id = $2"
+    )
+    .bind(pipeline_id)
+    .bind(project.id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Pipeline not found".to_string()))?;
+    
+    let logs = sqlx::query_as::<_, PipelineJobLog>(
+        "SELECT * FROM job_logs WHERE job_id = $1 ORDER BY created_at"
+    )
+    .bind(job_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+    
+    let combined_log: String = logs.iter().map(|l| l.output.as_str()).collect::<Vec<_>>().join("\n");
+    
+    Ok(HttpResponse::Ok()
+        .content_type("text/plain; charset=utf-8")
+        .insert_header(("Content-Disposition", format!("attachment; filename=\"job-{}.log\"", job_id)))
+        .body(combined_log))
+}

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use crate::error::{Result, RunnerError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,6 +9,46 @@ pub struct RunnerConfig {
     pub name: String,
     pub tags: Vec<String>,
     pub executor: String,
+    
+    /// Work directory for job builds (default: ./builds)
+    #[serde(default = "default_builds_dir")]
+    pub builds_dir: PathBuf,
+    
+    /// Maximum work directory size in MB (default: 10GB)
+    #[serde(default = "default_max_work_dir_size")]
+    pub max_work_dir_size_mb: u64,
+    
+    /// Maximum concurrent jobs (default: 1)
+    #[serde(default = "default_concurrent_jobs")]
+    pub concurrent_jobs: usize,
+    
+    /// Default Docker image for docker executor
+    #[serde(default = "default_docker_image")]
+    pub default_docker_image: String,
+    
+    /// Clean builds directory after job completion
+    #[serde(default = "default_clean_builds")]
+    pub clean_builds: bool,
+}
+
+fn default_builds_dir() -> PathBuf {
+    PathBuf::from("./builds")
+}
+
+fn default_max_work_dir_size() -> u64 {
+    10 * 1024 // 10 GB
+}
+
+fn default_concurrent_jobs() -> usize {
+    1
+}
+
+fn default_docker_image() -> String {
+    String::from("alpine:latest")
+}
+
+fn default_clean_builds() -> bool {
+    true
 }
 
 impl RunnerConfig {
