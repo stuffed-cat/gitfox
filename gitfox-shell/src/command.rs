@@ -1,5 +1,6 @@
 //! Git command parsing and execution
 
+use std::collections::HashMap;
 use std::process::Stdio;
 
 use regex::Regex;
@@ -176,6 +177,17 @@ impl GitCommand {
     ) -> Result<(), ShellError> {
         let binary = self.action.binary_name();
 
+        // For receive-pack, we need to capture ref changes and trigger CI/CD
+        let capture_refs = self.action == GitAction::ReceivePack;
+        let mut old_refs = std::collections::HashMap::new();
+
+        if capture_refs {
+            // Capture current refs before push
+            if let Ok(refs) = Self::get_current_refs(repo_path).await {
+                old_refs = refs;
+            }
+        }
+
         // Build environment variables for git hooks
         let mut env_vars = vec![
             ("GL_ID".to_string(), format!("user-{}", access_info.user_id)),
@@ -217,6 +229,20 @@ impl GitCommand {
 
         if status.success() {
             info!("Git command completed successfully");
+            
+            // For receive-pack, trigger post-receive processing
+            if capture_refs {
+                if let Err(e) = Self::trigger_post_receive(
+                    repo_path,
+                    &old_refs,
+                    access_info,
+                    &self.repo_path
+                ).await {
+                    error!("Failed to trigger post-receive: {}", e);
+                    // Don't fail the push if post-receive trigger fails
+                }
+            }
+            
             Ok(())
         } else {
             let exit_code = status.code().unwrap_or(-1);
@@ -224,6 +250,122 @@ impl GitCommand {
             Err(ShellError::GitExecution(format!(
                 "Git command exited with code {}",
                 exit_code
+            )))
+        }
+    }
+
+    /// Get current refs (before push)
+    async fn get_current_refs(repo_path: &str) -> Result<std::collections::HashMap<String, String>, ShellError> {
+        use std::collections::HashMap;
+        
+        let output = Command::new("git")
+            .args(["show-ref", "--head", "--dereference"])
+            .current_dir(repo_path)
+            .output()
+            .await
+            .map_err(|e| ShellError::GitExecution(format!("Failed to get refs: {}", e)))?;
+
+        let mut refs = HashMap::new();
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() == 2 {
+                    refs.insert(parts[1].to_string(), parts[0].to_string());
+                }
+            }
+        }
+        Ok(refs)
+    }
+
+    /// Trigger post-receive hook via API
+    async fn trigger_post_receive(
+        repo_path: &str,
+        old_refs: &std::collections::HashMap<String, String>,
+        access_info: &AccessInfo,
+        repository: &str,
+    ) -> Result<(), ShellError> {
+        use serde_json::json;
+        
+        // Get current refs (after push)
+        let new_refs = Self::get_current_refs(repo_path).await?;
+        
+        // Detect changes
+        let mut changes = Vec::new();
+        
+        // Find new or updated refs
+        for (ref_name, new_sha) in &new_refs {
+            if let Some(old_sha) = old_refs.get(ref_name) {
+                if old_sha != new_sha {
+                    // Updated ref
+                    changes.push(json!({
+                        "old_sha": old_sha,
+                        "new_sha": new_sha,
+                        "ref": ref_name
+                    }));
+                }
+            } else {
+                // New ref
+                changes.push(json!({
+                    "old_sha": "0000000000000000000000000000000000000000",
+                    "new_sha": new_sha,
+                    "ref": ref_name
+                }));
+            }
+        }
+        
+        // Find deleted refs
+        for (ref_name, old_sha) in old_refs {
+            if !new_refs.contains_key(ref_name) {
+                changes.push(json!({
+                    "old_sha": old_sha,
+                    "new_sha": "0000000000000000000000000000000000000000",
+                    "ref": ref_name
+                }));
+            }
+        }
+        
+        if changes.is_empty() {
+            debug!("No ref changes detected");
+            return Ok(());
+        }
+        
+        info!("Detected {} ref changes, triggering post-receive", changes.len());
+        
+        // Call internal API
+        let base_url = access_info.base_url.as_deref().unwrap_or("http://localhost:8080");
+        let api_token = std::env::var("GITFOX_SHELL_SECRET")
+            .unwrap_or_else(|_| "your-shell-secret".to_string());
+        
+        let payload = json!({
+            "user_id": access_info.user_id.to_string(),
+            "repository": repository,
+            "project_id": access_info.project_id.map(|id| id.to_string()),
+            "changes": changes
+        });
+        
+        let client = reqwest::Client::new();
+        let url = format!("{}/api/internal/post-receive", base_url.trim_end_matches('/'));
+        
+        let response = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("X-GitFox-Shell-Token", api_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ShellError::GitExecution(format!("Failed to call post-receive API: {}", e)))?;
+        
+        if response.status().is_success() {
+            info!("Post-receive API call successful");
+            Ok(())
+        } else {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            error!("Post-receive API call failed: {} - {}", status, body);
+            Err(ShellError::GitExecution(format!(
+                "Post-receive API returned {}: {}",
+                status, body
             )))
         }
     }
