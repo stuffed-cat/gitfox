@@ -383,18 +383,25 @@ impl GitService {
         path: Option<&str>,
     ) -> AppResult<Vec<FileEntry>> {
         let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
-        let tree = commit.tree()?;
+        let root_tree = commit.tree()?;
 
-        let target_tree = if let Some(p) = path {
-            let entry = tree.get_path(Path::new(p))?;
-            repo.find_tree(entry.id())?
+        // Handle nested paths by splitting and traversing step by step
+        let tree = if let Some(p) = path {
+            let mut tree_oid = root_tree.id();
+            for component in p.split('/').filter(|s| !s.is_empty()) {
+                let current = repo.find_tree(tree_oid)?;
+                let entry = current.get_name(component)
+                    .ok_or_else(|| AppError::NotFound(format!("Path component '{}' not found in tree", component)))?;
+                tree_oid = entry.id();
+            }
+            repo.find_tree(tree_oid)?
         } else {
-            tree
+            root_tree
         };
 
         let mut entries = Vec::new();
 
-        for entry in target_tree.iter() {
+        for entry in tree.iter() {
             let name = entry.name().unwrap_or("").to_string();
             let entry_path = if let Some(p) = path {
                 format!("{}/{}", p, name)
