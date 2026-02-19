@@ -643,7 +643,7 @@ async fn try_trigger_pipeline(
         // Insert job into database
         sqlx::query(
             r#"
-            INSERT INTO pipeline_jobs
+            INSERT INTO jobs
             (pipeline_id, project_id, name, stage, status, config, allow_failure, when_condition, created_at, updated_at)
             VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $8)
             "#
