@@ -100,11 +100,11 @@ impl CiConfigParser {
             if entry.entry_type == crate::models::FileEntryType::File {
                 let path = entry.path.to_lowercase();
                 if path.ends_with(".yml") || path.ends_with(".yaml") {
-                    let full_path = format!("{}/{}", ci_dir_path, entry.path);
-                    match GitService::get_file_content(repo, commit_sha, &full_path) {
+                    // entry.path already contains full path like ".gitfox/ci/build.yml"
+                    match GitService::get_file_content(repo, commit_sha, &entry.path) {
                         Ok(file_content) => {
                             if !file_content.is_binary {
-                                yaml_files.push((entry.path.clone(), file_content.content));
+                                yaml_files.push((entry.name.clone(), file_content.content));
                             }
                         }
                         Err(e) => {

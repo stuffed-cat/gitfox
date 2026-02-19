@@ -445,25 +445,43 @@ impl GitService {
 
     pub fn get_file_content(repo: &Repository, ref_name: &str, path: &str) -> AppResult<FileContent> {
         let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
-        let tree = commit.tree()?;
-        let entry = tree.get_path(Path::new(path))?;
-        let blob = repo.find_blob(entry.id())?;
+        let root_tree = commit.tree()?;
+        
+        // Handle nested paths by splitting and traversing step by step
+        let mut tree_oid = root_tree.id();
+        let path_components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        
+        for (i, component) in path_components.iter().enumerate() {
+            let current = repo.find_tree(tree_oid)?;
+            let entry = current.get_name(component)
+                .ok_or_else(|| AppError::NotFound(format!("Path component '{}' not found", component)))?;
+            
+            // If this is the last component, it should be a blob (file)
+            if i == path_components.len() - 1 {
+                let blob = repo.find_blob(entry.id())?;
+                
+                let is_binary = blob.is_binary();
+                let content = if is_binary {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.encode(blob.content())
+                } else {
+                    String::from_utf8_lossy(blob.content()).to_string()
+                };
 
-        let is_binary = blob.is_binary();
-        let content = if is_binary {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD.encode(blob.content())
-        } else {
-            String::from_utf8_lossy(blob.content()).to_string()
-        };
-
-        Ok(FileContent {
-            path: path.to_string(),
-            content,
-            size: blob.size() as u64,
-            encoding: if is_binary { "base64" } else { "utf-8" }.to_string(),
-            is_binary,
-        })
+                return Ok(FileContent {
+                    path: path.to_string(),
+                    content,
+                    size: blob.size() as u64,
+                    encoding: if is_binary { "base64" } else { "utf-8" }.to_string(),
+                    is_binary,
+                });
+            }
+            
+            // Otherwise, continue traversing
+            tree_oid = entry.id();
+        }
+        
+        Err(AppError::NotFound(format!("Path '{}' not found", path)))
     }
 
     pub fn compare_refs(repo: &Repository, from: &str, to: &str) -> AppResult<Vec<CommitInfo>> {
