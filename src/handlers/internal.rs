@@ -313,6 +313,14 @@ pub async fn post_receive(
         body.changes.len()
     );
 
+    // Log all changes for debugging
+    for (idx, change) in body.changes.iter().enumerate() {
+        info!(
+            "  Change {}: {} -> {} (ref: {})",
+            idx + 1, &change.old_sha[..8], &change.new_sha[..8.min(change.new_sha.len())], change.ref_name
+        );
+    }
+
     // Get project_id from body or find it from repository path
     let project_id: i64 = if let Some(ref pid) = body.project_id {
         pid.parse().unwrap_or(0)

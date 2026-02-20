@@ -258,8 +258,11 @@ impl GitCommand {
     async fn get_current_refs(repo_path: &str) -> Result<std::collections::HashMap<String, String>, ShellError> {
         use std::collections::HashMap;
         
+        // Don't use --head or --dereference to avoid duplicates
+        // --head adds HEAD which duplicates the current branch
+        // --dereference adds ^{} entries for annotated tags
         let output = Command::new("git")
-            .args(["show-ref", "--head", "--dereference"])
+            .args(["show-ref"])
             .current_dir(repo_path)
             .output()
             .await
@@ -271,7 +274,23 @@ impl GitCommand {
             for line in stdout.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() == 2 {
-                    refs.insert(parts[1].to_string(), parts[0].to_string());
+                    let ref_name = parts[1];
+                    // Skip dereferenced refs (^{}) - they're duplicates
+                    if ref_name.ends_with("^{}") {
+                        continue;
+                    }
+                    // Skip refs that should not trigger CI:
+                    // - HEAD (symbolic ref, duplicates current branch)
+                    // - refs/remotes/* (remote tracking branches, shouldn't exist in bare repos)
+                    // Keep:
+                    // - refs/heads/* (branches)
+                    // - refs/tags/* (tags)
+                    // - refs/merge-requests/* (GitLab-style MRs And GitFox-style MRs, if used)
+                    // - refs/pull/* (GitHub-style PRs, if used)
+                    if ref_name == "HEAD" || ref_name.starts_with("refs/remotes/") {
+                        continue;
+                    }
+                    refs.insert(ref_name.to_string(), parts[0].to_string());
                 }
             }
         }
