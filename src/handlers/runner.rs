@@ -186,6 +186,11 @@ impl Handler<ProcessMessage> for RunnerWebSocket {
                         error!("Failed to update job status: {}", e);
                     }
                     
+                    // Update pipeline status based on all jobs
+                    if let Err(e) = update_pipeline_status(pool.get_ref(), job_id).await {
+                        error!("Failed to update pipeline status: {}", e);
+                    }
+                    
                     // Handle Redis timeout key based on status
                     if status == "running" {
                         // Job started: set Redis timeout key
@@ -353,6 +358,78 @@ async fn update_job_status(
         .execute(pool)
         .await?;
     }
+    Ok(())
+}
+
+/// Update pipeline status based on the status of all its jobs
+async fn update_pipeline_status(pool: &PgPool, job_id: i64) -> AppResult<()> {
+    // Get pipeline_id for this job
+    let pipeline_id: i64 = sqlx::query_scalar("SELECT pipeline_id FROM jobs WHERE id = $1")
+        .bind(job_id)
+        .fetch_one(pool)
+        .await?;
+    
+    // Get all jobs for this pipeline
+    #[derive(sqlx::FromRow)]
+    struct JobStatus {
+        status: String,
+        allow_failure: bool,
+    }
+    
+    let jobs: Vec<JobStatus> = sqlx::query_as(
+        "SELECT status, allow_failure FROM jobs WHERE pipeline_id = $1"
+    )
+    .bind(pipeline_id)
+    .fetch_all(pool)
+    .await?;
+    
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    
+    // Determine overall pipeline status
+    let new_status = if jobs.iter().any(|j| j.status == "running") {
+        "running"
+    } else if jobs.iter().any(|j| j.status == "pending") {
+        "pending"
+    } else if jobs.iter().any(|j| j.status == "canceled") {
+        "canceled"
+    } else if jobs.iter().any(|j| j.status == "failed" && !j.allow_failure) {
+        "failed"
+    } else if jobs.iter().all(|j| matches!(j.status.as_str(), "success" | "skipped") || (j.status == "failed" && j.allow_failure)) {
+        "success"
+    } else {
+        // Some jobs are still pending or unknown state
+        "pending"
+    };
+    
+    // Calculate duration if pipeline is complete
+    if matches!(new_status, "success" | "failed" | "canceled") {
+        sqlx::query(
+            r#"
+            UPDATE pipelines 
+            SET status = $1,
+                finished_at = NOW(),
+                duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))::INTEGER,
+                updated_at = NOW()
+            WHERE id = $2
+            "#
+        )
+        .bind(new_status)
+        .bind(pipeline_id)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE pipelines SET status = $1, updated_at = NOW() WHERE id = $2"
+        )
+        .bind(new_status)
+        .bind(pipeline_id)
+        .execute(pool)
+        .await?;
+    }
+    
+    info!("Updated pipeline {} status to {}", pipeline_id, new_status);
     Ok(())
 }
 

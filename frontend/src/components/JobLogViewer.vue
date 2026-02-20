@@ -171,7 +171,7 @@ function ansiToHtml(text: string): string {
     '96': 'color:#56d4dd', '97': 'color:#e1e4e8'
   }
   
-  return text.replace(/\x1b\[(\d+)(;\d+)*m/g, (match, code) => {
+  return text.replace(/\x1b\[(\d+)(;\d+)*m/g, (_match, code) => {
     if (code === '0' || code === '00') return '</span>'
     const style = ansiMap[code]
     return style ? `<span style="${style}">` : ''
