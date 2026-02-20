@@ -53,8 +53,28 @@
       <div v-if="loading && !logLines.length" class="log-loading">
         正在加载日志...
       </div>
+      <div v-else-if="jobStatus === 'pending'" class="log-info">
+        <svg viewBox="0 0 24 24" width="48" height="48" style="color: #f59e0b; margin-bottom: 12px;">
+          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <div style="font-size: 16px; font-weight: 500; margin-bottom: 8px;">作业正在排队</div>
+        <div style="color: #858585;">等待可用的 runner...</div>
+      </div>
+      <div v-else-if="wsError" class="log-error">
+        <svg viewBox="0 0 24 24" width="48" height="48" style="color: #f48771; margin-bottom: 12px;">
+          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 8v4M12 16v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <div style="font-size: 16px; font-weight: 500; margin-bottom: 8px;">无法加载日志</div>
+        <div style="color: #858585;">{{ wsError }}</div>
+      </div>
       <div v-else-if="!logLines.length" class="log-empty">
-        暂无日志输出
+        <svg viewBox="0 0 24 24" width="48" height="48" style="color: #858585; margin-bottom: 12px;">
+          <path d="M9 12h6M9 16h6M9 8h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <rect x="5" y="4" width="14" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+        </svg>
+        <div style="color: #858585;">暂无日志输出</div>
       </div>
       <template v-else>
         <div 
@@ -94,6 +114,8 @@ const autoScroll = ref(true)
 const wrapLines = ref(false)
 const ws = ref<WebSocket | null>(null)
 const connectionStatus = ref<'connected' | 'connecting' | 'disconnected'>('connecting')
+const jobStatus = ref<string>('')
+const wsError = ref<string>('')
 
 const connectionStatusText = computed(() => {
   const map = {
@@ -213,20 +235,49 @@ async function copyLog() {
   }
 }
 
+async function loadJobStatus() {
+  try {
+    // 先获取作业详情以检查状态
+    const result = await api.pipelines.get(
+      { namespace: props.namespace, project: props.project },
+      String(props.pipelineId)
+    )
+    const job = result.jobs.find((j: any) => j.id === String(props.jobId))
+    if (job) {
+      jobStatus.value = job.status
+      console.log(`Job ${props.jobId} status: ${job.status}`)
+    }
+  } catch (error) {
+    console.error('Failed to load job status:', error)
+  }
+}
+
 async function loadLog() {
   loading.value = true
+  wsError.value = ''
+  
   try {
+    console.log(`Loading log for job ${props.jobId}...`)
     const result = await api.pipelines.getJobLog(
       { namespace: props.namespace, project: props.project },
       String(props.pipelineId),
       String(props.jobId)
     )
-    logLines.value = result.log.split('\n')
+    console.log('Log loaded:', result)
+    
+    // Handle both string and object responses
+    const logText = typeof result === 'string' ? result : (result.log || '')
+    logLines.value = logText ? logText.split('\n') : []
+    
+    console.log(`Loaded ${logLines.value.length} log lines`)
     handleSearch()
     if (autoScroll.value) scrollToBottom()
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to load log:', error)
-    logLines.value = ['加载日志失败']
+    // 不在这里设置错误，让状态提示来显示
+    if (error.response?.status !== 404) {
+      wsError.value = '加载日志失败: ' + (error.message || '未知错误')
+    }
   } finally {
     loading.value = false
   }
@@ -260,23 +311,61 @@ function connectWebSocket() {
     connectionStatus.value = 'disconnected'
   }
   
-  ws.value.onclose = () => {
+  ws.value.onclose = (event) => {
     connectionStatus.value = 'disconnected'
-    console.log('WebSocket disconnected')
-    // Try to reconnect after 5 seconds
-    setTimeout(() => {
-      if (!ws.value || ws.value.readyState === WebSocket.CLOSED) {
-        connectWebSocket()
+    console.log('WebSocket disconnected:', event.code, event.reason)
+    
+    // 如果是异常关闭（不是正常关闭码 1000），检查是否需要重连
+    if (event.code !== 1000) {
+      // 如果作业还在运行，尝试重连
+      if (jobStatus.value === 'running') {
+        setTimeout(() => {
+          if (!ws.value || ws.value.readyState === WebSocket.CLOSED) {
+            connectWebSocket()
+          }
+        }, 5000)
+      } else if (jobStatus.value === 'pending') {
+        // 作业在等待，定期检查状态
+        setTimeout(async () => {
+          await loadJobStatus()
+          if (jobStatus.value === 'running') {
+            connectWebSocket()
+          } else if (jobStatus.value === 'pending') {
+            // 继续等待
+            setTimeout(() => ws.value?.close(), 100)
+          }
+        }, 3000)
       }
-    }, 5000)
+    }
   }
 }
 
-onMounted(() => {
-  loadLog().then(() => {
-    // Connect WebSocket for live updates
+onMounted(async () => {
+  await loadJobStatus()
+  await loadLog()
+  
+  // 只在作业运行时连接 WebSocket
+  if (jobStatus.value === 'running' || jobStatus.value === 'success' || jobStatus.value === 'failed') {
     connectWebSocket()
-  })
+  } else if (jobStatus.value === 'pending') {
+    // 定期检查状态
+    const checkInterval = setInterval(async () => {
+      await loadJobStatus()
+      if (jobStatus.value !== 'pending') {
+        clearInterval(checkInterval)
+        if (jobStatus.value === 'running') {
+          await loadLog()
+          connectWebSocket()
+        }
+      }
+    }, 3000)
+    
+    // 清理
+    const cleanup = () => clearInterval(checkInterval)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', cleanup)
+    }
+  }
 })
 
 onBeforeUnmount(() => {
@@ -438,10 +527,24 @@ watch(() => props.jobId, () => {
 }
 
 .log-loading,
-.log-empty {
-  padding: 20px;
+.log-empty,
+.log-info,
+.log-error {
+  padding: 40px 20px;
   text-align: center;
   color: #858585;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.log-info {
+  color: #dcdcaa;
+}
+
+.log-error {
+  color: #f48771;
 }
 
 .log-line {
