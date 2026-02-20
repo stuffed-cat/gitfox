@@ -62,6 +62,34 @@ pub async fn create_merge_request(
     let (namespace, project_name) = path.into_inner();
     let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
     
+    // Determine source project: use provided or default to target project (same-repo MR)
+    let source_project_id = body.source_project_id.unwrap_or(project.id);
+    
+    // Validate source project exists and user has access
+    if source_project_id != project.id {
+        let source_project = sqlx::query_as::<_, (String, Option<i64>)>(
+            r#"
+            SELECT n.path, p.forked_from_id
+            FROM projects p
+            JOIN namespaces n ON p.namespace_id = n.id
+            WHERE p.id = $1
+            "#
+        )
+        .bind(source_project_id)
+        .fetch_optional(pool.get_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("Source project not found".to_string()))?;
+        
+        let (_, forked_from_id) = source_project;
+        
+        // Verify this is actually a fork of the target project
+        if forked_from_id != Some(project.id) {
+            return Err(AppError::BadRequest(
+                "Source project must be a fork of the target project".to_string()
+            ));
+        }
+    }
+    
     // Get next IID for this project
     let next_iid: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(iid), 0) + 1 FROM merge_requests WHERE project_id = $1"
@@ -80,12 +108,13 @@ pub async fn create_merge_request(
     let mr = sqlx::query_as::<_, MergeRequest>(
         r#"
         INSERT INTO merge_requests 
-        (project_id, iid, title, description, source_branch, target_branch, status, author_id, assignee_id, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+        (project_id, source_project_id, iid, title, description, source_branch, target_branch, status, author_id, assignee_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
         RETURNING *
         "#
     )
     .bind(project.id)
+    .bind(source_project_id)
     .bind(next_iid)
     .bind(&body.title)
     .bind(&body.description)
@@ -205,10 +234,44 @@ pub async fn merge(
         return Err(AppError::BadRequest("Merge request is not open".to_string()));
     }
     
-    // Check if can merge
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    if !GitService::can_merge(&repo, &mr.source_branch, &mr.target_branch)? {
-        return Err(AppError::Conflict("Cannot merge due to conflicts".to_string()));
+    let target_repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
+    
+    // Handle cross-repository merge (from fork)
+    if mr.source_project_id != project.id {
+        // Get source project info
+        let source_project = sqlx::query_as::<_, (String, String)>(
+            r#"
+            SELECT n.path, p.name
+            FROM projects p
+            JOIN namespaces n ON p.namespace_id = n.id
+            WHERE p.id = $1
+            "#
+        )
+        .bind(mr.source_project_id)
+        .fetch_optional(pool.get_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound("Source project not found".to_string()))?;
+        
+        let (source_namespace, source_project_name) = source_project;
+        
+        let source_repo = GitService::open_repository(
+            config.get_ref(), 
+            &source_namespace, 
+            &source_project_name
+        )?;
+        
+        // Fetch from the fork and merge
+        GitService::fetch_and_merge_from_fork(
+            &target_repo,
+            &source_repo,
+            &mr.source_branch,
+            &mr.target_branch,
+        )?;
+    } else {
+        // Same-repo merge
+        if !GitService::can_merge(&target_repo, &mr.source_branch, &mr.target_branch)? {
+            return Err(AppError::Conflict("Cannot merge due to conflicts".to_string()));
+        }
     }
     
     // Get user info for the merge commit
@@ -230,7 +293,7 @@ pub async fn merge(
     
     // Perform the actual Git merge
     let merge_commit_sha = GitService::perform_merge(
-        &repo,
+        &target_repo,
         &mr.source_branch,
         &mr.target_branch,
         &merge_message,
@@ -238,9 +301,9 @@ pub async fn merge(
         &email,
     )?;
     
-    // Optionally delete source branch after merge
-    if body.delete_source_branch.unwrap_or(false) {
-        if let Err(e) = GitService::delete_branch_by_name(&repo, &mr.source_branch) {
+    // Optionally delete source branch after merge (only for same-repo MRs)
+    if body.delete_source_branch.unwrap_or(false) && mr.source_project_id == project.id {
+        if let Err(e) = GitService::delete_branch_by_name(&target_repo, &mr.source_branch) {
             // Log but don't fail the merge
             eprintln!("Warning: Failed to delete source branch after merge: {}", e);
         }

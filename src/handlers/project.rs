@@ -461,3 +461,24 @@ pub async fn list_forks(
         "forks": forks
     })))
 }
+
+/// GET /projects/:namespace/:project/fork_network
+/// Returns all projects in the same fork network (the entire fork tree)
+pub async fn get_fork_network(
+    pool: web::Data<PgPool>,
+    path: web::Path<ProjectPath>,
+) -> AppResult<HttpResponse> {
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+    
+    let network = ProjectService::get_fork_network(pool.get_ref(), project.id).await?;
+    
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "current_project_id": project.id,
+        "projects": network
+    })))
+}

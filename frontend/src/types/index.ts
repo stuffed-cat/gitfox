@@ -174,7 +174,8 @@ export type Commit = CommitInfo & {
 
 export interface MergeRequest {
   id: string
-  project_id: string
+  project_id: string  // target project (where MR is created)
+  source_project_id: string  // source project (can be same as project_id or a fork)
   iid: number
   title: string
   description?: string
@@ -194,6 +195,7 @@ export interface MergeRequest {
 export interface CreateMergeRequestRequest {
   title: string
   description?: string
+  source_project_id?: string  // If omitted, defaults to target project (same-repo MR)
   source_branch: string
   target_branch: string
   assignee_id?: string

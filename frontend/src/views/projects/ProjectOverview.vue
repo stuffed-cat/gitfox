@@ -706,7 +706,6 @@ watch(() => props.project, async (p) => {
 </script>
 
 <style lang="scss" scoped>
-// GitLab 颜色
 $white: #fff;
 $gray-50: #fafafa;
 $gray-100: #f0f0f2;

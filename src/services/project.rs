@@ -467,4 +467,57 @@ impl ProjectService {
 
         Ok(forks)
     }
+
+    /// Get the root project of a fork tree (the original project)
+    pub async fn get_fork_root(pool: &PgPool, project_id: i64) -> AppResult<i64> {
+        // Recursively find the root by following forked_from_id chain
+        let mut current_id = project_id;
+        loop {
+            let parent_id: Option<i64> = sqlx::query_scalar(
+                "SELECT forked_from_id FROM projects WHERE id = $1"
+            )
+            .bind(current_id)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
+            
+            match parent_id {
+                Some(pid) => current_id = pid,
+                None => return Ok(current_id),
+            }
+        }
+    }
+
+    /// Get all projects in the same fork network (the entire fork tree)
+    /// This includes the root, all forks, forks of forks, etc.
+    pub async fn get_fork_network(pool: &PgPool, project_id: i64) -> AppResult<Vec<ProjectWithOwner>> {
+        // First find the root of the fork tree
+        let root_id = Self::get_fork_root(pool, project_id).await?;
+        
+        // Use a recursive CTE to get all descendants of the root
+        let projects = sqlx::query_as::<_, ProjectWithOwner>(
+            r#"
+            WITH RECURSIVE fork_tree AS (
+                -- Base case: the root project
+                SELECT id FROM projects WHERE id = $1
+                UNION ALL
+                -- Recursive case: all projects that fork from the tree
+                SELECT p.id FROM projects p
+                INNER JOIN fork_tree ft ON p.forked_from_id = ft.id
+            )
+            SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+                   n.path as owner_name, n.avatar_url as owner_avatar,
+                   p.stars_count, p.forks_count, p.forked_from_id
+            FROM projects p
+            JOIN namespaces n ON p.namespace_id = n.id
+            WHERE p.id IN (SELECT id FROM fork_tree)
+            ORDER BY p.forked_from_id NULLS FIRST, p.created_at
+            "#
+        )
+        .bind(root_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(projects)
+    }
 }

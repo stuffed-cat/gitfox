@@ -272,6 +272,10 @@ class ApiClient {
     listForks: async (path: ProjectPath): Promise<{ forks_count: number; forks: Project[] }> => {
       const response = await this.client.get(`${this.projectPath(path)}/forks`)
       return response.data
+    },
+    getForkNetwork: async (path: ProjectPath): Promise<{ current_project_id: string; projects: Project[] }> => {
+      const response = await this.client.get(`${this.projectPath(path)}/fork_network`)
+      return response.data
     }
   }
 

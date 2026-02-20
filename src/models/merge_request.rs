@@ -6,7 +6,8 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct MergeRequest {
     pub id: i64,
-    pub project_id: i64,
+    pub project_id: i64,  // target project (where MR is created)
+    pub source_project_id: i64,  // source project (can be same as project_id or a fork)
     pub iid: i64,
     pub title: String,
     pub description: Option<String>,
@@ -36,6 +37,7 @@ pub enum MergeRequestStatus {
 pub struct CreateMergeRequestRequest {
     pub title: String,
     pub description: Option<String>,
+    pub source_project_id: Option<i64>,  // If None, defaults to target project (same-repo MR)
     pub source_branch: String,
     pub target_branch: String,
     pub assignee_id: Option<i64>,
