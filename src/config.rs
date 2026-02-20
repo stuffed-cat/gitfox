@@ -179,10 +179,19 @@ pub struct Config {
     pub webauthn_rp_id: String,
     /// WebAuthn Origin (full URL including protocol, e.g., "https://example.com")
     pub webauthn_origin: String,
+    /// Instance identifier for multi-instance deployment (hostname:pid)
+    pub instance_id: String,
 }
 
 impl Config {
     pub fn from_env() -> Self {
+        // Generate unique instance identifier
+        let hostname = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "unknown".to_string());
+        let pid = std::process::id();
+        let instance_id = format!("{}:{}", hostname, pid);
         Self {
             server_host: env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             server_port: env::var("SERVER_PORT")
@@ -261,6 +270,7 @@ impl Config {
             webauthn_origin: env::var("WEBAUTHN_ORIGIN")
                 .unwrap_or_else(|_| env::var("GITFOX_BASE_URL")
                     .unwrap_or_else(|_| "http://localhost:8080".to_string())),
+            instance_id,
         }
     }
 }

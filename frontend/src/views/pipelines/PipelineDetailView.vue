@@ -5,6 +5,24 @@
     </div>
     
     <template v-else-if="pipeline">
+      <!-- 确认对话框 -->
+      <ConfirmDialog
+        v-model="showCancelDialog"
+        title="取消流水线"
+        message="确定要取消此流水线吗？"
+        type="warning"
+        confirm-text="取消流水线"
+        @confirm="confirmCancel"
+      />
+      
+      <ConfirmDialog
+        v-model="showDeleteDialog"
+        title="删除流水线"
+        message="确定要删除此流水线吗？删除后无法恢复。"
+        type="danger"
+        confirm-text="删除"
+        @confirm="confirmDelete"
+      />
       <div class="pipeline-header">
         <div class="header-main">
           <h2>
@@ -43,6 +61,16 @@
           >
             重试
           </button>
+          <button 
+            class="btn btn-danger"
+            @click="deletePipeline"
+            title="删除流水线"
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" style="margin-right: 4px;">
+              <path d="M2 4h12M6 2h4M6 6v6M10 6v6M4 4v9a1 1 0 001 1h6a1 1 0 001-1V4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            删除
+          </button>
         </div>
       </div>
       
@@ -66,21 +94,29 @@
               </svg>
             </div>
             
-            <div v-if="expandedJob === job.id" class="job-logs">
-              <pre v-if="jobLogs[job.id]">{{ jobLogs[job.id] }}</pre>
-              <div v-else-if="loadingLogs" class="loading-logs">加载日志中...</div>
-              <div v-else class="no-logs">暂无日志</div>
+            <div v-if="expandedJob === job.id" class="job-logs-container">
+              <JobLogViewer
+                v-if="props.project?.owner_name && props.project?.name && pipeline"
+                :namespace="props.project.owner_name"
+                :project="props.project.name"
+                :pipeline-id="pipeline.id"
+                :job-id="job.id"
+                :job-name="job.name"
+              />
             </div>
           </div>
         </div>
       </div>
     </template>
+    
+    <!-- Toast 通知 -->
+    <ToastNotification ref="toast" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -88,6 +124,9 @@ import 'dayjs/locale/zh-cn'
 import type { Project, Pipeline } from '@/types'
 import { navIcons } from '@/navigation/icons'
 import CiStatusIcon from '@/components/CiStatusIcon.vue'
+import JobLogViewer from '@/components/JobLogViewer.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import ToastNotification from '@/components/ToastNotification.vue'
 
 const icons = navIcons
 
@@ -109,13 +148,15 @@ const props = defineProps<{
 }>()
 
 const route = useRoute()
+const router = useRouter()
 
 const loading = ref(false)
-const loadingLogs = ref(false)
 const pipeline = ref<Pipeline | null>(null)
 const jobs = ref<PipelineJob[]>([])
 const expandedJob = ref<string | null>(null)
-const jobLogs = ref<Record<string, string>>({})
+const toast = ref<InstanceType<typeof ToastNotification> | null>(null)
+const showCancelDialog = ref(false)
+const showDeleteDialog = ref(false)
 
 function formatDate(date: string) {
   return dayjs(date).fromNow()
@@ -136,26 +177,6 @@ async function toggleJob(jobId: string) {
   }
   
   expandedJob.value = jobId
-  
-  if (!jobLogs.value[jobId]) {
-    await loadJobLogs(jobId)
-  }
-}
-
-async function loadJobLogs(jobId: string) {
-  if (!props.project?.owner_name || !props.project?.name || !pipeline.value) return
-  loadingLogs.value = true
-  const path = { namespace: props.project.owner_name, project: props.project.name }
-  
-  try {
-    const result = await api.pipelines.getJobLog(path, pipeline.value.id, jobId)
-    jobLogs.value[jobId] = result.log
-  } catch (error) {
-    console.error('Failed to load job logs:', error)
-    jobLogs.value[jobId] = '加载日志失败'
-  } finally {
-    loadingLogs.value = false
-  }
 }
 
 async function loadPipeline() {
@@ -178,14 +199,20 @@ async function loadPipeline() {
 
 async function cancelPipeline() {
   if (!props.project?.owner_name || !props.project?.name || !pipeline.value) return
-  if (!confirm('确定要取消此流水线吗？')) return
+  showCancelDialog.value = true
+}
+
+async function confirmCancel() {
+  if (!props.project?.owner_name || !props.project?.name || !pipeline.value) return
   const path = { namespace: props.project.owner_name, project: props.project.name }
   
   try {
     await api.pipelines.cancel(path, pipeline.value.id)
+    toast.value?.success('流水线已取消')
     loadPipeline()
   } catch (error) {
     console.error('Failed to cancel pipeline:', error)
+    toast.value?.error('取消流水线失败')
   }
 }
 
@@ -195,9 +222,31 @@ async function retryPipeline() {
   
   try {
     await api.pipelines.retry(path, pipeline.value.id)
+    toast.value?.success('流水线已重试')
     loadPipeline()
   } catch (error) {
     console.error('Failed to retry pipeline:', error)
+    toast.value?.error('重试流水线失败')
+  }
+}
+
+async function deletePipeline() {
+  if (!props.project?.owner_name || !props.project?.name || !pipeline.value) return
+  showDeleteDialog.value = true
+}
+
+async function confirmDelete() {
+  if (!props.project?.owner_name || !props.project?.name || !pipeline.value) return
+  const path = { namespace: props.project.owner_name, project: props.project.name }
+  
+  try {
+    await api.pipelines.delete(path, String(pipeline.value.id))
+    toast.value?.success('流水线已删除')
+    // 删除成功，返回到流水线列表
+    await router.push(`/${props.project.owner_name}/${props.project.name}/-/pipelines`)
+  } catch (error) {
+    console.error('Failed to delete pipeline:', error)
+    toast.value?.error('删除流水线失败')
   }
 }
 
@@ -331,26 +380,8 @@ watch([() => props.project?.owner_name, () => props.project?.name, () => route.p
   font-size: $font-size-xs;
 }
 
-.job-logs {
-  background: $bg-dark;
-  color: $text-light;
-  max-height: 400px;
-  overflow: auto;
-  
-  pre {
-    margin: 0;
-    padding: $spacing-md;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: $font-size-xs;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-}
-
-.loading-logs, .no-logs {
-  padding: $spacing-lg;
-  text-align: center;
-  color: $text-muted;
+.job-logs-container {
+  height: 500px;
+  border-top: 1px solid $border-color;
 }
 </style>

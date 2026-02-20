@@ -258,6 +258,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/pipelines", web::get().to(pipeline::list_pipelines))
             .route("/projects/{namespace}/{project}/pipelines", web::post().to(pipeline::trigger_pipeline))
             .route("/projects/{namespace}/{project}/pipelines/{id}", web::get().to(pipeline::get_pipeline))
+            .route("/projects/{namespace}/{project}/pipelines/{id}", web::delete().to(pipeline::delete_pipeline))
             .route("/projects/{namespace}/{project}/pipelines/{id}/cancel", web::post().to(pipeline::cancel_pipeline))
             .route("/projects/{namespace}/{project}/pipelines/{id}/retry", web::post().to(pipeline::retry_pipeline))
             .route("/projects/{namespace}/{project}/pipelines/{id}/jobs", web::get().to(pipeline::list_jobs))

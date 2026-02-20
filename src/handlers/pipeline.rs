@@ -224,6 +224,35 @@ pub async fn cancel_pipeline(
     Ok(HttpResponse::Ok().json(pipeline))
 }
 
+pub async fn delete_pipeline(
+    pool: web::Data<PgPool>,
+    path: web::Path<(String, String, i64)>,
+) -> AppResult<HttpResponse> {
+    let (namespace, project_name, pipeline_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
+    
+    // Verify pipeline belongs to project
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pipelines WHERE id = $1 AND project_id = $2)"
+    )
+    .bind(pipeline_id)
+    .bind(project.id)
+    .fetch_one(pool.get_ref())
+    .await?;
+    
+    if !exists {
+        return Err(AppError::NotFound("Pipeline not found".to_string()));
+    }
+    
+    // Delete pipeline (CASCADE will delete jobs and job_logs)
+    sqlx::query("DELETE FROM pipelines WHERE id = $1")
+        .bind(pipeline_id)
+        .execute(pool.get_ref())
+        .await?;
+    
+    Ok(HttpResponse::NoContent().finish())
+}
+
 pub async fn retry_pipeline(
     req: HttpRequest,
     pool: web::Data<PgPool>,

@@ -55,8 +55,9 @@ async fn main() -> std::io::Result<()> {
     // Start Redis-based job timeout listener in background
     let timeout_pool = pg_pool.clone();
     let redis_url = config.redis_url.clone();
+    let instance_id = config.instance_id.clone();
     tokio::spawn(async move {
-        handlers::runner::start_redis_timeout_listener(timeout_pool, redis_url).await;
+        handlers::runner::start_redis_timeout_listener(timeout_pool, redis_url, instance_id).await;
     });
     log::info!("Redis job timeout listener started");
 

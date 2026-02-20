@@ -197,7 +197,17 @@ async function copyLog() {
   const text = logLines.value.join('\n')
   try {
     await navigator.clipboard.writeText(text)
-    alert('日志已复制到剪贴板')
+    // Use a simple visual feedback instead of alert
+    const btn = document.activeElement as HTMLButtonElement
+    if (btn) {
+      const originalText = btn.innerHTML
+      btn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M13 4L6 11 3 8" fill="none" stroke="currentColor" stroke-width="2"/></svg> 已复制'
+      btn.style.color = '#4ec9b0'
+      setTimeout(() => {
+        btn.innerHTML = originalText
+        btn.style.color = ''
+      }, 2000)
+    }
   } catch (err) {
     console.error('Failed to copy:', err)
   }

@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult};
+use crate::config::Config;
 use crate::middleware::auth::{AdminUser, AuthenticatedUser};
 use actix::{Actor, ActorContext, Addr, AsyncContext, Handler, Message as ActixMessage, StreamHandler};
 use actix_web::{web, HttpRequest, HttpResponse};
@@ -20,16 +21,18 @@ pub struct RunnerWebSocket {
     id: Option<i64>,
     pool: web::Data<PgPool>,
     redis: web::Data<deadpool_redis::Pool>,
+    config: web::Data<Config>,
     hb: Instant,
     runner_manager: Arc<RwLock<RunnerManager>>,
 }
 
 impl RunnerWebSocket {
-    pub fn new(pool: web::Data<PgPool>, redis: web::Data<deadpool_redis::Pool>, runner_manager: Arc<RwLock<RunnerManager>>) -> Self {
+    pub fn new(pool: web::Data<PgPool>, redis: web::Data<deadpool_redis::Pool>, config: web::Data<Config>, runner_manager: Arc<RwLock<RunnerManager>>) -> Self {
         Self {
             id: None,
             pool,
             redis,
+            config,
             hb: Instant::now(),
             runner_manager,
         }
@@ -175,9 +178,11 @@ impl Handler<ProcessMessage> for RunnerWebSocket {
             RunnerMessage::JobUpdate { job_id, status, exit_code, error_message } => {
                 let redis_clone = self.redis.clone();
                 let pool_clone = self.pool.clone();
+                let instance_id = self.config.instance_id.clone();
                 actix_web::rt::spawn(async move {
                     // Update job status in database
-                    if let Err(e) = update_job_status(pool.get_ref(), job_id, &status, exit_code, error_message.as_deref()).await {
+                    let instance_id_ref = if status == "running" { Some(instance_id.as_str()) } else { None };
+                    if let Err(e) = update_job_status(pool.get_ref(), &redis_clone, job_id, &status, exit_code, error_message.as_deref(), instance_id_ref).await {
                         error!("Failed to update job status: {}", e);
                     }
                     
@@ -303,16 +308,30 @@ async fn register_runner(
 
 async fn update_job_status(
     pool: &PgPool,
+    redis: &deadpool_redis::Pool,
     job_id: i64,
     status: &str,
     exit_code: Option<i32>,
     error_message: Option<&str>,
+    instance_id: Option<&str>,
 ) -> AppResult<()> {
     if status == "running" {
+        // Calculate timeout_at when job starts
+        let timeout_seconds = get_job_timeout(pool, redis, job_id).await.unwrap_or(3600);
+        
         sqlx::query(
-            "UPDATE jobs SET status = $1, started_at = NOW() WHERE id = $2"
+            r#"
+            UPDATE jobs 
+            SET status = $1, 
+                started_at = NOW(),
+                timeout_at = NOW() + ($2 || ' seconds')::interval,
+                watcher_instance = $3
+            WHERE id = $4
+            "#
         )
         .bind(status)
+        .bind(timeout_seconds.to_string())
+        .bind(instance_id)
         .bind(job_id)
         .execute(pool)
         .await?;
@@ -323,7 +342,8 @@ async fn update_job_status(
             SET status = $1, 
                 finished_at = NOW(),
                 updated_at = NOW(),
-                error_message = $2
+                error_message = $2,
+                watcher_instance = NULL
             WHERE id = $3
             "#
         )
@@ -709,9 +729,10 @@ pub async fn runner_connect(
     stream: web::Payload,
     pool: web::Data<PgPool>,
     redis: web::Data<deadpool_redis::Pool>,
+    config: web::Data<Config>,
     runner_manager: web::Data<Arc<RwLock<RunnerManager>>>,
 ) -> AppResult<HttpResponse> {
-    let ws = RunnerWebSocket::new(pool, redis, runner_manager.get_ref().clone());
+    let ws = RunnerWebSocket::new(pool, redis, config, runner_manager.get_ref().clone());
     let resp = ws::start(ws, &req, stream)?;
     Ok(resp)
 }
@@ -1599,11 +1620,11 @@ pub async fn project_delete_runner(
 
 /// Start Redis keyspace notification listener for job timeouts
 /// When Redis key expires, it triggers timeout handling
-pub async fn start_redis_timeout_listener(pool: PgPool, redis_url: String) {
-    info!("Redis job timeout listener starting...");
+pub async fn start_redis_timeout_listener(pool: PgPool, redis_url: String, instance_id: String) {
+    info!("Redis job timeout listener starting (instance: {})...", instance_id);
     
     loop {
-        match listen_for_expired_keys(&pool, &redis_url).await {
+        match listen_for_expired_keys(&pool, &redis_url, &instance_id).await {
             Ok(_) => {
                 warn!("Redis listener disconnected, reconnecting...");
             }
@@ -1616,7 +1637,7 @@ pub async fn start_redis_timeout_listener(pool: PgPool, redis_url: String) {
 }
 
 /// Subscribe to Redis keyspace notifications for expired keys
-async fn listen_for_expired_keys(pool: &PgPool, redis_url: &str) -> AppResult<()> {
+async fn listen_for_expired_keys(pool: &PgPool, redis_url: &str, instance_id: &str) -> AppResult<()> {
     use deadpool_redis::redis;
     use futures::StreamExt;
     
@@ -1670,11 +1691,12 @@ async fn listen_for_expired_keys(pool: &PgPool, redis_url: &str) -> AppResult<()
         if key.starts_with("job:timeout:") {
             if let Some(job_id_str) = key.strip_prefix("job:timeout:") {
                 if let Ok(job_id) = job_id_str.parse::<i64>() {
-                    info!("Job {} timeout key expired, processing...", job_id);
+                    info!("Job {} timeout key expired, checking responsibility...", job_id);
                     
                     let pool_clone = pool.clone();
+                    let instance_id = instance_id.to_string();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_job_timeout(pool_clone, job_id).await {
+                        if let Err(e) = handle_job_timeout(pool_clone, job_id, &instance_id).await {
                             error!("Failed to handle timeout for job {}: {}", job_id, e);
                         }
                     });
@@ -1689,19 +1711,37 @@ async fn listen_for_expired_keys(pool: &PgPool, redis_url: &str) -> AppResult<()
 }
 
 /// Handle job timeout: mark job as failed if still running
-async fn handle_job_timeout(pool: PgPool, job_id: i64) -> AppResult<()> {
-    // Check current job status
-    let job_status: String = sqlx::query_scalar(
-        "SELECT status FROM jobs WHERE id = $1"
+/// Only process if current instance is responsible or job has no watcher
+async fn handle_job_timeout(pool: PgPool, job_id: i64, instance_id: &str) -> AppResult<()> {
+    // Check current job status and watcher
+    let row = sqlx::query(
+        "SELECT status, watcher_instance FROM jobs WHERE id = $1"
     )
     .bind(job_id)
     .fetch_one(&pool)
     .await?;
     
+    let job_status: String = row.try_get("status")?;
+    let watcher_instance: Option<String> = row.try_get("watcher_instance").ok().flatten();
+    
     // If job already completed, no action needed
     if job_status != "running" {
         info!("Job {} already in '{}' state, skipping timeout", job_id, job_status);
         return Ok(());
+    }
+    
+    // Check responsibility: only process if we are the watcher or no one is watching
+    match watcher_instance {
+        Some(ref watcher) if watcher != instance_id => {
+            info!("Job {} is watched by {}, skipping (current instance: {})", job_id, watcher, instance_id);
+            return Ok(());
+        }
+        None => {
+            info!("Job {} has no watcher, taking responsibility (instance: {})", job_id, instance_id);
+        }
+        Some(ref watcher) => {
+            info!("Job {} is watched by us ({}), processing timeout", job_id, watcher);
+        }
     }
     
     warn!("Job {} timed out, marking as failed", job_id);

@@ -417,6 +417,9 @@ class ApiClient {
       const response = await this.client.post(`${this.projectPath(path)}/pipelines/${id}/retry`)
       return response.data
     },
+    delete: async (path: ProjectPath, id: string): Promise<void> => {
+      await this.client.delete(`${this.projectPath(path)}/pipelines/${id}`)
+    },
     getJobLog: async (path: ProjectPath, pipelineId: string, jobId: string): Promise<{ job_id: string; log: string }> => {
       const response = await this.client.get(`${this.projectPath(path)}/pipelines/${pipelineId}/jobs/${jobId}/log`)
       return response.data
