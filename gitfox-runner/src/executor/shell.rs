@@ -24,9 +24,12 @@ impl<'a> ExecutorTrait for ShellExecutor<'a> {
     where
         F: FnMut(&str),
     {
-        info!("Executing job {} with shell executor", job.id);
+        info!("[Shell] Starting job {} '{}'", job.id, job.name);
+        info!("[Shell] Repository: {}", job.repository_url);
+        info!("[Shell] Commit: {} (ref: {})", &job.commit_sha[..8.min(job.commit_sha.len())], job.ref_name);
 
         let job_dir = self.config.builds_dir.join(format!("job-{}", job.id));
+        info!("[Shell] Work directory: {}", job_dir.display());
         std::fs::create_dir_all(&job_dir)?;
 
         log_callback("Preparing build environment...\n");

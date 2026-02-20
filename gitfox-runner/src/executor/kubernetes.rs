@@ -99,7 +99,10 @@ impl<'a> ExecutorTrait for KubernetesExecutor<'a> {
     where
         F: FnMut(&str),
     {
-        info!("Executing job {} with kubernetes executor", job.id);
+        info!("[K8s] Starting job {} '{}'", job.id, job.name);
+        info!("[K8s] Repository: {}", job.repository_url);
+        info!("[K8s] Commit: {} (ref: {})", &job.commit_sha[..8.min(job.commit_sha.len())], job.ref_name);
+        info!("[K8s] Namespace: {}", self.config.kubernetes_namespace);
 
         let image = self.resolve_image(job).to_owned();
         if image.is_empty() {
@@ -189,6 +192,8 @@ spec:
         })?;
 
         log_callback(&format!("Creating Pod: {}\n", pod_name));
+        info!("[K8s] Creating Pod: {}", pod_name);
+        info!("[K8s] Image: {}", image);
 
         let base = self.kubectl_base_args();
 

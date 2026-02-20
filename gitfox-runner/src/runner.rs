@@ -34,10 +34,13 @@ impl Runner {
         // 使用配置中的完整 WebSocket URL（已包含路径）
         let ws_url = self.config.server_url.replace("http://", "ws://").replace("https://", "wss://");
 
-        info!("Connecting to WebSocket: {}", ws_url);
+        info!("Connecting to GitFox server...");
+        info!("  WebSocket URL: {}", ws_url);
+        info!("  Runner name:   {}", self.config.name);
+        info!("  Executor:      {}", self.config.executor);
 
         let (ws_stream, _) = connect_async(&ws_url).await?;
-        info!("WebSocket connected");
+        info!("WebSocket connection established successfully");
 
         let (mut write, mut read) = ws_stream.split();
 
@@ -59,7 +62,11 @@ impl Runner {
                 let server_msg: ServerMessage = serde_json::from_str(&text)?;
                 match server_msg {
                     ServerMessage::Registered { runner_id } => {
-                        info!("Runner registered with ID: {}", runner_id);
+                        info!("Runner registered successfully!");
+                        info!("  Runner ID:   {}", runner_id);
+                        info!("  Runner name: {}", self.config.name);
+                        info!("  Tags:        {}", if self.config.tags.is_empty() { "(none)".to_string() } else { self.config.tags.join(", ") });
+                        info!("Awaiting jobs...");
                         self.runner_id = Some(runner_id);
                     }
                     ServerMessage::Error { message } => {
@@ -140,7 +147,18 @@ impl Runner {
 
         match server_msg {
             ServerMessage::JobAssigned { job } => {
-                info!("Job assigned: {} (ID: {})", job.name, job.id);
+                info!("────────────────────────────────────────");
+                info!("Job received: {} (ID: {})", job.name, job.id);
+                info!("  Pipeline ID:  {}", job.pipeline_id);
+                info!("  Stage:        {}", job.stage);
+                info!("  Ref:          {}", job.ref_name);
+                info!("  Commit:       {}", &job.commit_sha[..8.min(job.commit_sha.len())]);
+                info!("  Scripts:      {} command(s)", job.script.len());
+                info!("  Allow fail:   {}", job.allow_failure);
+                if let Some(timeout) = job.timeout {
+                    info!("  Timeout:      {}s", timeout);
+                }
+                info!("────────────────────────────────────────");
                 self.execute_job(job, write).await?;
             }
             ServerMessage::NoJobs => {
@@ -195,10 +213,11 @@ impl Runner {
                 } else {
                     JobStatus::Failed
                 };
-                info!(
-                    "Job {} completed with status: {:?} (exit code: {})",
-                    job.id, status, exit_code
-                );
+                info!("────────────────────────────────────────");
+                info!("Job {} '{}' completed", job.id, job.name);
+                info!("  Status:    {:?}", status);
+                info!("  Exit code: {}", exit_code);
+                info!("────────────────────────────────────────");
                 self.send_job_update(job.id, status, Some(exit_code), None, write)
                     .await?;
             }

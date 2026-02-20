@@ -33,7 +33,9 @@ impl<'a> ExecutorTrait for DockerExecutor<'a> {
     where
         F: FnMut(&str),
     {
-        info!("Executing job {} with docker executor", job.id);
+        info!("[Docker] Starting job {} '{}'", job.id, job.name);
+        info!("[Docker] Repository: {}", job.repository_url);
+        info!("[Docker] Commit: {} (ref: {})", &job.commit_sha[..8.min(job.commit_sha.len())], job.ref_name);
 
         let image = self.resolve_image(job).to_owned();
         if image.is_empty() {
@@ -45,6 +47,7 @@ impl<'a> ExecutorTrait for DockerExecutor<'a> {
         log_callback(&format!("Using Docker image: {}\n", image));
 
         // Pull image
+        info!("[Docker] Pulling image: {}", image);
         log_callback(&format!("Pulling image {}...\n", image));
         let pull_result = Command::new("docker")
             .args(&["pull", &image])
@@ -59,6 +62,8 @@ impl<'a> ExecutorTrait for DockerExecutor<'a> {
         }
 
         let container_name = format!("gitfox-job-{}", job.id);
+        info!("[Docker] Container name: {}", container_name);
+        info!("[Docker] Network mode: {}", self.config.network_mode);
 
         // Build docker run command
         let mut docker_cmd = Command::new("docker");

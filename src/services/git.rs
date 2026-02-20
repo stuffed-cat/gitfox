@@ -50,9 +50,6 @@ impl GitService {
         }
         Repository::init_bare(&path)?;
         
-        // Install post-receive hook for CI/CD triggering
-        Self::install_hooks(config, &path)?;
-        
         Ok(())
     }
 
@@ -99,9 +96,6 @@ impl GitService {
             builder.bare(true);
             builder.clone(&source_path, Path::new(&target_path))?;
         }
-        
-        // Install hooks for the forked repository
-        Self::install_hooks(config, &target_path)?;
         
         Ok(())
     }
@@ -791,76 +785,5 @@ impl GitService {
             // First commit - check if path exists in tree
             Ok(tree.get_path(Path::new(path)).is_ok())
         }
-    }
-    
-    /// Install Git hooks for CI/CD triggering
-    fn install_hooks(config: &AppConfig, repo_path: &str) -> AppResult<()> {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-        
-        let hooks_dir = format!("{}/hooks", repo_path);
-        fs::create_dir_all(&hooks_dir)?;
-        
-        // Create post-receive hook
-        let post_receive_path = format!("{}/post-receive", hooks_dir);
-        let hook_content = format!(
-            r#"#!/bin/bash
-# GitFox post-receive hook - Auto-generated
-# This hook triggers CI/CD pipelines after git push
-#
-# Environment variables set by gitfox-shell:
-#   GL_REPOSITORY - Repository path (e.g., "hanxi-cat/project")
-#   GITFOX_USER_ID - User ID
-#   GITFOX_PROJECT_ID - Project ID
-
-set -e
-
-# Collect all ref changes into JSON array
-changes="["
-first=true
-while read oldrev newrev refname; do
-    # Skip if branch/tag is deleted
-    if [ "$newrev" = "0000000000000000000000000000000000000000" ]; then
-        continue
-    fi
-    
-    if [ "$first" = true ]; then
-        first=false
-    else
-        changes="$changes,"
-    fi
-    changes="$changes{{\"old_sha\":\"$oldrev\",\"new_sha\":\"$newrev\",\"ref\":\"$refname\"}}"
-done
-changes="$changes]"
-
-# Notify GitFox API about the push
-if [ -n "$GL_REPOSITORY" ]; then
-    curl -s -X POST \
-        -H "Content-Type: application/json" \
-        -H "X-GitFox-Shell-Token: {}" \
-        -d "{{
-            \"user_id\": \"${{GITFOX_USER_ID:-0}}\",
-            \"repository\": \"$GL_REPOSITORY\",
-            \"project_id\": \"$GITFOX_PROJECT_ID\",
-            \"changes\": $changes
-        }}" \
-        "{}/api/internal/post-receive" > /dev/null 2>&1 || true
-fi
-
-exit 0
-"#,
-            config.shell_secret,
-            config.base_url.trim_end_matches('/')
-        );
-        
-        fs::write(&post_receive_path, hook_content)?;
-        
-        // Make hook executable
-        let metadata = fs::metadata(&post_receive_path)?;
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&post_receive_path, permissions)?;
-        
-        Ok(())
     }
 }

@@ -440,9 +440,24 @@ async fn run_runner(config_path: Option<PathBuf>) -> Result<()> {
 
     let config = RunnerConfig::load(&config_file)?;
 
-    info!("Starting GitFox Runner: {}", config.name);
-    info!("Connecting to: {}", config.server_url);
-    info!("Tags: {:?}", config.tags);
+    info!("============================================");
+    info!("          GitFox Runner v{}", env!("CARGO_PKG_VERSION"));
+    info!("============================================");
+    info!("Runner name:     {}", config.name);
+    info!("Server URL:      {}", config.server_url);
+    info!("Executor:        {}", config.executor);
+    info!("Tags:            {}", if config.tags.is_empty() { "(none)".to_string() } else { config.tags.join(", ") });
+    info!("Builds dir:      {}", config.builds_dir.display());
+    info!("Concurrent jobs: {}", config.concurrent_jobs);
+    info!("Security:        {}", if config.security_enabled { "enabled" } else { "DISABLED" });
+    info!("Network mode:    {}", config.network_mode);
+    if config.executor == "docker" || config.executor == "kubernetes" {
+        info!("Default image:   {}", config.default_image);
+    }
+    if config.executor == "kubernetes" {
+        info!("K8s namespace:   {}", config.kubernetes_namespace);
+    }
+    info!("============================================");
 
     let mut runner = Runner::new(config);
 
