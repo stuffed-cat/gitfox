@@ -408,7 +408,7 @@ async fn update_pipeline_status(pool: &PgPool, job_id: i64) -> AppResult<()> {
         sqlx::query(
             r#"
             UPDATE pipelines 
-            SET status = $1,
+            SET status = $1::pipeline_status,
                 finished_at = NOW(),
                 duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))::INTEGER,
                 updated_at = NOW()
@@ -421,7 +421,7 @@ async fn update_pipeline_status(pool: &PgPool, job_id: i64) -> AppResult<()> {
         .await?;
     } else {
         sqlx::query(
-            "UPDATE pipelines SET status = $1, updated_at = NOW() WHERE id = $2"
+            "UPDATE pipelines SET status = $1::pipeline_status, updated_at = NOW() WHERE id = $2"
         )
         .bind(new_status)
         .bind(pipeline_id)
