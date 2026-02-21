@@ -52,14 +52,30 @@ async fn main() -> std::io::Result<()> {
         log::error!("Failed to seed initial admin: {}", e);
     }
 
-    // Start Redis-based job timeout listener in background
+    // Start instance heartbeat in Redis (for multi-instance coordination)
+    let heartbeat_redis = redis_pool.clone();
+    let heartbeat_instance_id = config.instance_id.clone();
+    tokio::spawn(async move {
+        handlers::runner::start_instance_heartbeat(heartbeat_redis, heartbeat_instance_id).await;
+    });
+    log::info!("Instance heartbeat started (Redis-based)");
+
+    // Start PostgreSQL LISTEN for job timeout notifications (failsafe from database trigger)
+    let pg_listener_pool = pg_pool.clone();
+    let pg_listener_instance_id = config.instance_id.clone();
+    tokio::spawn(async move {
+        handlers::runner::start_pg_timeout_listener(pg_listener_pool, pg_listener_instance_id).await;
+    });
+    log::info!("PostgreSQL job timeout listener started (failsafe)");
+
+    // Start Redis-based job timeout listener in background (primary timeout mechanism)
     let timeout_pool = pg_pool.clone();
     let redis_url = config.redis_url.clone();
     let instance_id = config.instance_id.clone();
     tokio::spawn(async move {
         handlers::runner::start_redis_timeout_listener(timeout_pool, redis_url, instance_id).await;
     });
-    log::info!("Redis job timeout listener started");
+    log::info!("Redis job timeout listener started (primary)");
 
     // Start SSH server if enabled
     if config.ssh_enabled {

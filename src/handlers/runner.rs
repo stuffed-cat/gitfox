@@ -225,6 +225,9 @@ impl Handler<ProcessMessage> for RunnerWebSocket {
                 });
             }
             RunnerMessage::Heartbeat => {
+                // 注意：WebSocket 本身已经能检测断连，这个心跳主要用于：
+                // 1. 更新 runners.contacted_at（管理界面显示最后联系时间）
+                // 2. 重置 WebSocket 超时计时器（防止中间网络设备超时）
                 self.hb = Instant::now();
                 if let Some(runner_id) = current_runner_id {
                     actix_web::rt::spawn(async move {
@@ -320,6 +323,32 @@ async fn update_job_status(
     error_message: Option<&str>,
     instance_id: Option<&str>,
 ) -> AppResult<()> {
+    // 第5点：被调用时主动检查 job 是否已超时（防御性检查）
+    // 在执行任何状态更新前，先检查 job 当前状态
+    let check_result = sqlx::query(
+        "SELECT status, timeout_at FROM jobs WHERE id = $1"
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(row) = check_result {
+        let current_status: String = row.try_get("status")?;
+        let timeout_at: Option<chrono::DateTime<chrono::Utc>> = row.try_get("timeout_at").ok().flatten();
+
+        // 如果 job 当前是 running 但已经超时，数据库触发器会自动处理
+        // 但这里做二次检查：如果状态已经被改为 failed，不要覆盖
+        if current_status == "failed" && timeout_at.is_some() {
+            if let Some(timeout) = timeout_at {
+                if timeout <= chrono::Utc::now() && status == "running" {
+                    // Job 已超时被标记为 failed，拒绝更新为 running
+                    warn!("Job {} already timed out and marked as failed, ignoring status update to {}", job_id, status);
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     if status == "running" {
         // Calculate timeout_at when job starts
         let timeout_seconds = get_job_timeout(pool, redis, job_id).await.unwrap_or(3600);
@@ -368,6 +397,48 @@ async fn update_pipeline_status(pool: &PgPool, job_id: i64) -> AppResult<()> {
         .bind(job_id)
         .fetch_one(pool)
         .await?;
+    
+    // 重要：在查询状态前，先检查并修正所有已超时的 running jobs
+    // 这样可以捕获那些因为 Redis/DevOps 重启而遗漏的超时 job
+    let timeout_fixed = sqlx::query(
+        r#"
+        UPDATE jobs
+        SET 
+            status = 'failed',
+            finished_at = NOW(),
+            updated_at = NOW(),
+            error_message = 'Job exceeded maximum execution time limit (detected on status query)',
+            watcher_instance = NULL
+        WHERE pipeline_id = $1
+        AND status = 'running'
+        AND timeout_at IS NOT NULL
+        AND timeout_at < NOW()
+        RETURNING id
+        "#
+    )
+    .bind(pipeline_id)
+    .fetch_all(pool)
+    .await?;
+    
+    if !timeout_fixed.is_empty() {
+        let fixed_count = timeout_fixed.len();
+        warn!("Fixed {} timed-out jobs for pipeline {} (Redis/trigger missed)", fixed_count, pipeline_id);
+        
+        // 为每个修正的 job 添加日志
+        for row in timeout_fixed {
+            let fixed_job_id: i64 = row.try_get("id")?;
+            let log_msg = format!(
+                "\n\n=== Job Timeout (Detected Late) ===\nJob exceeded maximum execution time limit\nDetected and fixed during pipeline status update\n"
+            );
+            let _ = sqlx::query(
+                "INSERT INTO job_logs (job_id, output, created_at) VALUES ($1, $2, NOW())"
+            )
+            .bind(fixed_job_id)
+            .bind(&log_msg)
+            .execute(pool)
+            .await;
+        }
+    }
     
     // Get all jobs for this pipeline
     #[derive(sqlx::FromRow)]
@@ -1837,6 +1908,13 @@ async fn listen_for_expired_keys(pool: &PgPool, redis_url: &str, instance_id: &s
     
     info!("Subscribed to __keyevent@*__:expired");
     
+    // Create Redis pool for checking heartbeat
+    let redis_pool = deadpool_redis::Config::from_url(redis_url)
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+        .map_err(|e| {
+            AppError::InternalError(format!("Failed to create Redis pool: {}", e))
+        })?;
+    
     let mut stream = pubsub.on_message();
     
     while let Some(msg) = stream.next().await {
@@ -1852,12 +1930,13 @@ async fn listen_for_expired_keys(pool: &PgPool, redis_url: &str, instance_id: &s
         if key.starts_with("job:timeout:") {
             if let Some(job_id_str) = key.strip_prefix("job:timeout:") {
                 if let Ok(job_id) = job_id_str.parse::<i64>() {
-                    info!("Job {} timeout key expired, checking responsibility...", job_id);
+                    debug!("Job {} timeout key expired, checking responsibility...", job_id);
                     
                     let pool_clone = pool.clone();
+                    let redis_clone = redis_pool.clone();
                     let instance_id = instance_id.to_string();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_job_timeout(pool_clone, job_id, &instance_id).await {
+                        if let Err(e) = handle_job_timeout(pool_clone, redis_clone, job_id, &instance_id).await {
                             error!("Failed to handle timeout for job {}: {}", job_id, e);
                         }
                     });
@@ -1872,8 +1951,8 @@ async fn listen_for_expired_keys(pool: &PgPool, redis_url: &str, instance_id: &s
 }
 
 /// Handle job timeout: mark job as failed if still running
-/// Only process if current instance is responsible or job has no watcher
-async fn handle_job_timeout(pool: PgPool, job_id: i64, instance_id: &str) -> AppResult<()> {
+/// Only process if current instance is responsible or job has no watcher (checked via Redis heartbeat)
+async fn handle_job_timeout(pool: PgPool, redis: deadpool_redis::Pool, job_id: i64, instance_id: &str) -> AppResult<()> {
     // Check current job status and watcher
     let row = sqlx::query(
         "SELECT status, watcher_instance FROM jobs WHERE id = $1"
@@ -1887,25 +1966,30 @@ async fn handle_job_timeout(pool: PgPool, job_id: i64, instance_id: &str) -> App
     
     // If job already completed, no action needed
     if job_status != "running" {
-        info!("Job {} already in '{}' state, skipping timeout", job_id, job_status);
+        debug!("Job {} already in '{}' state, skipping timeout", job_id, job_status);
         return Ok(());
     }
     
-    // Check responsibility: only process if we are the watcher or no one is watching
+    // Check responsibility using Redis heartbeat
     match watcher_instance {
         Some(ref watcher) if watcher != instance_id => {
-            info!("Job {} is watched by {}, skipping (current instance: {})", job_id, watcher, instance_id);
-            return Ok(());
+            // Check if the watcher is still alive via Redis heartbeat
+            if check_watcher_alive(&redis, watcher).await.unwrap_or(false) {
+                debug!("Job {} is watched by {} (still alive), skipping", job_id, watcher);
+                return Ok(());
+            } else {
+                warn!("Job {} watcher {} is dead, taking over (instance: {})", job_id, watcher, instance_id);
+            }
         }
         None => {
             info!("Job {} has no watcher, taking responsibility (instance: {})", job_id, instance_id);
         }
         Some(ref watcher) => {
-            info!("Job {} is watched by us ({}), processing timeout", job_id, watcher);
+            debug!("Job {} is watched by us ({}), processing timeout", job_id, watcher);
         }
     }
     
-    warn!("Job {} timed out, marking as failed", job_id);
+    warn!("Job {} timed out, marking as failed (Redis timeout)", job_id);
     
     // Get start time to calculate actual running duration
     let started_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
@@ -1929,7 +2013,7 @@ async fn handle_job_timeout(pool: PgPool, job_id: i64, instance_id: &str) -> App
             status = 'failed',
             finished_at = NOW(),
             updated_at = NOW(),
-            error_message = 'Job exceeded maximum execution time limit'
+            error_message = 'Job exceeded maximum execution time limit (Redis timeout)'
         WHERE id = $1
         "#
     )
@@ -1939,7 +2023,7 @@ async fn handle_job_timeout(pool: PgPool, job_id: i64, instance_id: &str) -> App
     
     // Log timeout event
     let timeout_log = format!(
-        "\n\n=== Job Timeout ===\nJob exceeded maximum execution time limit\nJob ran for {} seconds before being terminated\n",
+        "\n\n=== Job Timeout (Redis) ===\nJob exceeded maximum execution time limit\nJob ran for {} seconds before being terminated\n",
         running_seconds
     );
     
@@ -1951,7 +2035,134 @@ async fn handle_job_timeout(pool: PgPool, job_id: i64, instance_id: &str) -> App
     .execute(&pool)
     .await?;
     
-    info!("Job {} marked as failed due to timeout", job_id);
+    info!("Job {} marked as failed due to timeout (Redis)", job_id);
     
     Ok(())
+}
+
+/// Start PostgreSQL LISTEN for job_timeout notifications (complementary to Redis)
+/// This ensures we catch timeouts even if Redis fails
+pub async fn start_pg_timeout_listener(pool: PgPool, instance_id: String) {
+    info!("PostgreSQL job timeout listener starting (instance: {})...", instance_id);
+    
+    loop {
+        match listen_for_pg_notifications(&pool, &instance_id).await {
+            Ok(_) => {
+                warn!("PostgreSQL listener disconnected, reconnecting...");
+            }
+            Err(e) => {
+                error!("PostgreSQL listener error: {}, retrying in 5s...", e);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
+}
+
+async fn listen_for_pg_notifications(pool: &PgPool, instance_id: &str) -> AppResult<()> {
+    // Create a dedicated connection for LISTEN
+    let mut listener = sqlx::postgres::PgListener::connect_with(pool).await.map_err(|e| {
+        AppError::InternalError(format!("Failed to create PG listener: {}", e))
+    })?;
+
+    // Listen to job_timeout channel
+    listener.listen("job_timeout").await.map_err(|e| {
+        AppError::InternalError(format!("Failed to LISTEN on job_timeout: {}", e))
+    })?;
+
+    info!("PostgreSQL listener subscribed to 'job_timeout' channel");
+
+    loop {
+        let notification = listener.recv().await.map_err(|e| {
+            AppError::InternalError(format!("Failed to receive notification: {}", e))
+        })?;
+
+        let payload = notification.payload();
+        debug!("Received job_timeout notification: {}", payload);
+
+        // Parse JSON payload
+        match serde_json::from_str::<serde_json::Value>(payload) {
+            Ok(data) => {
+                if let Some(job_id) = data.get("job_id").and_then(|v| v.as_i64()) {
+                    warn!("Job {} timed out - database failsafe triggered (this should rarely happen)", job_id);
+                    
+                    // Log this event (job is already marked as failed by trigger)
+                    let log_msg = format!(
+                        "\n[DevOps Instance {}] Database failsafe triggered - Redis/DevOps timeout handling failed\n",
+                        instance_id
+                    );
+                    
+                    let pool_clone = pool.clone();
+                    tokio::spawn(async move {
+                        let _ = sqlx::query(
+                            "INSERT INTO job_logs (job_id, output, created_at) VALUES ($1, $2, NOW())"
+                        )
+                        .bind(job_id)
+                        .bind(&log_msg)
+                        .execute(&pool_clone)
+                        .await;
+                    });
+                }
+            }
+            Err(e) => {
+                warn!("Failed to parse job_timeout notification payload: {}", e);
+            }
+        }
+    }
+}
+
+/// Start heartbeat mechanism using Redis (not database)
+/// 
+/// 重要：这是 DevOps 实例之间的心跳，不是 Runner 的心跳！
+/// 用途：在多实例部署中，判断负责监听某个 job 超时的 devops 实例是否还活着
+/// 
+/// 使用 Redis 而不是数据库，避免高频写入打数据库
+pub async fn start_instance_heartbeat(redis: deadpool_redis::Pool, instance_id: String) {
+    info!("DevOps instance heartbeat starting (Redis-based, instance: {})...", instance_id);
+    
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    
+    loop {
+        interval.tick().await;
+        
+        match update_instance_heartbeat_redis(&redis, &instance_id).await {
+            Ok(_) => {
+                debug!("Instance heartbeat updated in Redis: {}", instance_id);
+            }
+            Err(e) => {
+                error!("Failed to update instance heartbeat in Redis: {}", e);
+            }
+        }
+    }
+}
+
+async fn update_instance_heartbeat_redis(redis: &deadpool_redis::Pool, instance_id: &str) -> AppResult<()> {
+    use deadpool_redis::redis::AsyncCommands;
+    
+    let mut conn = redis.get().await.map_err(|e| {
+        AppError::InternalError(format!("Redis connection failed: {}", e))
+    })?;
+    
+    // Key: devops:heartbeat:{instance_id}, 过期时间 2 分钟
+    let key = format!("devops:heartbeat:{}", instance_id);
+    let _: () = conn.set_ex(&key, instance_id, 120).await.map_err(|e| {
+        AppError::InternalError(format!("Failed to set heartbeat in Redis: {}", e))
+    })?;
+    
+    Ok(())
+}
+
+/// 检查 watcher 实例是否还活着（通过 Redis 心跳）
+async fn check_watcher_alive(redis: &deadpool_redis::Pool, watcher_instance: &str) -> AppResult<bool> {
+    use deadpool_redis::redis::AsyncCommands;
+    
+    let mut conn = redis.get().await.map_err(|e| {
+        AppError::InternalError(format!("Redis connection failed: {}", e))
+    })?;
+    
+    let key = format!("devops:heartbeat:{}", watcher_instance);
+    let exists: bool = conn.exists(&key).await.map_err(|e| {
+        AppError::InternalError(format!("Failed to check heartbeat in Redis: {}", e))
+    })?;
+    
+    Ok(exists)
 }

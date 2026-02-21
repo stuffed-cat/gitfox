@@ -9,7 +9,7 @@ use crate::middleware::validate_token;
 use crate::models::{
     CreateCommentRequest, CreateMergeRequestRequest, CreateReviewRequest, MergeOptions,
     MergeRequest, MergeRequestComment, MergeRequestListQuery, MergeRequestReview,
-    MergeRequestStatus, ReviewStatus, UpdateMergeRequestRequest,
+    MergeRequestStatus, UpdateMergeRequestRequest,
     Pipeline, PipelineStatus, PipelineTriggerType,
 };
 use crate::services::{GitService, ProjectService, CiConfigParser};

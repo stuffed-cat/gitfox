@@ -201,20 +201,53 @@ impl Runner {
         self.send_job_update(job.id, JobStatus::Running, None, None, write)
             .await?;
 
+        // Get job timeout (in seconds)
+        let timeout_seconds = job.timeout.unwrap_or(3600) as u64;
+        let timeout_duration = Duration::from_secs(timeout_seconds);
+        
+        info!("Job {} will timeout after {} seconds", job.id, timeout_seconds);
+
         // Create executor
         let executor = Executor::new(self.config.clone());
 
-        // Execute job and stream logs
-        let result = executor.execute(&job, |log_line| {
-            let log_msg = RunnerMessage::JobLog {
-                job_id: job.id,
-                output: log_line.to_string(),
-            };
-            if let Ok(msg) = serde_json::to_string(&log_msg) {
-                // Send in blocking context
-                let _ = futures::executor::block_on(write.send(Message::Text(msg)));
+        // Execute with timeout control
+        let job_id = job.id;
+        let job_name = job.name.clone();
+        
+        // Execute job with actual timeout enforcement
+        let execution_future = async {
+            executor.execute(&job, |log_line| {
+                let log_msg = RunnerMessage::JobLog {
+                    job_id,
+                    output: log_line.to_string(),
+                };
+                if let Ok(msg) = serde_json::to_string(&log_msg) {
+                    // Send in blocking context
+                    let _ = futures::executor::block_on(write.send(Message::Text(msg)));
+                }
+            })
+        };
+
+        // Wrap execution with timeout
+        let result = match tokio::time::timeout(timeout_duration, execution_future).await {
+            Ok(exec_result) => exec_result,
+            Err(_) => {
+                // Timeout occurred - runner side timeout enforcement
+                error!("Job {} '{}' exceeded timeout of {}s (runner-side enforcement)", job_id, job_name, timeout_seconds);
+                
+                // Send timeout log
+                let timeout_log = format!("\n\n=== Runner Timeout ===\nJob exceeded {} seconds execution time limit\nTerminated by runner\n", timeout_seconds);
+                let log_msg = RunnerMessage::JobLog {
+                    job_id,
+                    output: timeout_log,
+                };
+                if let Ok(msg) = serde_json::to_string(&log_msg) {
+                    let _ = write.send(Message::Text(msg)).await;
+                }
+                
+                Err(crate::error::RunnerError::Execution(format!("Job timeout after {} seconds", timeout_seconds)))
             }
-        });
+        };
 
         // Update final status
         match result {
@@ -225,17 +258,17 @@ impl Runner {
                     JobStatus::Failed
                 };
                 info!("────────────────────────────────────────");
-                info!("Job {} '{}' completed", job.id, job.name);
+                info!("Job {} '{}' completed", job_id, job_name);
                 info!("  Status:    {:?}", status);
                 info!("  Exit code: {}", exit_code);
                 info!("────────────────────────────────────────");
-                self.send_job_update(job.id, status, Some(exit_code), None, write)
+                self.send_job_update(job_id, status, Some(exit_code), None, write)
                     .await?;
             }
             Err(e) => {
-                error!("Job {} execution error: {}", job.id, e);
+                error!("Job {} execution error: {}", job_id, e);
                 let error_msg = format!("Execution error: {}", e);
-                self.send_job_update(job.id, JobStatus::Failed, Some(-1), Some(error_msg), write)
+                self.send_job_update(job_id, JobStatus::Failed, Some(-1), Some(error_msg), write)
                     .await?;
             }
         }

@@ -1,5 +1,6 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use chrono::Utc;
+use log::warn;
 use sqlx::PgPool;
 
 use crate::config::AppConfig;
@@ -172,6 +173,39 @@ pub async fn get_pipeline(
     .await?
     .ok_or_else(|| AppError::NotFound("Pipeline not found".to_string()))?;
     
+    // 主动检查并修复超时的 jobs（被查询时检测超时）
+    let fixed_count = sqlx::query_scalar::<_, i64>(
+        "UPDATE jobs 
+         SET status = 'failed', 
+             finished_at = NOW(), 
+             error_message = 'Job exceeded timeout and was detected late on status query'
+         WHERE pipeline_id = $1 
+           AND status = 'running' 
+           AND timeout_at < NOW()
+         RETURNING 1"
+    )
+    .bind(pipeline.id)
+    .fetch_all(pool.get_ref())
+    .await?
+    .len() as i64;
+    
+    if fixed_count > 0 {
+        warn!("Fixed {} timed-out jobs for pipeline {} during get_pipeline query", fixed_count, pipeline.id);
+        
+        // 为每个被修复的 job 添加日志记录
+        let _ = sqlx::query(
+            "INSERT INTO job_logs (job_id, log, timestamp) 
+             SELECT id, '[System] Job marked as failed: exceeded timeout', NOW()
+             FROM jobs 
+             WHERE pipeline_id = $1 
+               AND status = 'failed' 
+               AND error_message = 'Job exceeded timeout and was detected late on status query'"
+        )
+        .bind(pipeline.id)
+        .execute(pool.get_ref())
+        .await;
+    }
+    
     let mut jobs = sqlx::query_as::<_, PipelineJob>(
         "SELECT * FROM jobs WHERE pipeline_id = $1 ORDER BY created_at"
     )
@@ -324,6 +358,39 @@ pub async fn list_jobs(
     .fetch_optional(pool.get_ref())
     .await?
     .ok_or_else(|| AppError::NotFound("Pipeline not found".to_string()))?;
+    
+    // 主动检查并修复超时的 jobs（被查询时检测超时）
+    let fixed_count = sqlx::query_scalar::<_, i64>(
+        "UPDATE jobs 
+         SET status = 'failed', 
+             finished_at = NOW(), 
+             error_message = 'Job exceeded timeout and was detected late on status query'
+         WHERE pipeline_id = $1 
+           AND status = 'running' 
+           AND timeout_at < NOW()
+         RETURNING 1"
+    )
+    .bind(pipeline_id)
+    .fetch_all(pool.get_ref())
+    .await?
+    .len() as i64;
+    
+    if fixed_count > 0 {
+        warn!("Fixed {} timed-out jobs for pipeline {} during list_jobs query", fixed_count, pipeline_id);
+        
+        // 为每个被修复的 job 添加日志记录
+        let _ = sqlx::query(
+            "INSERT INTO job_logs (job_id, log, timestamp) 
+             SELECT id, '[System] Job marked as failed: exceeded timeout', NOW()
+             FROM jobs 
+             WHERE pipeline_id = $1 
+               AND status = 'failed' 
+               AND error_message = 'Job exceeded timeout and was detected late on status query'"
+        )
+        .bind(pipeline_id)
+        .execute(pool.get_ref())
+        .await;
+    }
     
     let mut jobs = sqlx::query_as::<_, PipelineJob>(
         "SELECT * FROM jobs WHERE pipeline_id = $1 ORDER BY stage, created_at"
