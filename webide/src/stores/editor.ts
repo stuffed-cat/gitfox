@@ -118,11 +118,60 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function toggleFolder(path: string) {
-    if (expandedFolders.value.has(path)) {
-      expandedFolders.value.delete(path)
+    // Replace the Set with a new Set to ensure Vue reactivity notices the change
+    const next = new Set(expandedFolders.value)
+    const opening = !next.has(path)
+    if (next.has(path)) {
+      next.delete(path)
     } else {
-      expandedFolders.value.add(path)
+      next.add(path)
     }
+    expandedFolders.value = next
+
+    // If opening a folder and it has no children yet, fetch its immediate children
+    if (opening) {
+      // find node in current fileTree
+      const node = findNode(path, fileTree.value)
+      if (node && (!node.children || node.children.length === 0)) {
+        // fetch children (non-recursive)
+        api.getFileTreeChildren(owner.value, repo.value, currentRef.value, path)
+          .then(items => {
+            const children = items.map((it: any) => {
+              const raw = (it.path || it.path_name || '').toString()
+              const clean = raw.replace(/^\/+/, '')
+              const parts = clean.split('/')
+              const name = parts[parts.length - 1]
+              const isDir = (it.type || it.entry_type || it.entryType || '').toString().toLowerCase() === 'directory' || (it.type || it.entry_type || it.entryType || '').toString().toLowerCase() === 'tree'
+              const child: FileTreeNode = {
+                name,
+                path: clean,
+                type: isDir ? 'directory' : 'file',
+                size: it.size,
+                mode: it.mode
+              }
+              if (isDir) child.children = []
+              return child
+            })
+            // assign children reactively
+            if (node) node.children = children
+          })
+          .catch(err => {
+            console.error('Failed to load folder children:', err)
+          })
+      }
+    }
+  }
+
+  // Find a node by path (depth-first)
+  function findNode(path: string, nodes: FileTreeNode[]): FileTreeNode | null {
+    for (const n of nodes) {
+      if (n.path === path) return n
+      if (n.children && n.children.length > 0) {
+        const found = findNode(path, n.children)
+        if (found) return found
+      }
+    }
+    return null
   }
 
   function setActiveFile(path: string | null) {

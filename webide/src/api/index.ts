@@ -39,6 +39,14 @@ export const api = {
     return buildTreeFromList(res.data)
   },
 
+  // Get immediate children of a directory (non-recursive)
+  async getFileTreeChildren(owner: string, repo: string, ref: string, path = ''): Promise<any[]> {
+    const res = await http.get(`/projects/${owner}/${repo}/repository/tree`, {
+      params: { ref_name: ref, path, recursive: false }
+    })
+    return res.data
+  },
+
   async getFileContent(owner: string, repo: string, path: string, ref: string): Promise<string> {
     const res = await http.get(`/projects/${owner}/${repo}/repository/files/${encodeURIComponent(path)}`, {
       params: { ref_name: ref }
@@ -100,26 +108,38 @@ export const api = {
 }
 
 // Helper: Convert flat file list to tree structure
-function buildTreeFromList(items: Array<{ path: string; type: string; mode?: string; size?: number }>): FileTreeNode[] {
+function buildTreeFromList(items: Array<any>): FileTreeNode[] {
   const root: FileTreeNode[] = []
   const pathMap = new Map<string, FileTreeNode>()
 
+  // Helper to determine if an item represents a directory
+  const isDirectory = (it: any) => {
+    if (!it) return false
+    const t = (it.type || it.entry_type || it.entryType || '').toString().toLowerCase()
+    return t === 'tree' || t === 'directory'
+  }
+
   // Sort so directories come before files, then alphabetically
-  items.sort((a, b) => {
-    if (a.type !== b.type) {
-      return a.type === 'tree' ? -1 : 1
-    }
-    return a.path.localeCompare(b.path)
+  items.sort((a: any, b: any) => {
+    const aDir = isDirectory(a)
+    const bDir = isDirectory(b)
+    if (aDir !== bDir) return aDir ? -1 : 1
+    const aPath = (a.path || '').toString()
+    const bPath = (b.path || '').toString()
+    return aPath.localeCompare(bPath)
   })
 
   for (const item of items) {
-    const parts = item.path.split('/')
-    const name = parts[parts.length - 1]
-    
+    // Normalize path: remove leading slashes to make client-side tree logic consistent
+    const rawPath = (item.path || item.path_name || item.path_name_raw || '').toString()
+    const cleanPath = rawPath.replace(/^\/+/, '')
+    const parts = cleanPath ? cleanPath.split('/') : ['']
+    const name = parts[parts.length - 1] || ''
+
     const node: FileTreeNode = {
       name,
-      path: item.path,
-      type: item.type === 'tree' ? 'directory' : 'file',
+      path: cleanPath,
+      type: isDirectory(item) ? 'directory' : 'file',
       size: item.size,
       mode: item.mode
     }
@@ -128,7 +148,7 @@ function buildTreeFromList(items: Array<{ path: string; type: string; mode?: str
       node.children = []
     }
 
-    pathMap.set(item.path, node)
+    pathMap.set(cleanPath, node)
 
     if (parts.length === 1) {
       root.push(node)
