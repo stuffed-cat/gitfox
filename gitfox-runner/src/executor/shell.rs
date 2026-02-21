@@ -81,79 +81,110 @@ impl<'a> ExecutorTrait for ShellExecutor<'a> {
             &self.config.network_mode,
         );
 
+        // 构建完整的 shell 脚本，所有命令在同一个会话中执行
+        // 添加 set -e 让任何命令失败时立即退出
+        let mut full_script = String::from("set -e\n");
         for script_line in &job.script {
-            log_callback(&format!("$ {}\n", script_line));
+            // 在脚本中先打印命令（模拟日志输出）
+            full_script.push_str(&format!("echo '$ {}'\n", script_line.replace('\'', "'\\''")));
+            full_script.push_str(script_line);
+            full_script.push('\n');
+        }
 
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c")
-                .arg(script_line)
-                .current_dir(&job_dir)
-                .envs(&job.variables)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(&full_script)
+            .current_dir(&job_dir)
+            .envs(&job.variables)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
-            let _guard: IsolationGuard;
-            if self.config.security_enabled {
-                match security_ctx.wrap_command(&mut cmd) {
-                    Ok(guard) => _guard = guard,
-                    Err(e) => {
-                        log_callback(&format!("\n⚠️  Security isolation failed: {}\n", e));
-                        log_callback("⚠️  Continuing without isolation...\n");
-                        _guard = IsolationGuard::none();
-                    }
+        let _guard: IsolationGuard;
+        if self.config.security_enabled {
+            match security_ctx.wrap_command(&mut cmd) {
+                Ok(guard) => _guard = guard,
+                Err(e) => {
+                    log_callback(&format!("\n⚠️  Security isolation failed: {}\n", e));
+                    log_callback("⚠️  Continuing without isolation...\n");
+                    _guard = IsolationGuard::none();
                 }
-            } else {
-                log_callback("\n🚨 WARNING: Security isolation is DISABLED\n");
-                _guard = IsolationGuard::none();
             }
+        } else {
+            log_callback("\n🚨 WARNING: Security isolation is DISABLED\n");
+            _guard = IsolationGuard::none();
+        }
 
-            let mut child = cmd.spawn()?;
+        let mut child = cmd.spawn()?;
 
-            if let Some(stdout) = child.stdout.take() {
+        // 使用线程并发读取 stdout 和 stderr，避免管道阻塞
+        use std::sync::{Arc, Mutex};
+        let log_buffer = Arc::new(Mutex::new(Vec::<String>::new()));
+        
+        let stdout_handle = child.stdout.take().map(|stdout| {
+            let buffer = Arc::clone(&log_buffer);
+            std::thread::spawn(move || {
                 let reader = BufReader::new(stdout);
                 for line in reader.lines() {
                     if let Ok(line) = line {
-                        log_callback(&format!("{}\n", line));
+                        buffer.lock().unwrap().push(format!("{}\n", line));
                     }
                 }
-            }
+            })
+        });
 
-            if let Some(stderr) = child.stderr.take() {
+        let stderr_handle = child.stderr.take().map(|stderr| {
+            let buffer = Arc::clone(&log_buffer);
+            std::thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines() {
                     if let Ok(line) = line {
-                        log_callback(&format!("{}\n", line));
+                        buffer.lock().unwrap().push(format!("{}\n", line));
                     }
                 }
+            })
+        });
+
+        // 等待进程结束
+        let status = child.wait()?;
+
+        // 等待日志线程完成
+        if let Some(handle) = stdout_handle {
+            let _ = handle.join();
+        }
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
+        }
+
+        // 输出所有日志
+        for log_line in log_buffer.lock().unwrap().iter() {
+            log_callback(log_line);
+        }
+
+        let exit_code = status.code().unwrap_or(1);
+
+        if exit_code != 0 && !job.allow_failure {
+            log_callback(&format!("\nScript failed with exit code: {}\n", exit_code));
+            if self.config.clean_builds {
+                cleanup_job_dir(&job_dir);
             }
+            return Err(RunnerError::Execution(format!(
+                "Script execution failed with exit code {}",
+                exit_code
+            )));
+        }
 
-            let status = child.wait()?;
-            let exit_code = status.code().unwrap_or(1);
-
-            if exit_code != 0 && !job.allow_failure {
-                log_callback(&format!("\nScript failed with exit code: {}\n", exit_code));
+        if let Ok(size_mb) = get_dir_size_mb(&job_dir) {
+            if size_mb > self.config.max_work_dir_size_mb {
+                log_callback(&format!(
+                    "\n⚠️  Work directory exceeded size limit: {} MB / {} MB\n",
+                    size_mb, self.config.max_work_dir_size_mb
+                ));
                 if self.config.clean_builds {
                     cleanup_job_dir(&job_dir);
                 }
-                return Err(RunnerError::Execution(format!(
-                    "Script '{}' failed with exit code {}",
-                    script_line, exit_code
-                )));
-            }
-
-            if let Ok(size_mb) = get_dir_size_mb(&job_dir) {
-                if size_mb > self.config.max_work_dir_size_mb {
-                    log_callback(&format!(
-                        "\n⚠️  Work directory exceeded size limit: {} MB / {} MB\n",
-                        size_mb, self.config.max_work_dir_size_mb
-                    ));
-                    if self.config.clean_builds {
-                        cleanup_job_dir(&job_dir);
-                    }
-                    return Err(RunnerError::Execution(
-                        "Work directory size exceeded limit".to_string(),
-                    ));
-                }
+                return Err(RunnerError::Execution(
+                    "Work directory size exceeded limit".to_string(),
+                ));
             }
         }
 
