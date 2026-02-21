@@ -2,6 +2,9 @@ use crate::error::{Result, RunnerError};
 use crate::security::SecurityContext;
 use std::process::Command;
 use std::path::Path;
+use std::fs;
+use std::ffi::CString;
+use std::os::unix::process::CommandExt;
 
 /// Linux namespace isolation - 纯 Rust 实现，完全无 Shell
 /// unshare 创建隔离命名空间，env -i -C 完成 chdir + 清空环境，直接 exec
@@ -21,59 +24,91 @@ pub fn apply_isolation(ctx: &SecurityContext, cmd: &mut Command) -> Result<()> {
 
     let isolate_net = ctx.network_mode == "none";
 
-    // unshare 本身需要 CAP_SYS_ADMIN（root 或 sudo）
-    // SAFETY: getuid() 是纯读取 syscall
-    let uid = unsafe { libc::getuid() };
-    let mut new_cmd = if uid == 0 {
-        Command::new("unshare")
-    } else {
-        let mut c = Command::new("sudo");
-        c.arg("unshare");
-        c
-    };
+    // 纯 Rust 实现：在子进程 pre_exec 中完成 unshare + overlay 根挂载
+    // 不再依赖外部 `unshare` 或 `env` 命令，也不会触发任何 shell 解析。
+    // 环境变量通过 Command 的 env_clear/ env() 控制。
 
-    // 命名空间标志：
-    //   --mount    : 隔离挂载表（子进程挂载不影响宿主）
-    //   --pid      : 隔离 PID（子进程看不到宿主进程）
-    //   --ipc      : 隔离 IPC（消息队列、共享内存）
-    //   --uts      : 隔离主机名
-    //   --fork     : fork 后 exec（PID namespace 要求）
-    //   --mount-proc: 在新 pid ns 中挂载新 /proc
-    //   --net      : 隔离网络（可选）
-    new_cmd.args(["--mount", "--pid", "--ipc", "--uts", "--fork", "--mount-proc"]);
-    if isolate_net {
-        new_cmd.arg("--net");
-    }
-
-    // -- 分隔符后接 env -i -C work_dir
-    // env 标志：
-    //   -i      : 清空继承的宿主环境变量（不泄露 TOKEN/SECRET 等）
-    //   -C <dir>: 在 exec 前 chdir（GNU coreutils env 原生支持）
-    //
-    // 整个参数链全为独立 OsStr，Rust 直接 execvp，
-    // 内核不经过任何 shell 解析，注入面为零
-    new_cmd.arg("--");
-    new_cmd.arg("env");
-    new_cmd.arg("-i");
-    new_cmd.arg("-C").arg(&work_dir);
-
-    // 显式传入作业所需的环境变量（KEY=VALUE，逐个 OsStr）
-    for (k, v) in &original_envs {
-        let mut kv = k.clone();
-        kv.push("=");
-        kv.push(v);
-        new_cmd.arg(kv);
-    }
-
-    // 最后是原始程序和参数（全部 OsStr，零注入）
-    new_cmd.arg(&original_program);
+    // 准备新的命令，保留用户原始程序、参数和环境
+    let mut new_cmd = Command::new(&original_program);
     new_cmd.args(&original_args);
+    new_cmd.env_clear();
 
+    for (k, v) in &original_envs {
+        new_cmd.env(k, v);
+    }
+
+    new_cmd.current_dir(&work_dir);
     new_cmd.stdout(std::process::Stdio::piped());
     new_cmd.stderr(std::process::Stdio::piped());
 
+    // 在 fork 之后、exec 之前执行隔离逻辑
+    // 先在父进程中准备所有需要的目录和 C 字符串，避免 pre_exec 中的分配
+    let work_dir_clone = work_dir.clone();
+
+    let overlay_base = work_dir_clone.join(".overlay_root");
+    let upper = overlay_base.join("upper");
+    let work = overlay_base.join("work");
+    fs::create_dir_all(&upper)?;
+    fs::create_dir_all(&work)?;
+
+    // 预构造所有 CStr/CString
+    let c_overlay = CString::new("overlay").unwrap();
+    let c_root = CString::new("/").unwrap();
+    let opts = CString::new(format!(
+        "lowerdir=/,upperdir={},workdir={}",
+        upper.display(),
+        work.display()
+    ))
+    .unwrap();
+
+    unsafe {
+        new_cmd.pre_exec(move || {
+            // 1. 创建命名空间
+            let mut flags = libc::CLONE_NEWNS
+                | libc::CLONE_NEWPID
+                | libc::CLONE_NEWIPC
+                | libc::CLONE_NEWUTS;
+            if isolate_net {
+                flags |= libc::CLONE_NEWNET;
+            }
+            if unsafe { libc::unshare(flags) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            // 2. 将 / 标记为 private，防止挂载传播到宿主
+            if unsafe {
+                libc::mount(
+                    std::ptr::null(),
+                    c_root.as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_REC | libc::MS_PRIVATE,
+                    std::ptr::null(),
+                )
+            } != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            // 3. 使用 overlayfs 覆盖整个根文件系统
+            if unsafe {
+                libc::mount(
+                    c_overlay.as_ptr(),
+                    c_root.as_ptr(),
+                    c_overlay.as_ptr(),
+                    0,
+                    opts.as_ptr() as *const libc::c_void,
+                )
+            } != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            Ok(())
+        });
+    }
+
     *cmd = new_cmd;
 
-    log::info!("✓ Linux namespace isolation (unshare, pure Rust, no shell, no temp files)");
+    log::info!("✓ Linux namespace isolation with overlayfs root (pure Rust, no shell)");
     Ok(())
 }

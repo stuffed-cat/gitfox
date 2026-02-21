@@ -33,24 +33,25 @@ export const api = {
 
   // File operations
   async getFileTree(owner: string, repo: string, ref: string, path = ''): Promise<FileTreeNode[]> {
-    const res = await http.get(`/projects/${owner}/${repo}/repository/tree`, {
-      params: { ref_name: ref, path, recursive: true }
-    })
+    const params: any = { path, recursive: true }
+    if (ref && ref.length > 0) params.ref_name = ref
+    const res = await http.get(`/projects/${owner}/${repo}/repository/tree`, { params })
     return buildTreeFromList(res.data)
   },
 
   // Get immediate children of a directory (non-recursive)
   async getFileTreeChildren(owner: string, repo: string, ref: string, path = ''): Promise<any[]> {
-    const res = await http.get(`/projects/${owner}/${repo}/repository/tree`, {
-      params: { ref_name: ref, path, recursive: false }
-    })
+    const params: any = { path, recursive: false }
+    if (ref && ref.length > 0) params.ref_name = ref
+    const res = await http.get(`/projects/${owner}/${repo}/repository/tree`, { params })
     return res.data
   },
 
   async getFileContent(owner: string, repo: string, path: string, ref: string): Promise<string> {
-    const res = await http.get(`/projects/${owner}/${repo}/repository/files/${encodeURIComponent(path)}`, {
-      params: { ref_name: ref }
-    })
+    const cleanPath = path.replace(/^\/+/, '')
+    const params: any = {}
+    if (ref && ref.length > 0) params.ref_name = ref
+    const res = await http.get(`/projects/${owner}/${repo}/repository/files/${encodeURIComponent(cleanPath)}`, { params })
     // Decode base64 content
     if (res.data.encoding === 'base64') {
       return atob(res.data.content)
@@ -59,32 +60,36 @@ export const api = {
   },
 
   async updateFile(owner: string, repo: string, path: string, content: string, branch: string, message?: string): Promise<void> {
-    await http.put(`/projects/${owner}/${repo}/repository/files/${encodeURIComponent(path)}`, {
+    const cleanPath = path.replace(/^\/+/, '')
+    await http.put(`/projects/${owner}/${repo}/repository/files/${encodeURIComponent(cleanPath)}`, {
       branch,
       content,
-      commit_message: message || `Update ${path}`
+      commit_message: message || `Update ${cleanPath}`
     })
   },
 
   async createFile(owner: string, repo: string, path: string, content: string, branch: string, message?: string): Promise<void> {
-    await http.post(`/projects/${owner}/${repo}/repository/files/${encodeURIComponent(path)}`, {
+    const cleanPath = path.replace(/^\/+/, '')
+    await http.post(`/projects/${owner}/${repo}/repository/files/${encodeURIComponent(cleanPath)}`, {
       branch,
       content,
-      commit_message: message || `Create ${path}`
+      commit_message: message || `Create ${cleanPath}`
     })
   },
 
   async deleteFile(owner: string, repo: string, path: string, branch: string, message?: string): Promise<void> {
-    await http.delete(`/projects/${owner}/${repo}/repository/files/${encodeURIComponent(path)}`, {
+    const cleanPath = path.replace(/^\/+/, '')
+    await http.delete(`/projects/${owner}/${repo}/repository/files/${encodeURIComponent(cleanPath)}`, {
       data: {
         branch,
-        commit_message: message || `Delete ${path}`
+        commit_message: message || `Delete ${cleanPath}`
       }
     })
   },
 
   async batchCommit(owner: string, repo: string, commit: CommitRequest): Promise<void> {
-    await http.post(`/projects/${owner}/${repo}/repository/commits`, commit)
+    // Server expects /repository/commits/batch for batch commit operations
+    await http.post(`/projects/${owner}/${repo}/repository/commits/batch`, commit)
   },
 
   // Extension management (user-level isolation)

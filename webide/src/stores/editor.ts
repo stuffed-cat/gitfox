@@ -15,8 +15,8 @@ export const useEditorStore = defineStore('editor', () => {
   // Repository info
   const owner = ref('')
   const repo = ref('')
-  // Default to 'master' to match existing repositories
-  const currentRef = ref('master')
+  // Leave empty so server can provide default branch when loading repository
+  const currentRef = ref('')
   
   // Computed
   const activeFile = computed(() => {
@@ -38,8 +38,17 @@ export const useEditorStore = defineStore('editor', () => {
   async function loadRepository(ownerName: string, repoName: string, refName?: string) {
     owner.value = ownerName
     repo.value = repoName
+    // If caller provided a ref, use it. Otherwise query repository info to obtain default branch.
     if (refName) {
       currentRef.value = refName
+    } else {
+      try {
+        const repoInfo = await api.getRepository(ownerName, repoName)
+        currentRef.value = repoInfo.defaultBranch || ''
+      } catch (err) {
+        // fallback to empty so server uses default branch
+        currentRef.value = ''
+      }
     }
     
     try {
