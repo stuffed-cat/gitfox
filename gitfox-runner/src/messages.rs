@@ -59,6 +59,15 @@ pub enum ServerMessage {
     /// Server acknowledgment
     #[serde(rename = "ack")]
     Ack,
+
+    /// Configuration update notification
+    #[serde(rename = "config_update")]
+    ConfigUpdate {
+        tags: Option<Vec<String>>,
+        description: Option<String>,
+        run_untagged: Option<bool>,
+        maximum_timeout: Option<i32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

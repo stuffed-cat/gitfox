@@ -727,6 +727,13 @@ pub enum ServerMessage {
     NoJobs,
     #[serde(rename = "ack")]
     Ack,
+    #[serde(rename = "config_update")]
+    ConfigUpdate {
+        tags: Option<Vec<String>>,
+        description: Option<String>,
+        run_untagged: Option<bool>,
+        maximum_timeout: Option<i32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1022,6 +1029,7 @@ pub async fn admin_update_runner(
     _admin: AdminUser,
     runner_id: web::Path<i64>,
     req: web::Json<UpdateRunnerRequest>,
+    runner_manager: web::Data<Arc<RwLock<RunnerManager>>>,
 ) -> AppResult<HttpResponse> {
     let runner = sqlx::query_as::<_, RunnerInfo>(
         r#"
@@ -1052,7 +1060,19 @@ pub async fn admin_update_runner(
     .await?;
 
     match runner {
-        Some(runner_info) => Ok(HttpResponse::Ok().json(runner_info)),
+        Some(runner_info) => {
+            // 如果 runner 在线，发送配置更新消息
+            send_config_update(
+                &runner_manager,
+                *runner_id,
+                req.tags.clone(),
+                req.description.clone(),
+                req.run_untagged,
+                req.maximum_timeout,
+            ).await;
+            
+            Ok(HttpResponse::Ok().json(runner_info))
+        }
         None => Ok(HttpResponse::NotFound().json(serde_json::json!({
             "error": "Runner not found or not a system runner"
         }))),
@@ -1153,6 +1173,7 @@ pub async fn user_update_runner(
     auth: AuthenticatedUser,
     runner_id: web::Path<i64>,
     req: web::Json<UpdateRunnerRequest>,
+    runner_manager: web::Data<Arc<RwLock<RunnerManager>>>,
 ) -> AppResult<HttpResponse> {
     let runner = sqlx::query_as::<_, RunnerInfo>(
         r#"
@@ -1184,7 +1205,19 @@ pub async fn user_update_runner(
     .await?;
 
     match runner {
-        Some(runner_info) => Ok(HttpResponse::Ok().json(runner_info)),
+        Some(runner_info) => {
+            // 如果 runner 在线，发送配置更新消息
+            send_config_update(
+                &runner_manager,
+                *runner_id,
+                req.tags.clone(),
+                req.description.clone(),
+                req.run_untagged,
+                req.maximum_timeout,
+            ).await;
+            
+            Ok(HttpResponse::Ok().json(runner_info))
+        }
         None => Ok(HttpResponse::NotFound().json(serde_json::json!({
             "error": "Runner not found or unauthorized"
         }))),
@@ -1330,6 +1363,7 @@ pub async fn namespace_update_runner(
     auth: AuthenticatedUser,
     path: web::Path<(String, i64)>,
     req: web::Json<UpdateRunnerRequest>,
+    runner_manager: web::Data<Arc<RwLock<RunnerManager>>>,
 ) -> AppResult<HttpResponse> {
     let (namespace_path, runner_id) = path.into_inner();
     
@@ -1383,7 +1417,19 @@ pub async fn namespace_update_runner(
     .await?;
 
     match runner {
-        Some(runner_info) => Ok(HttpResponse::Ok().json(runner_info)),
+        Some(runner_info) => {
+            // 如果 runner 在线，发送配置更新消息
+            send_config_update(
+                &runner_manager,
+                runner_id,
+                req.tags.clone(),
+                req.description.clone(),
+                req.run_untagged,
+                req.maximum_timeout,
+            ).await;
+            
+            Ok(HttpResponse::Ok().json(runner_info))
+        }
         None => Ok(HttpResponse::NotFound().json(serde_json::json!({
             "error": "Runner not found or unauthorized"
         }))),
@@ -1586,6 +1632,7 @@ pub async fn project_update_runner(
     auth: AuthenticatedUser,
     path: web::Path<(String, String, i64)>,
     req: web::Json<UpdateRunnerRequest>,
+    runner_manager: web::Data<Arc<RwLock<RunnerManager>>>,
 ) -> AppResult<HttpResponse> {
     let (namespace_path, project_name, runner_id) = path.into_inner();
     
@@ -1641,10 +1688,47 @@ pub async fn project_update_runner(
     .await?;
 
     match runner {
-        Some(runner_info) => Ok(HttpResponse::Ok().json(runner_info)),
+        Some(runner_info) => {
+            // 如果 runner 在线，发送配置更新消息
+            send_config_update(
+                &runner_manager,
+                runner_id,
+                req.tags.clone(),
+                req.description.clone(),
+                req.run_untagged,
+                req.maximum_timeout,
+            ).await;
+            
+            Ok(HttpResponse::Ok().json(runner_info))
+        }
         None => Ok(HttpResponse::NotFound().json(serde_json::json!({
             "error": "Runner not found or unauthorized"
         }))),
+    }
+}
+
+/// 发送配置更新通知给在线的 runner
+async fn send_config_update(
+    runner_manager: &Arc<RwLock<RunnerManager>>,
+    runner_id: i64,
+    tags: Option<Vec<String>>,
+    description: Option<String>,
+    run_untagged: Option<bool>,
+    maximum_timeout: Option<i32>,
+) {
+    let manager = runner_manager.read().await;
+    if let Some(addr) = manager.get_runner(runner_id) {
+        let update_msg = ServerMessage::ConfigUpdate {
+            tags,
+            description,
+            run_untagged,
+            maximum_timeout,
+        };
+        
+        if let Ok(json) = serde_json::to_string(&update_msg) {
+            addr.do_send(SendText(json));
+            info!("Sent config update to runner {}", runner_id);
+        }
     }
 }
 

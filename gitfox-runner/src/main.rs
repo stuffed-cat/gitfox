@@ -459,7 +459,7 @@ async fn run_runner(config_path: Option<PathBuf>) -> Result<()> {
     }
     info!("============================================");
 
-    let mut runner = Runner::new(config);
+    let mut runner = Runner::new(config, config_file);
 
     if let Err(e) = runner.run().await {
         error!("Runner error: {}", e);

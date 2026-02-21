@@ -4,18 +4,21 @@ use crate::executor::Executor;
 use crate::messages::{Job, JobStatus, RunnerMessage, ServerMessage};
 use futures::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
+use std::path::PathBuf;
 use tokio::time::{interval, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 pub struct Runner {
     config: RunnerConfig,
+    config_path: PathBuf,
     runner_id: Option<i64>,
 }
 
 impl Runner {
-    pub fn new(config: RunnerConfig) -> Self {
+    pub fn new(config: RunnerConfig, config_path: PathBuf) -> Self {
         Self {
             config,
+            config_path,
             runner_id: None,
         }
     }
@@ -133,7 +136,7 @@ impl Runner {
     }
 
     async fn handle_server_message(
-        &self,
+        &mut self,
         text: &str,
         write: &mut futures::stream::SplitSink<
             tokio_tungstenite::WebSocketStream<
@@ -169,6 +172,14 @@ impl Runner {
             }
             ServerMessage::Error { message } => {
                 error!("Server error: {}", message);
+            }
+            ServerMessage::ConfigUpdate { tags, description, run_untagged, maximum_timeout } => {
+                info!("Received configuration update from server");
+                if let Err(e) = self.update_config(tags, description, run_untagged, maximum_timeout) {
+                    error!("Failed to update configuration: {}", e);
+                } else {
+                    info!("Configuration updated and saved successfully");
+                }
             }
             _ => {}
         }
@@ -253,6 +264,53 @@ impl Runner {
         };
         let msg = serde_json::to_string(&update)?;
         write.send(Message::Text(msg)).await?;
+        Ok(())
+    }
+
+    /// Update runner configuration and save to file
+    fn update_config(
+        &mut self,
+        tags: Option<Vec<String>>,
+        description: Option<String>,
+        run_untagged: Option<bool>,
+        maximum_timeout: Option<i32>,
+    ) -> Result<()> {
+        let mut updated = false;
+
+        if let Some(new_tags) = tags {
+            info!("  Tags: {} -> {}", 
+                if self.config.tags.is_empty() { "(none)".to_string() } else { self.config.tags.join(", ") },
+                if new_tags.is_empty() { "(none)".to_string() } else { new_tags.join(", ") }
+            );
+            self.config.tags = new_tags;
+            updated = true;
+        }
+
+        if let Some(_new_description) = description {
+            info!("  Description updated");
+            // Note: RunnerConfig doesn't currently have a description field
+            // but we'll keep this for future compatibility
+            updated = true;
+        }
+
+        if let Some(_new_run_untagged) = run_untagged {
+            // Note: RunnerConfig doesn't have run_untagged field, it's server-side only
+            // Keeping for future compatibility
+            updated = true;
+        }
+
+        if let Some(new_timeout) = maximum_timeout {
+            // Note: This is maximum_timeout on server side, different from script_timeout
+            info!("  Maximum timeout: {} seconds", new_timeout);
+            updated = true;
+        }
+
+        if updated {
+            // Save updated configuration to file
+            self.config.save(&self.config_path)?;
+            info!("Configuration saved to: {}", self.config_path.display());
+        }
+
         Ok(())
     }
 }
