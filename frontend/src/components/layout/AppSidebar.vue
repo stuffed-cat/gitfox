@@ -1,5 +1,5 @@
 <template>
-  <aside class="sidebar" :class="{ collapsed, hidden }">
+  <aside class="app-sidebar" :class="{ collapsed, hidden }">
     <nav class="sidebar-nav">
       <!-- 上下文头部 -->
       <div v-if="contextHeader" class="nav-context">
@@ -68,7 +68,7 @@ function getItemPath(item: NavItem): string {
 </script>
 
 <style lang="scss" scoped>
-.sidebar {
+.app-sidebar {
   display: flex;
   flex-direction: column;
   background: $bg-sidebar;

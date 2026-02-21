@@ -25,7 +25,7 @@ const routes = [
     path: '/oauth/authorize',
     name: 'OAuthAuthorize',
     component: () => import('@/views/auth/OAuthAuthorizeView.vue'),
-    meta: { requiresAuth: false }  // Component handles auth internally
+    meta: { guest: true }  // OAuth authorization page should not show sidebar
   },
   {
     path: '/confirm-email',

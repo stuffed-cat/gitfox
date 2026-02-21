@@ -29,9 +29,10 @@ import AppSidebar from '@/components/layout/AppSidebar.vue'
 
 const route = useRoute()
 
-// 判断是否是认证页面（登录/注册）
+// 判断是否是认证页面（不显示侧边栏的页面）
 const isAuthPage = computed(() => {
-  return route.name === 'Login' || route.name === 'Register'
+  // 所有标记为 guest 的页面都不显示头部和侧边栏
+  return route.meta.guest === true
 })
 
 // Sidebar state
@@ -91,38 +92,24 @@ onUnmounted(() => {
   padding-top: $header-height;
 }
 
-.app-sidebar {
-  position: fixed;
-  top: $header-height;
-  left: 0;
-  bottom: 0;
-  width: $sidebar-width;
-  z-index: $z-sticky;
-  transition: width $transition-normal, transform $transition-normal;
-}
-
-.sidebar-hidden .app-sidebar {
-  transform: translateX(-100%);
-}
-
 .app-main {
   flex: 1;
+  margin-left: $sidebar-width;
   transition: margin-left $transition-normal;
   background: $bg-secondary;
   min-height: calc(100vh - $header-height);
 }
 
+.sidebar-collapsed .app-main {
+  margin-left: $sidebar-collapsed-width;
+}
 
 .sidebar-hidden .app-main {
   margin-left: 0;
 }
 
-// Mobile overlay for sidebar
+// Mobile layout
 @media (max-width: $breakpoint-md) {
-  .app-sidebar {
-    z-index: $z-modal;
-  }
-  
   .app-main {
     margin-left: 0;
   }
