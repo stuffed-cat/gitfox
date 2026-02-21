@@ -41,26 +41,8 @@ impl JobLogWebSocket {
                 return;
             }
 
-            // Fetch new logs
-            let pool = act.pool.clone();
-            let job_id = act.job_id;
-            let last_log_id = act.last_log_id;
-
-            actix_web::rt::spawn(async move {
-                match fetch_new_logs(pool.get_ref(), job_id, last_log_id).await {
-                    Ok(logs) => {
-                        if !logs.is_empty() {
-                            for log in logs {
-                                // Send log to client
-                                // This will be handled in the actor context
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to fetch logs: {}", e);
-                    }
-                }
-            });
+            // Fetch and send new logs
+            act.check_and_send_logs(ctx);
 
             ctx.ping(b"");
         });

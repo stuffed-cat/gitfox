@@ -93,6 +93,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { AnsiUp } from 'ansi_up'
 import api from '@/api'
 
 interface Props {
@@ -117,6 +118,10 @@ const connectionStatus = ref<'connected' | 'connecting' | 'disconnected'>('conne
 const jobStatus = ref<string>('')
 const wsError = ref<string>('')
 
+// 创建 ansi_up 实例
+const ansiUp = new AnsiUp()
+ansiUp.use_classes = false // 使用内联样式而不是 CSS 类
+
 const connectionStatusText = computed(() => {
   const map = {
     connected: '实时更新',
@@ -133,8 +138,8 @@ interface DisplayLine {
 
 const displayLines = computed((): DisplayLine[] => {
   return logLines.value.map(line => {
-    let html = escapeHtml(line)
-    html = ansiToHtml(html)
+    // 先转换 ANSI，再 escape HTML（否则会破坏 ANSI 转义序列）
+    let html = ansiToHtml(line)
     
     let match = false
     if (searchQuery.value) {
@@ -150,32 +155,56 @@ const displayLines = computed((): DisplayLine[] => {
   })
 })
 
-function escapeHtml(text: string): string {
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
-}
-
 function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function ansiToHtml(text: string): string {
-  // Simple ANSI color code to HTML conversion
-  const ansiMap: Record<string, string> = {
-    '30': 'color:#000', '31': 'color:#d73a49', '32': 'color:#22863a',
-    '33': 'color:#b08800', '34': 'color:#005cc5', '35': 'color:#6f42c1',
-    '36': 'color:#0598bc', '37': 'color:#586069',
-    '90': 'color:#6a737d', '91': 'color:#f97583', '92': 'color:#85e89d',
-    '93': 'color:#ffea7f', '94': 'color:#79b8ff', '95': 'color:#b392f0',
-    '96': 'color:#56d4dd', '97': 'color:#e1e4e8'
+  // 使用 ansi_up 库转换 ANSI 转义序列为 HTML
+  let html = ansiUp.ansi_to_html(text)
+  
+  // 如果没有颜色，添加语法高亮（类似 GitLab）
+  if (!text.includes('\x1b[')) {
+    html = applySyntaxHighlight(html)
   }
   
-  return text.replace(/\x1b\[(\d+)(;\d+)*m/g, (_match, code) => {
-    if (code === '0' || code === '00') return '</span>'
-    const style = ansiMap[code]
-    return style ? `<span style="${style}">` : ''
-  })
+  return html
+}
+
+function applySyntaxHighlight(text: string): string {
+  let result = text
+  
+  // Shell 命令行前缀（$ 开头）
+  result = result.replace(/^(\$\s+)(.*)$/gm, '<span style="color:#58a6ff">$1</span><span style="color:#c9d1d9">$2</span>')
+  
+  // === 分隔符
+  result = result.replace(/(===.*===)/g, '<span style="color:#58a6ff;font-weight:bold">$1</span>')
+  
+  // 错误关键词
+  result = result.replace(/\b(error|failed|failure|fatal|panic|exception)\b/gi, '<span style="color:#ff7b72;font-weight:bold">$&</span>')
+  
+  // 成功关键词
+  result = result.replace(/\b(success|succeeded|done|completed|passed|ok)\b/gi, '<span style="color:#7ee787;font-weight:bold">$&</span>')
+  
+  // 警告关键词
+  result = result.replace(/\b(warn|warning|deprecated)\b/gi, '<span style="color:#f0883e;font-weight:bold">$&</span>')
+  
+  // Info/Debug 关键词
+  result = result.replace(/\b(info|debug|trace)\b/gi, '<span style="color:#79c0ff">$&</span>')
+  
+  // URL
+  result = result.replace(/(https?:\/\/[^\s<>]+)/g, '<span style="color:#58a6ff;text-decoration:underline">$1</span>')
+  
+  // 文件路径（包含 / 或 \ 的路径）
+  result = result.replace(/([\/\\][\w\/\\\.-]+)/g, '<span style="color:#d2a8ff">$1</span>')
+  
+  // 数字
+  result = result.replace(/\b(\d+)\b/g, '<span style="color:#79c0ff">$1</span>')
+  
+  // Exit code
+  result = result.replace(/(exit code:?\s*)(\d+)/gi, '$1<span style="color:#ff7b72;font-weight:bold">$2</span>')
+  
+  return result
 }
 
 function handleSearch() {
@@ -246,9 +275,15 @@ async function loadJobStatus() {
     if (job) {
       jobStatus.value = job.status
       console.log(`Job ${props.jobId} status: ${job.status}`)
+    } else {
+      console.warn(`Job ${props.jobId} not found in pipeline response`)
+      // 如果找不到 job，假设可能已完成
+      jobStatus.value = 'unknown'
     }
   } catch (error) {
     console.error('Failed to load job status:', error)
+    // 获取状态失败，假设可能已完成
+    jobStatus.value = 'unknown'
   }
 }
 
@@ -287,15 +322,28 @@ function connectWebSocket() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const wsUrl = `${protocol}//${location.host}/api/v1/projects/${props.namespace}/${props.project}/pipelines/${props.pipelineId}/jobs/${props.jobId}/log/stream`
   
+  console.log('Connecting WebSocket:', wsUrl)
   connectionStatus.value = 'connecting'
   ws.value = new WebSocket(wsUrl)
   
+  // 添加连接超时检测（10秒）
+  const connectTimeout = setTimeout(() => {
+    if (ws.value && ws.value.readyState === WebSocket.CONNECTING) {
+      console.error('WebSocket connection timeout')
+      ws.value.close()
+      connectionStatus.value = 'disconnected'
+      wsError.value = 'WebSocket 连接超时'
+    }
+  }, 10000)
+  
   ws.value.onopen = () => {
+    clearTimeout(connectTimeout)
     connectionStatus.value = 'connected'
     console.log('WebSocket connected')
   }
   
   ws.value.onmessage = (event) => {
+    console.log('WebSocket message:', event.data.substring(0, 100))
     const newLines = event.data.split('\n').filter((l: string) => l)
     if (newLines.length > 0) {
       logLines.value.push(...newLines)
@@ -307,11 +355,13 @@ function connectWebSocket() {
   }
   
   ws.value.onerror = (error) => {
+    clearTimeout(connectTimeout)
     console.error('WebSocket error:', error)
     connectionStatus.value = 'disconnected'
   }
   
   ws.value.onclose = (event) => {
+    clearTimeout(connectTimeout)
     connectionStatus.value = 'disconnected'
     console.log('WebSocket disconnected:', event.code, event.reason)
     
@@ -344,8 +394,9 @@ onMounted(async () => {
   await loadJobStatus()
   await loadLog()
   
-  // 只在作业运行时连接 WebSocket
-  if (jobStatus.value === 'running' || jobStatus.value === 'success' || jobStatus.value === 'failed') {
+  // 连接 WebSocket（除非明确是 pending 状态）
+  if (jobStatus.value !== 'pending') {
+    // running, success, failed, unknown 都尝试连接
     connectWebSocket()
   } else if (jobStatus.value === 'pending') {
     // 定期检查状态
