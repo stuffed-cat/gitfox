@@ -91,6 +91,10 @@ impl<'a> ExecutorTrait for DockerExecutor<'a> {
         }
 
         // Environment variables
+        log_callback(&format!("Environment variables: {} total (including {} CI_* variables)\n",
+            job.variables.len(),
+            job.variables.keys().filter(|k| k.starts_with("CI_") || k == &"CI" || k == &"GITFOX_CI").count()
+        ));
         for (key, value) in &job.variables {
             docker_cmd.args(&["-e", &format!("{}={}", key, value)]);
         }

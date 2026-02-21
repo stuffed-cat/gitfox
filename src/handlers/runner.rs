@@ -697,6 +697,21 @@ async fn get_pending_job(pool: &PgPool, runner_id: i64) -> AppResult<Option<Job>
             Ok((row.try_get("ref_name")?, row.try_get("commit_sha")?))
         })?;
 
+        // Merge user-defined variables with built-in CI environment variables
+        let mut variables = config.variables.unwrap_or_default();
+        inject_ci_variables(
+            &mut variables,
+            job_id,
+            pipeline_id,
+            project_id,
+            &project_name,
+            &namespace_path,
+            &name,
+            &stage,
+            &ref_name,
+            &commit_sha,
+        );
+
         let job = Job {
             id: job_id,
             pipeline_id,
@@ -704,7 +719,7 @@ async fn get_pending_job(pool: &PgPool, runner_id: i64) -> AppResult<Option<Job>
             name,
             stage,
             script: config.script,
-            variables: config.variables.unwrap_or_default(),
+            variables,
             artifacts: config.artifacts,
             cache: config.cache,
             retry: config.retry,
@@ -726,6 +741,79 @@ async fn get_pending_job(pool: &PgPool, runner_id: i64) -> AppResult<Option<Job>
     } else {
         Ok(None)
     }
+}
+
+/// Inject built-in CI environment variables into job variables
+/// These variables help scripts detect CI environment and access job metadata
+fn inject_ci_variables(
+    variables: &mut HashMap<String, String>,
+    job_id: i64,
+    pipeline_id: i64,
+    project_id: i64,
+    project_name: &str,
+    namespace_path: &str,
+    job_name: &str,
+    job_stage: &str,
+    ref_name: &str,
+    commit_sha: &str,
+) {
+    // Only inject if not already set by user (user variables take precedence)
+    let inject = |vars: &mut HashMap<String, String>, key: &str, value: String| {
+        vars.entry(key.to_string()).or_insert(value);
+    };
+
+    // Standard CI detection variables
+    inject(variables, "CI", "true".to_string());
+    inject(variables, "GITFOX_CI", "true".to_string());
+    inject(variables, "CI_SERVER", "yes".to_string());
+    inject(variables, "CI_SERVER_NAME", "GitFox".to_string());
+    inject(variables, "CI_SERVER_VERSION", env!("CARGO_PKG_VERSION").to_string());
+    
+    // Disable interactive prompts in CI environment
+    inject(variables, "DEBIAN_FRONTEND", "noninteractive".to_string());
+    inject(variables, "CI_DISPOSABLE_ENVIRONMENT", "true".to_string());
+    
+    // Job information
+    inject(variables, "CI_JOB_ID", job_id.to_string());
+    inject(variables, "CI_JOB_NAME", job_name.to_string());
+    inject(variables, "CI_JOB_STAGE", job_stage.to_string());
+    
+    // Pipeline information
+    inject(variables, "CI_PIPELINE_ID", pipeline_id.to_string());
+    
+    // Project information
+    inject(variables, "CI_PROJECT_ID", project_id.to_string());
+    inject(variables, "CI_PROJECT_NAME", project_name.to_string());
+    inject(variables, "CI_PROJECT_PATH", format!("{}/{}", namespace_path, project_name));
+    inject(variables, "CI_PROJECT_NAMESPACE", namespace_path.to_string());
+    inject(variables, "CI_PROJECT_DIR", "/builds".to_string());
+    
+    // Commit information
+    inject(variables, "CI_COMMIT_SHA", commit_sha.to_string());
+    inject(variables, "CI_COMMIT_SHORT_SHA", commit_sha.chars().take(8).collect::<String>());
+    inject(variables, "CI_COMMIT_REF_NAME", ref_name.to_string());
+    inject(variables, "CI_COMMIT_REF_SLUG", slugify(ref_name));
+    
+    // Git reference info
+    if ref_name.starts_with("refs/heads/") {
+        inject(variables, "CI_COMMIT_BRANCH", ref_name.strip_prefix("refs/heads/").unwrap_or(ref_name).to_string());
+    } else if ref_name.starts_with("refs/tags/") {
+        inject(variables, "CI_COMMIT_TAG", ref_name.strip_prefix("refs/tags/").unwrap_or(ref_name).to_string());
+    }
+}
+
+/// Convert a string to a slug format (lowercase, alphanumeric and hyphens only)
+/// Example: "feature/my-branch" -> "feature-my-branch"
+fn slugify(input: &str) -> String {
+    input
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 // Runner Manager - tracks active runners

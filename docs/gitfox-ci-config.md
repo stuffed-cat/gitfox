@@ -199,19 +199,72 @@ deploy:production:
 
 ## 内置变量
 
-GitFox CI 提供以下内置环境变量：
+GitFox CI 自动注入以下内置环境变量到每个作业中，这些变量帮助脚本检测 CI 环境并访问作业元数据：
 
-- `CI_COMMIT_SHA`: 当前 commit 的 SHA
-- `CI_COMMIT_REF_NAME`: 分支或标签名
-- `CI_COMMIT_REF_SLUG`: 分支或标签名（slug 格式）
-- `CI_PROJECT_ID`: 项目 ID
+### CI 环境检测变量
+
+这些变量用于检测代码是否在 CI 环境中运行，使工具和脚本能够使用非交互模式：
+
+- `CI`: 设置为 `true`，表示代码在 CI 环境中运行
+- `GITFOX_CI`: 设置为 `true`，特定于 GitFox CI
+- `CI_SERVER`: 设置为 `yes`，兼容 GitLab CI
+- `CI_SERVER_NAME`: GitFox
+- `CI_SERVER_VERSION`: GitFox 服务器版本号
+- `DEBIAN_FRONTEND`: 设置为 `noninteractive`，禁用交互式提示（apt-get 等）
+- `CI_DISPOSABLE_ENVIRONMENT`: 设置为 `true`，表示这是一次性环境
+
+### 作业信息变量
+
+- `CI_JOB_ID`: 当前作业的唯一 ID
+- `CI_JOB_NAME`: 作业名称（如 `build`, `test`）
+- `CI_JOB_STAGE`: 作业所属的 stage（如 `build`, `test`, `deploy`）
+
+### Pipeline 信息变量
+
+- `CI_PIPELINE_ID`: 当前 pipeline 的唯一 ID
+
+### 项目信息变量
+
+- `CI_PROJECT_ID`: 项目的唯一 ID
 - `CI_PROJECT_NAME`: 项目名称
-- `CI_PROJECT_PATH`: 项目完整路径
-- `CI_PROJECT_DIR`: 项目工作目录
-- `CI_PIPELINE_ID`: Pipeline ID
-- `CI_JOB_ID`: Job ID
-- `CI_JOB_NAME`: Job 名称
-- `CI_JOB_STAGE`: Job 所属 stage
+- `CI_PROJECT_PATH`: 项目完整路径（格式：`namespace/project`）
+- `CI_PROJECT_NAMESPACE`: 项目所属的命名空间
+- `CI_PROJECT_DIR`: 项目工作目录（通常是 `/builds`）
+
+### Git 提交信息变量
+
+- `CI_COMMIT_SHA`: 当前 commit 的完整 SHA
+- `CI_COMMIT_SHORT_SHA`: 当前 commit 的短 SHA（前 8 位）
+- `CI_COMMIT_REF_NAME`: 分支或标签名
+- `CI_COMMIT_REF_SLUG`: 分支或标签名的 slug 格式（小写，仅字母数字和连字符）
+- `CI_COMMIT_BRANCH`: 如果是分支构建，则为分支名称（不包含 `refs/heads/` 前缀）
+- `CI_COMMIT_TAG`: 如果是标签构建，则为标签名称（不包含 `refs/tags/` 前缀）
+
+### 使用示例
+
+```yaml
+test:
+  stage: test
+  script:
+    # CI 变量自动可用，无需声明
+    - echo "Running in CI: $CI"
+    - echo "Job ID: $CI_JOB_ID"
+    - echo "Commit: $CI_COMMIT_SHORT_SHA"
+    - echo "Branch: $CI_COMMIT_BRANCH"
+    
+    # 根据 CI 环境调整行为
+    - |
+      if [ "$CI" = "true" ]; then
+        # CI 环境：使用非交互模式
+        apt-get update -qq
+        apt-get install -y -qq some-package
+      else
+        # 本地环境：可以交互
+        apt-get install some-package
+      fi
+```
+
+**注意**: 用户在 `.gitfox-ci.yml` 中定义的自定义变量优先级高于内置变量。如果用户显式设置了同名变量，将使用用户的值。
 
 ## 完整示例
 

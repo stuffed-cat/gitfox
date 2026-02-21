@@ -70,6 +70,10 @@ impl<'a> ExecutorTrait for ShellExecutor<'a> {
         }
 
         log_callback(&format!("\n=== Executing stage: {} ===\n", job.stage));
+        log_callback(&format!("Environment variables: {} total (including {} CI_* variables)\n", 
+            job.variables.len(),
+            job.variables.keys().filter(|k| k.starts_with("CI_") || k == &"CI" || k == &"GITFOX_CI").count()
+        ));
 
         let security_ctx = SecurityContext::new(
             self.config.security_enabled,
