@@ -13,6 +13,12 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 3000,
     proxy: {
+      // WebIDE 独立 SPA 代理
+      '/ide': {
+        target: 'http://localhost:3002',
+        changeOrigin: true,
+        ws: true,  // 启用 WebSocket 支持 (用于 Vite HMR)
+      },
       '/api': {
         target: 'http://localhost:8081',
         changeOrigin: true,

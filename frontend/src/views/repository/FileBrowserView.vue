@@ -73,7 +73,7 @@
           </svg>
           克隆
         </button>
-        <router-link :to="`/${owner}/${repo}/-/tree/${currentRef}/${currentPath}`" class="btn btn-sm btn-primary">
+        <router-link :to="`/${owner}/${repo}/-/ide/${currentRef}/${currentPath}`" class="btn btn-sm btn-primary">
           Web IDE
         </router-link>
       </div>
@@ -136,6 +136,12 @@ git push -u origin --tags</code></pre>
           <span class="file-lines" v-if="fileLines">{{ fileLines }} 行</span>
         </div>
         <div class="file-actions">
+          <router-link :to="`/${owner}/${repo}/-/ide/${currentRef}/${currentPath}`" class="btn btn-sm btn-edit">
+            <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14">
+              <path d="M11.013 1.427a1.75 1.75 0 012.474 0l1.086 1.086a1.75 1.75 0 010 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 01-.927-.928l.929-3.25a1.75 1.75 0 01.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 00-.354 0L3.4 11.16a.25.25 0 00-.064.108l-.457 1.6 1.6-.457a.25.25 0 00.108-.064l8.672-8.672a.25.25 0 000-.354l-1.086-1.086z"/>
+            </svg>
+            编辑
+          </router-link>
           <button class="btn btn-sm" @click="copyFileContent">复制</button>
           <button class="btn btn-sm" @click="downloadFile">下载</button>
           <a :href="rawFileUrl" class="btn btn-sm" target="_blank">原始</a>
@@ -341,7 +347,7 @@ const editorHeight = computed(() => {
 })
 
 const rawFileUrl = computed(() => {
-  return `/api/v1/projects/${repo.value}/repository/files?path=${currentPath.value}&ref_name=${currentRef.value}&raw=true`
+  return `/api/v1/projects/${owner.value}/${repo.value}/repository/files/${encodeURIComponent(currentPath.value)}?ref_name=${currentRef.value}&raw=true`
 })
 
 const filteredBranches = computed(() => {

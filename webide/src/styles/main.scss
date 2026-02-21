@@ -1,0 +1,401 @@
+@use 'variables' as *;
+
+// ===========================================
+// Global Reset & Base Styles
+// ===========================================
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  background-color: var(--ide-bg);
+  color: var(--ide-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  height: 100%;
+  width: 100%;
+}
+
+// ===========================================
+// Scrollbar Styles
+// ===========================================
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--ide-scrollbar-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ide-scrollbar-thumb);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  
+  &:hover {
+    background: var(--ide-scrollbar-thumb-hover);
+    background-clip: padding-box;
+  }
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--ide-bg-secondary);
+}
+
+// ===========================================
+// Typography
+// ===========================================
+
+.mono {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+// ===========================================
+// Button Styles
+// ===========================================
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  transition: all var(--ide-transition-fast);
+  white-space: nowrap;
+  
+  &:focus {
+    outline: 2px solid var(--ide-primary);
+    outline-offset: 2px;
+  }
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.btn-primary {
+  background: var(--ide-button-bg);
+  color: var(--ide-button-fg);
+  
+  &:hover:not(:disabled) {
+    background: var(--ide-button-hover-bg);
+  }
+}
+
+.btn-secondary {
+  background: var(--ide-button-secondary-bg);
+  color: var(--ide-button-secondary-fg);
+  
+  &:hover:not(:disabled) {
+    background: var(--ide-surface-hover);
+  }
+}
+
+.btn-danger {
+  background: var(--ide-danger);
+  color: white;
+  
+  &:hover:not(:disabled) {
+    background: lighten(#f38ba8, 5%);
+  }
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--ide-text-muted);
+  
+  &:hover:not(:disabled) {
+    background: var(--ide-surface-hover);
+    color: var(--ide-text);
+  }
+}
+
+.btn-sm {
+  padding: 4px 8px;
+  font-size: 12px;
+  
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.btn-icon {
+  padding: 6px;
+  
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+// ===========================================
+// Input Styles
+// ===========================================
+
+.input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--ide-input-bg);
+  color: var(--ide-input-fg);
+  border: 1px solid var(--ide-input-border);
+  border-radius: 4px;
+  transition: border-color var(--ide-transition-fast);
+  
+  &:focus {
+    outline: none;
+    border-color: var(--ide-input-focus-border);
+  }
+  
+  &::placeholder {
+    color: var(--ide-text-subtle);
+  }
+}
+
+.input-sm {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+// ===========================================
+// Utility Classes
+// ===========================================
+
+.flex {
+  display: flex;
+}
+
+.flex-col {
+  flex-direction: column;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-center {
+  justify-content: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.gap-1 { gap: 4px; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.gap-4 { gap: 16px; }
+
+.p-1 { padding: 4px; }
+.p-2 { padding: 8px; }
+.p-3 { padding: 12px; }
+.p-4 { padding: 16px; }
+
+.m-1 { margin: 4px; }
+.m-2 { margin: 8px; }
+.m-3 { margin: 12px; }
+.m-4 { margin: 16px; }
+
+.text-muted {
+  color: var(--ide-text-muted);
+}
+
+.text-subtle {
+  color: var(--ide-text-subtle);
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// ===========================================
+// Transitions & Animations
+// ===========================================
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--ide-transition-normal);
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.slide-enter-active,
+.slide-leave-active {
+  transition: transform var(--ide-transition-normal);
+}
+
+.slide-enter-from {
+  transform: translateX(-100%);
+}
+
+.slide-leave-to {
+  transform: translateX(-100%);
+}
+
+// ===========================================
+// Context Menu
+// ===========================================
+
+.context-menu {
+  position: fixed;
+  min-width: 180px;
+  background: var(--ide-surface);
+  border: 1px solid var(--ide-border);
+  border-radius: 6px;
+  box-shadow: var(--ide-shadow-lg);
+  padding: 4px 0;
+  z-index: 1000;
+  
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    color: var(--ide-text);
+    font-size: 12px;
+    
+    &:hover {
+      background: var(--ide-surface-hover);
+    }
+    
+    &.danger {
+      color: var(--ide-danger);
+    }
+    
+    svg {
+      width: 14px;
+      height: 14px;
+      opacity: 0.7;
+    }
+    
+    .shortcut {
+      margin-left: auto;
+      color: var(--ide-text-subtle);
+      font-size: 11px;
+    }
+  }
+  
+  .menu-separator {
+    height: 1px;
+    background: var(--ide-border);
+    margin: 4px 0;
+  }
+}
+
+// ===========================================
+// Modal / Dialog
+// ===========================================
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 900;
+}
+
+.modal {
+  background: var(--ide-bg-secondary);
+  border: 1px solid var(--ide-border);
+  border-radius: 8px;
+  box-shadow: var(--ide-shadow-lg);
+  min-width: 400px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--ide-border);
+    
+    h3 {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    
+    .close-btn {
+      background: none;
+      border: none;
+      color: var(--ide-text-muted);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      
+      &:hover {
+        background: var(--ide-surface-hover);
+        color: var(--ide-text);
+      }
+    }
+  }
+  
+  .modal-body {
+    padding: 16px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--ide-border);
+  }
+}
+
+// ===========================================
+// Tooltip
+// ===========================================
+
+.tooltip {
+  position: fixed;
+  background: var(--ide-surface);
+  color: var(--ide-text);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  box-shadow: var(--ide-shadow-md);
+  z-index: 1100;
+  pointer-events: none;
+  white-space: nowrap;
+}

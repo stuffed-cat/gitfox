@@ -215,7 +215,7 @@
           </div>
           <div class="card-body">
             <p>帮助我们改进新首页，分享您的想法和建议。</p>
-            <a href="#" class="text-link">提出反馈</a>
+            <a href="https://gitfox.studio/gitfox/gitfox/-/issues" class="text-link">提出反馈</a>
           </div>
         </div>
       </div>

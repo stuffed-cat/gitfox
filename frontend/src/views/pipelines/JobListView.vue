@@ -74,13 +74,11 @@ import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
 import type { Project, PipelineJob } from '@/types'
-import { navIcons } from '@/navigation/icons'
 import CiStatusIcon from '@/components/CiStatusIcon.vue'
 
 const props = defineProps<{ project?: Project }>()
 const router = useRouter()
 
-const icons = navIcons
 const loading = ref(false)
 const activeTab = ref<'all' | 'finished'>('all')
 
@@ -107,14 +105,15 @@ function getStatusLabel(status: string): string {
   return map[status] || status
 }
 
-function getStatusIcon(status: string): string {
-  const map: Record<string, string> = {
-    pending: icons.statusPending, running: icons.statusRunning,
-    success: icons.statusSuccess, failed: icons.statusFailed,
-    canceled: icons.statusCanceled, skipped: icons.statusSkipped
-  }
-  return map[status] || icons.statusPending
-}
+// Reserved for future use
+// function _getStatusIcon(status: string): string {
+//   const map: Record<string, string> = {
+//     pending: icons.statusPending, running: icons.statusRunning,
+//     success: icons.statusSuccess, failed: icons.statusFailed,
+//     canceled: icons.statusCanceled, skipped: icons.statusSkipped
+//   }
+//   return map[status] || icons.statusPending
+// }
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}秒`

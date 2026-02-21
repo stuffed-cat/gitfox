@@ -866,4 +866,252 @@ impl GitService {
             Ok(tree.get_path(Path::new(path)).is_ok())
         }
     }
+
+    /// Create or update a file and commit the changes
+    /// Returns the new commit SHA
+    pub fn commit_file_change(
+        repo: &Repository,
+        branch: &str,
+        file_path: &str,
+        content: &str,
+        commit_message: &str,
+        author_name: &str,
+        author_email: &str,
+    ) -> AppResult<String> {
+        // Get the current branch reference
+        let branch_ref = format!("refs/heads/{}", branch);
+        let reference = repo.find_reference(&branch_ref)
+            .map_err(|_| AppError::NotFound(format!("Branch '{}' not found", branch)))?;
+        let parent_commit = reference.peel_to_commit()?;
+        let parent_tree = parent_commit.tree()?;
+
+        // Create blob from content
+        let blob_oid = repo.blob(content.as_bytes())?;
+
+        // Build new tree with the file change
+        let mut tree_builder = repo.treebuilder(Some(&parent_tree))?;
+        
+        // Handle nested paths by building intermediate trees
+        let path_parts: Vec<&str> = file_path.split('/').collect();
+        if path_parts.len() > 1 {
+            // Need to build nested tree structure
+            Self::insert_nested_blob(repo, &mut tree_builder, &path_parts, blob_oid, &parent_tree)?;
+        } else {
+            // Simple case: file at root
+            tree_builder.insert(file_path, blob_oid, 0o100644)?;
+        }
+
+        let tree_oid = tree_builder.write()?;
+        let new_tree = repo.find_tree(tree_oid)?;
+
+        // Create signature
+        let sig = Signature::now(author_name, author_email)?;
+
+        // Create commit
+        let commit_oid = repo.commit(
+            Some(&branch_ref),
+            &sig,
+            &sig,
+            commit_message,
+            &new_tree,
+            &[&parent_commit],
+        )?;
+
+        Ok(commit_oid.to_string())
+    }
+
+    /// Helper to insert blob at nested path
+    fn insert_nested_blob(
+        repo: &Repository,
+        tree_builder: &mut git2::TreeBuilder,
+        path_parts: &[&str],
+        blob_oid: Oid,
+        parent_tree: &Tree,
+    ) -> AppResult<()> {
+        if path_parts.len() == 1 {
+            tree_builder.insert(path_parts[0], blob_oid, 0o100644)?;
+            return Ok(());
+        }
+
+        let dir_name = path_parts[0];
+        let remaining_path: Vec<&str> = path_parts[1..].to_vec();
+
+        // Get existing subtree or create empty one
+        let existing_subtree = parent_tree.get_name(dir_name)
+            .and_then(|entry| repo.find_tree(entry.id()).ok());
+
+        let mut sub_builder = if let Some(ref subtree) = existing_subtree {
+            repo.treebuilder(Some(subtree))?
+        } else {
+            repo.treebuilder(None)?
+        };
+
+        // Recursively insert
+        let empty_tree = repo.find_tree(repo.treebuilder(None)?.write()?)?;
+        let sub_parent = existing_subtree.unwrap_or(empty_tree);
+        Self::insert_nested_blob(repo, &mut sub_builder, &remaining_path, blob_oid, &sub_parent)?;
+
+        let sub_tree_oid = sub_builder.write()?;
+        tree_builder.insert(dir_name, sub_tree_oid, 0o040000)?;
+
+        Ok(())
+    }
+
+    /// Delete a file and commit the change
+    pub fn delete_file_commit(
+        repo: &Repository,
+        branch: &str,
+        file_path: &str,
+        commit_message: &str,
+        author_name: &str,
+        author_email: &str,
+    ) -> AppResult<String> {
+        // Get the current branch reference
+        let branch_ref = format!("refs/heads/{}", branch);
+        let reference = repo.find_reference(&branch_ref)
+            .map_err(|_| AppError::NotFound(format!("Branch '{}' not found", branch)))?;
+        let parent_commit = reference.peel_to_commit()?;
+        let parent_tree = parent_commit.tree()?;
+
+        // Build new tree without the file
+        let mut tree_builder = repo.treebuilder(Some(&parent_tree))?;
+        
+        let path_parts: Vec<&str> = file_path.split('/').collect();
+        if path_parts.len() > 1 {
+            Self::remove_nested_blob(repo, &mut tree_builder, &path_parts, &parent_tree)?;
+        } else {
+            tree_builder.remove(file_path)?;
+        }
+
+        let tree_oid = tree_builder.write()?;
+        let new_tree = repo.find_tree(tree_oid)?;
+
+        // Create signature
+        let sig = Signature::now(author_name, author_email)?;
+
+        // Create commit
+        let commit_oid = repo.commit(
+            Some(&branch_ref),
+            &sig,
+            &sig,
+            commit_message,
+            &new_tree,
+            &[&parent_commit],
+        )?;
+
+        Ok(commit_oid.to_string())
+    }
+
+    /// Helper to remove blob from nested path
+    fn remove_nested_blob(
+        repo: &Repository,
+        tree_builder: &mut git2::TreeBuilder,
+        path_parts: &[&str],
+        parent_tree: &Tree,
+    ) -> AppResult<()> {
+        if path_parts.len() == 1 {
+            tree_builder.remove(path_parts[0])?;
+            return Ok(());
+        }
+
+        let dir_name = path_parts[0];
+        let remaining_path: Vec<&str> = path_parts[1..].to_vec();
+
+        let subtree_entry = parent_tree.get_name(dir_name)
+            .ok_or_else(|| AppError::NotFound(format!("Directory '{}' not found", dir_name)))?;
+        let subtree = repo.find_tree(subtree_entry.id())?;
+
+        let mut sub_builder = repo.treebuilder(Some(&subtree))?;
+        Self::remove_nested_blob(repo, &mut sub_builder, &remaining_path, &subtree)?;
+
+        let sub_tree_oid = sub_builder.write()?;
+        
+        // Check if subtree is empty after removal
+        let new_subtree = repo.find_tree(sub_tree_oid)?;
+        if new_subtree.len() == 0 {
+            tree_builder.remove(dir_name)?;
+        } else {
+            tree_builder.insert(dir_name, sub_tree_oid, 0o040000)?;
+        }
+
+        Ok(())
+    }
+
+    /// Batch commit multiple file changes
+    pub fn batch_commit_changes(
+        repo: &Repository,
+        branch: &str,
+        changes: Vec<FileChange>,
+        commit_message: &str,
+        author_name: &str,
+        author_email: &str,
+    ) -> AppResult<String> {
+        // Get the current branch reference
+        let branch_ref = format!("refs/heads/{}", branch);
+        let reference = repo.find_reference(&branch_ref)
+            .map_err(|_| AppError::NotFound(format!("Branch '{}' not found", branch)))?;
+        let parent_commit = reference.peel_to_commit()?;
+        let mut current_tree = parent_commit.tree()?;
+
+        // Apply each change sequentially
+        for change in changes {
+            let tree_oid = match change.action {
+                FileChangeAction::Create | FileChangeAction::Update => {
+                    let content = change.content.as_ref()
+                        .ok_or_else(|| AppError::BadRequest("Content required for create/update".to_string()))?;
+                    let blob_oid = repo.blob(content.as_bytes())?;
+                    let mut tree_builder = repo.treebuilder(Some(&current_tree))?;
+                    
+                    let path_parts: Vec<&str> = change.path.split('/').collect();
+                    if path_parts.len() > 1 {
+                        Self::insert_nested_blob(repo, &mut tree_builder, &path_parts, blob_oid, &current_tree)?;
+                    } else {
+                        tree_builder.insert(&change.path, blob_oid, 0o100644)?;
+                    }
+                    tree_builder.write()?
+                }
+                FileChangeAction::Delete => {
+                    let mut tree_builder = repo.treebuilder(Some(&current_tree))?;
+                    let path_parts: Vec<&str> = change.path.split('/').collect();
+                    if path_parts.len() > 1 {
+                        Self::remove_nested_blob(repo, &mut tree_builder, &path_parts, &current_tree)?;
+                    } else {
+                        tree_builder.remove(&change.path)?;
+                    }
+                    tree_builder.write()?
+                }
+            };
+            current_tree = repo.find_tree(tree_oid)?;
+        }
+
+        // Create signature
+        let sig = Signature::now(author_name, author_email)?;
+
+        // Create commit
+        let commit_oid = repo.commit(
+            Some(&branch_ref),
+            &sig,
+            &sig,
+            commit_message,
+            &current_tree,
+            &[&parent_commit],
+        )?;
+
+        Ok(commit_oid.to_string())
+    }
+}
+
+/// Represents a file change for batch commits
+#[derive(Debug, Clone)]
+pub struct FileChange {
+    pub path: String,
+    pub action: FileChangeAction,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileChangeAction {
+    Create,
+    Update,
+    Delete,
 }

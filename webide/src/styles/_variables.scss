@@ -1,0 +1,189 @@
+// GitFox WebIDE - GitLab Style Theme Variables
+
+// ===========================================
+// Color Palette (Catppuccin Mocha - similar to GitLab dark)
+// ===========================================
+
+// Base colors
+$base: #1e1e2e;
+$mantle: #181825;
+$crust: #11111b;
+$surface0: #313244;
+$surface1: #45475a;
+$surface2: #585b70;
+$overlay0: #6c7086;
+$overlay1: #7f849c;
+$overlay2: #9399b2;
+$text: #cdd6f4;
+$subtext0: #a6adc8;
+$subtext1: #bac2de;
+
+// Accent colors
+$lavender: #b4befe;
+$blue: #89b4fa;
+$sapphire: #74c7ec;
+$sky: #89dceb;
+$teal: #94e2d5;
+$green: #a6e3a1;
+$yellow: #f9e2af;
+$peach: #fab387;
+$maroon: #eba0ac;
+$red: #f38ba8;
+$mauve: #cba6f7;
+$pink: #f5c2e7;
+$flamingo: #f2cdcd;
+$rosewater: #f5e0dc;
+
+// Semantic colors
+$primary: $blue;
+$primary-hover: lighten($blue, 10%);
+$success: $green;
+$warning: $yellow;
+$danger: $red;
+$info: $sapphire;
+
+// ===========================================
+// Theme Variables
+// ===========================================
+
+:root {
+  // Background colors
+  --ide-bg: #{$base};
+  --ide-bg-secondary: #{$mantle};
+  --ide-bg-tertiary: #{$crust};
+  --ide-surface: #{$surface0};
+  --ide-surface-hover: #{$surface1};
+  --ide-surface-active: #{$surface2};
+  
+  // Text colors
+  --ide-text: #{$text};
+  --ide-text-muted: #{$subtext0};
+  --ide-text-subtle: #{$overlay1};
+  
+  // Border colors
+  --ide-border: #{$surface1};
+  --ide-border-subtle: #{$surface0};
+  
+  // Accent colors
+  --ide-primary: #{$primary};
+  --ide-primary-hover: #{$primary-hover};
+  --ide-success: #{$success};
+  --ide-warning: #{$warning};
+  --ide-danger: #{$danger};
+  --ide-info: #{$info};
+  
+  // Activity bar (leftmost sidebar)
+  --ide-activity-bar-bg: #{$crust};
+  --ide-activity-bar-fg: #{$overlay1};
+  --ide-activity-bar-active: #{$text};
+  --ide-activity-bar-indicator: #{$primary};
+  
+  // Sidebar (file explorer)
+  --ide-sidebar-bg: #{$mantle};
+  --ide-sidebar-fg: #{$text};
+  --ide-sidebar-header-bg: #{$surface0};
+  --ide-sidebar-item-hover: #{$surface0};
+  --ide-sidebar-item-selected: #{$surface1};
+  
+  // Editor
+  --ide-editor-bg: #{$base};
+  --ide-editor-fg: #{$text};
+  --ide-editor-line-highlight: #{$surface0};
+  --ide-editor-selection: #{$surface1};
+  --ide-editor-gutter: #{$overlay0};
+  
+  // Tabs
+  --ide-tab-bg: #{$mantle};
+  --ide-tab-active-bg: #{$base};
+  --ide-tab-border: #{$surface0};
+  --ide-tab-fg: #{$subtext0};
+  --ide-tab-active-fg: #{$text};
+  --ide-tab-modified: #{$peach};
+  
+  // Status bar
+  --ide-statusbar-bg: #{$primary};
+  --ide-statusbar-fg: #{$crust};
+  
+  // Panel (terminal, output, etc.)
+  --ide-panel-bg: #{$mantle};
+  --ide-panel-header-bg: #{$surface0};
+  --ide-panel-border: #{$surface1};
+  
+  // Input/Form
+  --ide-input-bg: #{$surface0};
+  --ide-input-fg: #{$text};
+  --ide-input-border: #{$surface1};
+  --ide-input-focus-border: #{$primary};
+  
+  // Button
+  --ide-button-bg: #{$primary};
+  --ide-button-fg: #{$crust};
+  --ide-button-hover-bg: #{$primary-hover};
+  --ide-button-secondary-bg: #{$surface1};
+  --ide-button-secondary-fg: #{$text};
+  
+  // Scrollbar
+  --ide-scrollbar-bg: transparent;
+  --ide-scrollbar-thumb: #{$surface1};
+  --ide-scrollbar-thumb-hover: #{$surface2};
+  
+  // Shadows
+  --ide-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --ide-shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --ide-shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+  
+  // Timing
+  --ide-transition-fast: 0.1s;
+  --ide-transition-normal: 0.2s;
+  
+  // Sizing
+  --ide-activity-bar-width: 48px;
+  --ide-sidebar-width: 260px;
+  --ide-statusbar-height: 24px;
+  --ide-tab-height: 36px;
+  --ide-panel-min-height: 150px;
+}
+
+// Light theme overrides
+[data-theme="light"] {
+  --ide-bg: #ffffff;
+  --ide-bg-secondary: #f5f5f5;
+  --ide-bg-tertiary: #e8e8e8;
+  --ide-surface: #f0f0f0;
+  --ide-surface-hover: #e5e5e5;
+  --ide-surface-active: #d0d0d0;
+  
+  --ide-text: #1a1a1a;
+  --ide-text-muted: #666666;
+  --ide-text-subtle: #888888;
+  
+  --ide-border: #d0d0d0;
+  --ide-border-subtle: #e0e0e0;
+  
+  --ide-activity-bar-bg: #2e2e2e;
+  --ide-activity-bar-fg: #a0a0a0;
+  --ide-activity-bar-active: #ffffff;
+  
+  --ide-sidebar-bg: #f5f5f5;
+  --ide-sidebar-header-bg: #e8e8e8;
+  --ide-sidebar-item-hover: #e5e5e5;
+  --ide-sidebar-item-selected: #d0d0d0;
+  
+  --ide-editor-bg: #ffffff;
+  --ide-editor-fg: #1a1a1a;
+  --ide-editor-line-highlight: #f5f5f5;
+  --ide-editor-selection: #add6ff;
+  
+  --ide-tab-bg: #f5f5f5;
+  --ide-tab-active-bg: #ffffff;
+  
+  --ide-panel-bg: #f5f5f5;
+  --ide-panel-header-bg: #e8e8e8;
+  
+  --ide-scrollbar-thumb: #c0c0c0;
+  --ide-scrollbar-thumb-hover: #a0a0a0;
+  
+  --ide-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --ide-shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --ide-shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.15);
+}

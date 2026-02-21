@@ -44,6 +44,8 @@ pub struct BrowseQuery {
 #[derive(Debug, Deserialize)]
 pub struct FileQuery {
     pub ref_name: Option<String>,
+    #[serde(default)]
+    pub raw: bool,
 }
 
 #[derive(Debug, Serialize)]

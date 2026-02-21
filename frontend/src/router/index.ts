@@ -253,6 +253,20 @@ const routes = [
   },
   
   // Project routes (must be LAST - catches /:owner/:repo)
+  // WebIDE route - redirect to standalone SPA (before /:owner/:repo to take precedence)
+  {
+    path: '/:owner/:repo/-/ide/:ref?/:path(.*)?',
+    name: 'WebIDE',
+    redirect: (to: any) => {
+      // Redirect to standalone WebIDE SPA
+      const { owner, repo, ref, path } = to.params
+      const pathQuery = ref && path ? `/${ref}/${path}` : ref ? `/${ref}` : ''
+      window.location.href = `/ide/${owner}/${repo}${pathQuery}`
+      return '/'
+    },
+    meta: { requiresAuth: true }
+  },
+
   {
     path: '/:owner/:repo',
     name: 'Project',

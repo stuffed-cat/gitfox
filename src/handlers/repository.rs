@@ -1,10 +1,13 @@
 use actix_web::{web, HttpResponse};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::config::AppConfig;
 use crate::error::AppResult;
+use crate::middleware::AuthenticatedUser;
 use crate::models::{BrowseQuery, FileQuery};
 use crate::services::{GitService, ProjectService};
+use crate::services::git::{FileChange, FileChangeAction};
 
 /// 的路径参数
 #[derive(Debug, serde::Deserialize)]
@@ -95,6 +98,39 @@ pub async fn get_file(
     
     let content = GitService::get_file_content(&repo, &ref_name, &path.filepath)?;
     
+    // 如果请求原始内容，直接返回文件内容
+    if query.raw {
+        if content.is_binary {
+            // 二进制文件需要 base64 解码
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&content.content)
+                .map_err(|e| crate::error::AppError::InternalError(format!("Base64 decode error: {}", e)))?;
+            
+            // 根据文件名猜测 MIME 类型
+            let mime_type = mime_guess::from_path(&path.filepath)
+                .first_or_octet_stream()
+                .to_string();
+            
+            return Ok(HttpResponse::Ok()
+                .content_type(mime_type)
+                .insert_header(("Content-Disposition", format!("attachment; filename=\"{}\"", 
+                    path.filepath.split('/').last().unwrap_or(&path.filepath))))
+                .body(bytes));
+        } else {
+            // 文本文件直接返回
+            let mime_type = mime_guess::from_path(&path.filepath)
+                .first_or_text_plain()
+                .to_string();
+            
+            return Ok(HttpResponse::Ok()
+                .content_type(mime_type)
+                .insert_header(("Content-Disposition", format!("inline; filename=\"{}\"", 
+                    path.filepath.split('/').last().unwrap_or(&path.filepath))))
+                .body(content.content));
+        }
+    }
+    
     Ok(HttpResponse::Ok().json(content))
 }
 
@@ -115,4 +151,183 @@ pub async fn get_blob(
     let blob = GitService::get_blob(&repo, &path.sha)?;
     
     Ok(HttpResponse::Ok().json(blob))
+}
+
+// ==================== WebIDE File Operations ====================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateFileRequest {
+    pub branch: String,
+    pub content: String,
+    pub commit_message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateFileRequest {
+    pub branch: String,
+    pub content: String,
+    pub commit_message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteFileRequest {
+    pub branch: String,
+    pub commit_message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchCommitRequest {
+    pub branch: String,
+    pub commit_message: String,
+    pub actions: Vec<FileAction>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileAction {
+    pub action: String,  // "create", "update", "delete"
+    pub file_path: String,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CommitResponse {
+    pub sha: String,
+}
+
+/// POST /projects/:namespace/:project/repository/files/:filepath
+/// Create a new file
+pub async fn create_file(
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<FilePath>,
+    auth: AuthenticatedUser,
+    body: web::Json<CreateFileRequest>,
+) -> AppResult<HttpResponse> {
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(),
+        &path.namespace,
+        &path.project,
+    ).await?;
+    
+    // Check write permission (TODO: implement proper permission check)
+    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
+    
+    let sha = GitService::commit_file_change(
+        &repo,
+        &body.branch,
+        &path.filepath,
+        &body.content,
+        &body.commit_message,
+        &auth.username,
+        &format!("{}@gitfox.local", auth.username),
+    )?;
+    
+    Ok(HttpResponse::Created().json(CommitResponse { sha }))
+}
+
+/// PUT /projects/:namespace/:project/repository/files/:filepath
+/// Update an existing file
+pub async fn update_file(
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<FilePath>,
+    auth: AuthenticatedUser,
+    body: web::Json<UpdateFileRequest>,
+) -> AppResult<HttpResponse> {
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(),
+        &path.namespace,
+        &path.project,
+    ).await?;
+    
+    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
+    
+    let sha = GitService::commit_file_change(
+        &repo,
+        &body.branch,
+        &path.filepath,
+        &body.content,
+        &body.commit_message,
+        &auth.username,
+        &format!("{}@gitfox.local", auth.username),
+    )?;
+    
+    Ok(HttpResponse::Ok().json(CommitResponse { sha }))
+}
+
+/// DELETE /projects/:namespace/:project/repository/files/:filepath
+/// Delete a file
+pub async fn delete_file(
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<FilePath>,
+    auth: AuthenticatedUser,
+    query: web::Query<DeleteFileRequest>,
+) -> AppResult<HttpResponse> {
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(),
+        &path.namespace,
+        &path.project,
+    ).await?;
+    
+    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
+    
+    let sha = GitService::delete_file_commit(
+        &repo,
+        &query.branch,
+        &path.filepath,
+        &query.commit_message,
+        &auth.username,
+        &format!("{}@gitfox.local", auth.username),
+    )?;
+    
+    Ok(HttpResponse::Ok().json(CommitResponse { sha }))
+}
+
+/// POST /projects/:namespace/:project/repository/commits/batch
+/// Batch commit multiple file changes (for WebIDE)
+pub async fn batch_commit(
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<ProjectPath>,
+    auth: AuthenticatedUser,
+    body: web::Json<BatchCommitRequest>,
+) -> AppResult<HttpResponse> {
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(),
+        &path.namespace,
+        &path.project,
+    ).await?;
+    
+    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
+    
+    // Convert FileAction to FileChange
+    let changes: Vec<FileChange> = body.actions.iter().map(|action| {
+        let file_action = match action.action.as_str() {
+            "create" => FileChangeAction::Create,
+            "update" => FileChangeAction::Update,
+            "delete" => FileChangeAction::Delete,
+            _ => FileChangeAction::Update,
+        };
+        FileChange {
+            path: action.file_path.clone(),
+            action: file_action,
+            content: action.content.clone(),
+        }
+    }).collect();
+    
+    let sha = GitService::batch_commit_changes(
+        &repo,
+        &body.branch,
+        changes,
+        &body.commit_message,
+        &auth.username,
+        &format!("{}@gitfox.local", auth.username),
+    )?;
+    
+    Ok(HttpResponse::Created().json(CommitResponse { sha }))
 }

@@ -1,0 +1,36 @@
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { resolve } from 'path'
+
+export default defineConfig({
+  plugins: [vue()],
+  base: '/ide/',
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src')
+    }
+  },
+    server: {
+      port: 3002,
+      proxy: {
+        '/api': {
+          target: 'http://localhost:8081',
+          changeOrigin: true
+        }
+      }
+    },
+  build: {
+    outDir: 'dist',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'monaco-editor': ['monaco-editor'],
+          'vendor': ['vue', 'vue-router', 'pinia', 'axios']
+        }
+      }
+    }
+  },
+  optimizeDeps: {
+    include: ['monaco-editor']
+  }
+})

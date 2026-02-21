@@ -33,6 +33,8 @@ import type {
   AdminUserListResponse,
   AdminUserInfo,
   AdminUpdateUserRequest,
+  // Project types
+  ForkDivergence,
   // PAT types
   PersonalAccessToken,
   CreatePatRequest,

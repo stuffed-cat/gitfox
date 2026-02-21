@@ -1163,6 +1163,7 @@ dependencies = [
  "jsonwebtoken",
  "lettre",
  "log",
+ "mime_guess",
  "qrcode",
  "rand 0.8.5",
  "redis",

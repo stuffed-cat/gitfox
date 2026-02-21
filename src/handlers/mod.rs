@@ -218,7 +218,11 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/repository", web::get().to(repository::get_repository_info))
             .route("/projects/{namespace}/{project}/repository/tree", web::get().to(repository::browse_tree))
             .route("/projects/{namespace}/{project}/repository/files/{filepath:.*}", web::get().to(repository::get_file))
+            .route("/projects/{namespace}/{project}/repository/files/{filepath:.*}", web::post().to(repository::create_file))
+            .route("/projects/{namespace}/{project}/repository/files/{filepath:.*}", web::put().to(repository::update_file))
+            .route("/projects/{namespace}/{project}/repository/files/{filepath:.*}", web::delete().to(repository::delete_file))
             .route("/projects/{namespace}/{project}/repository/blobs/{sha}", web::get().to(repository::get_blob))
+            .route("/projects/{namespace}/{project}/repository/commits/batch", web::post().to(repository::batch_commit))
             
             // Branch routes 
             .route("/projects/{namespace}/{project}/repository/branches", web::get().to(branch::list_branches))
