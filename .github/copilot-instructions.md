@@ -1,5 +1,12 @@
 # GitFox DevOps Platform - Copilot Instructions
 
+## 记住以下信息：
+  - 0. 比能跑重要的是在不该跑的时候不传播损坏
+  - 1. 会让整个程序处于不安全状态的错误需要使用unwrap()处理
+  - 2. 代码质量和安全性同样重要，不能为了追求代码质量而牺牲安全性
+  - 3. 为了部分安全性而牺牲代码质量的情况需要在代码中添加注释说明原因
+  - 4. 为了速度牺牲代码质量的情况需要在代码中添加注释说明原因
+  
 ## 项目概述
 
 GitFox 是一个类似 GitLab 的 DevSecOps 版本管理系统，采用 **Rust (Actix Web)** 后端 + **Vue 3 (TypeScript)** 前端 + **PostgreSQL/Redis** 存储的全栈架构。
