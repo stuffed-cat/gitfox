@@ -160,49 +160,48 @@ function escapeRegex(text: string): string {
 }
 
 function ansiToHtml(text: string): string {
-  // 使用 ansi_up 库转换 ANSI 转义序列为 HTML
-  let html = ansiUp.ansi_to_html(text)
+  // 检查是否包含 ANSI 转义序列
+  const hasAnsi = text.includes('\x1b[')
   
-  // 如果没有颜色，添加语法高亮（类似 GitLab）
-  if (!text.includes('\x1b[')) {
-    html = applySyntaxHighlight(html)
+  if (hasAnsi) {
+    // 有 ANSI 颜色，直接使用 ansi_up 转换
+    return ansiUp.ansi_to_html(text)
+  } else {
+    // 没有 ANSI 颜色，先转义 HTML，再应用语法高亮
+    const escaped = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;')
+    
+    return applySyntaxHighlight(escaped)
   }
-  
-  return html
 }
 
 function applySyntaxHighlight(text: string): string {
   let result = text
   
-  // Shell 命令行前缀（$ 开头）
-  result = result.replace(/^(\$\s+)(.*)$/gm, '<span style="color:#58a6ff">$1</span><span style="color:#c9d1d9">$2</span>')
+  // Shell 命令行（$ 开头的行）
+  result = result.replace(/^(\$\s+)(.*)$/gm, '<span style="color:#58a6ff;font-weight:bold">$1</span><span style="color:#c9d1d9">$2</span>')
   
-  // === 分隔符
-  result = result.replace(/(===.*===)/g, '<span style="color:#58a6ff;font-weight:bold">$1</span>')
+  // === 分隔符（整行）
+  result = result.replace(/^(===.*===)$/gm, '<span style="color:#58a6ff;font-weight:bold">$1</span>')
   
-  // 错误关键词
-  result = result.replace(/\b(error|failed|failure|fatal|panic|exception)\b/gi, '<span style="color:#ff7b72;font-weight:bold">$&</span>')
+  // 行首的日志级别前缀（info:, warn:, debug:, error: 等）
+  result = result.replace(/^(error|fatal):\s*/gmi, '<span style="color:#ff7b72;font-weight:bold">$1:</span> ')
+  result = result.replace(/^(warn|warning):\s*/gmi, '<span style="color:#f0883e;font-weight:bold">$1:</span> ')
+  result = result.replace(/^(info):\s*/gmi, '<span style="color:#79c0ff;font-weight:bold">$1:</span> ')
+  result = result.replace(/^(debug|trace):\s*/gmi, '<span style="color:#8b949e">$1:</span> ')
   
-  // 成功关键词
-  result = result.replace(/\b(success|succeeded|done|completed|passed|ok)\b/gi, '<span style="color:#7ee787;font-weight:bold">$&</span>')
-  
-  // 警告关键词
-  result = result.replace(/\b(warn|warning|deprecated)\b/gi, '<span style="color:#f0883e;font-weight:bold">$&</span>')
-  
-  // Info/Debug 关键词
-  result = result.replace(/\b(info|debug|trace)\b/gi, '<span style="color:#79c0ff">$&</span>')
-  
-  // URL
-  result = result.replace(/(https?:\/\/[^\s<>]+)/g, '<span style="color:#58a6ff;text-decoration:underline">$1</span>')
-  
-  // 文件路径（包含 / 或 \ 的路径）
-  result = result.replace(/([\/\\][\w\/\\\.-]+)/g, '<span style="color:#d2a8ff">$1</span>')
-  
-  // 数字
-  result = result.replace(/\b(\d+)\b/g, '<span style="color:#79c0ff">$1</span>')
+  // Script failed / Script: xxx
+  result = result.replace(/\b(Script failed)\b/gi, '<span style="color:#ff7b72;font-weight:bold">$1</span>')
   
   // Exit code
-  result = result.replace(/(exit code:?\s*)(\d+)/gi, '$1<span style="color:#ff7b72;font-weight:bold">$2</span>')
+  result = result.replace(/\b(exit code):?\s*(\d+)/gi, '<span style="color:#ff7b72">$1</span>: <span style="color:#ff7b72;font-weight:bold">$2</span>')
+  
+  // URL（在没有被标签包围的情况下）
+  result = result.replace(/\b(https?:\/\/[^\s<>&]+)/g, '<span style="color:#58a6ff;text-decoration:underline">$1</span>')
   
   return result
 }
