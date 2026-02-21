@@ -36,6 +36,66 @@
           </div>
         </div>
 
+        <!-- Fork关系提示 -->
+        <div v-if="project?.forked_from_namespace && project?.forked_from_name" class="fork-info">
+          <svg class="fork-icon" viewBox="0 0 16 16" fill="none">
+            <circle cx="5" cy="3" r="2" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="11" cy="3" r="2" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="8" cy="13" r="2" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M5 5v2a3 3 0 003 3m3-5v2a3 3 0 01-3 3" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+          <span>
+            派生自 
+            <router-link 
+              :to="`/${project.forked_from_namespace}/${project.forked_from_name}`" 
+              class="fork-link"
+            >
+              {{ project.forked_from_namespace }} / {{ project.forked_from_name }}
+            </router-link>
+          </span>
+          
+          <!-- Fork Divergence Status -->
+          <div v-if="!divergenceLoading && forkDivergence" class="fork-status">
+            <!-- In sync -->
+            <span v-if="forkDivergence.ahead === 0 && forkDivergence.behind === 0" class="sync-status">
+              <svg viewBox="0 0 16 16" fill="none">
+                <path d="M13 5l-1.5-1.5M13 5l-1.5 1.5M13 5H5m-2 6l1.5 1.5M3 11l1.5-1.5M3 11h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              与上游代码库保持同步
+            </span>
+            
+            <!-- Behind upstream - show update button -->
+            <template v-else-if="forkDivergence.behind > 0">
+              <span class="divergence-info">
+                落后 {{ forkDivergence.behind }} 个提交
+                <span v-if="forkDivergence.ahead > 0">，领先 {{ forkDivergence.ahead }} 个提交</span>
+              </span>
+              <button class="btn btn-sm btn-primary" @click="handleUpdate">
+                <svg viewBox="0 0 16 16" fill="none">
+                  <path d="M13 8a5 5 0 11-10 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  <path d="M13 3v5h-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                更新
+              </button>
+            </template>
+            
+            <!-- Ahead of upstream - show create MR button -->
+            <template v-else-if="forkDivergence.ahead > 0">
+              <span class="divergence-info">
+                领先 {{ forkDivergence.ahead }} 个提交
+              </span>
+              <button class="btn btn-sm btn-confirm" @click="handleCreateMR">
+                <svg viewBox="0 0 16 16" fill="none">
+                  <circle cx="3" cy="3" r="2" stroke="currentColor" stroke-width="1.5"/>
+                  <circle cx="13" cy="13" r="2" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M3 5v6m10-6v-2m0 8V9m-10 0h10" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+                创建合并请求
+              </button>
+            </template>
+          </div>
+        </div>
+
         <!-- 分支选择器行 -->
         <div class="ref-row">
           <div class="ref-left">
@@ -301,7 +361,7 @@ import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
 import apiClient from '@/api'
-import type { Project, ProjectStats } from '@/types'
+import type { Project, ProjectStats, ForkDivergence } from '@/types'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
@@ -351,6 +411,10 @@ const starLoading = ref(false)
 const starsCount = ref(0)
 const forkLoading = ref(false)
 const forksCount = ref(0)
+
+// Fork divergence state
+const forkDivergence = ref<ForkDivergence | null>(null)
+const divergenceLoading = ref(false)
 
 const showRefDropdown = ref(false)
 const showCodeDropdown = ref(false)
@@ -469,6 +533,42 @@ function handleFork() {
   if (!props.project?.owner_name || !props.project?.name) return
   // Navigate to fork page like GitLab
   router.push(`/${props.project.owner_name}/${props.project.name}/-/forks/new`)
+}
+
+async function loadForkDivergence() {
+  if (!props.project?.name || !props.project?.owner_name) return
+  // Only load divergence if this is a fork
+  if (!props.project.forked_from_id) return
+  
+  divergenceLoading.value = true
+  try {
+    const divergence = await apiClient.projects.getForkDivergence({
+      namespace: props.project.owner_name,
+      project: props.project.name
+    })
+    forkDivergence.value = divergence
+  } catch (e) {
+    console.warn('Failed to load fork divergence:', e)
+    forkDivergence.value = null
+  } finally {
+    divergenceLoading.value = false
+  }
+}
+
+function handleCreateMR() {
+  if (!props.project?.forked_from_namespace || !props.project?.forked_from_name) return
+  // Navigate to create MR page targeting upstream
+  router.push(`/${props.project.forked_from_namespace}/${props.project.forked_from_name}/-/merge_requests/new?source=${props.project.owner_name}/${props.project.name}`)
+}
+
+async function handleUpdate() {
+  if (!props.project?.owner_name || !props.project?.name) return
+  if (!props.project.forked_from_namespace || !props.project.forked_from_name) return
+  
+  // In a real implementation, this would trigger a sync/update operation
+  // For now, just show a message
+  alert('更新功能将会从上游仓库拉取最新代码。此功能正在开发中。')
+  // TODO: Implement actual sync functionality
 }
 
 async function copyUrl() {
@@ -669,6 +769,9 @@ onMounted(async () => {
     // Check starred status
     checkStarredStatus()
     
+    // Load fork divergence if this is a fork
+    loadForkDivergence()
+    
     await loadBranches()
     await loadTags()
     // 根据实际分支设置 currentRef，空仓库不设置任何值
@@ -718,6 +821,7 @@ $gray-900: #1f1e24;
 $blue-50: #e9f3fc;
 $blue-500: #1f75cb;
 $blue-600: #1068bf;
+$blue-700: #0b5ca3;
 $green-500: #108548;
 $orange-folder: #e9a84b;
 
@@ -786,6 +890,85 @@ $orange-folder: #e9a84b;
 .project-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+// Fork 关系提示
+.fork-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: $gray-50;
+  border: 1px solid $gray-200;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: $gray-700;
+
+  .fork-icon {
+    width: 16px;
+    height: 16px;
+    color: $gray-500;
+    flex-shrink: 0;
+  }
+
+  .fork-link {
+    color: $blue-600;
+    text-decoration: none;
+    font-weight: 500;
+    
+    &:hover {
+      color: $blue-700;
+      text-decoration: underline;
+    }
+  }
+
+  .fork-status {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-left: auto;
+    
+    .sync-status {
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+      color: $green-500;
+      font-weight: 500;
+      
+      svg {
+        width: 16px;
+        height: 16px;
+      }
+    }
+
+    .divergence-info {
+      color: $gray-600;
+      font-size: 0.8125rem;
+    }
+
+    .btn-sm {
+      padding: 0.25rem 0.625rem;
+      font-size: 0.8125rem;
+      
+      svg {
+        width: 14px;
+        height: 14px;
+      }
+    }
+
+    .btn-primary {
+      background: $blue-600;
+      color: $white;
+      border-color: $blue-600;
+
+      &:hover {
+        background: $blue-700;
+        border-color: $blue-700;
+      }
+    }
+  }
 }
 
 // 按钮

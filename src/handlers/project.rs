@@ -482,3 +482,68 @@ pub async fn get_fork_network(
         "projects": network
     })))
 }
+
+/// GET /projects/:namespace/:project/fork_divergence
+/// Compare fork with its upstream to get ahead/behind status
+pub async fn get_fork_divergence(
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<ProjectPath>,
+) -> AppResult<HttpResponse> {
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+
+    // Check if this is a fork
+    if project.forked_from_id.is_none() || project.forked_from_namespace.is_none() || project.forked_from_name.is_none() {
+        return Err(AppError::BadRequest("This project is not a fork".to_string()));
+    }
+
+    let upstream_namespace = project.forked_from_namespace.as_ref().unwrap();
+    let upstream_name = project.forked_from_name.as_ref().unwrap();
+
+    // Open both repositories
+    let fork_repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
+    let upstream_repo = GitService::open_repository(
+        config.get_ref(), 
+        upstream_namespace, 
+        upstream_name
+    )?;
+
+    // Get default branches
+    let fork_branch = GitService::get_default_branch(&fork_repo)?
+        .ok_or_else(|| AppError::NotFound("Fork has no default branch".to_string()))?;
+    let upstream_branch = GitService::get_default_branch(&upstream_repo)?
+        .ok_or_else(|| AppError::NotFound("Upstream has no default branch".to_string()))?;
+
+    // Get commit objects - pass branch names directly without refs/heads/ prefix
+    let fork_commit = GitService::resolve_ref_to_commit(&fork_repo, &fork_branch)?;
+    let upstream_commit = GitService::resolve_ref_to_commit(&upstream_repo, &upstream_branch)?;
+
+    // Try to calculate divergence
+    // Check if they have the same commit (synchronized)
+    let (ahead, behind) = if fork_commit.id() == upstream_commit.id() {
+        (0, 0)
+    } else if fork_repo.find_commit(upstream_commit.id()).is_ok() {
+        // Upstream commit exists in fork, can calculate directly
+        GitService::calculate_divergence(
+            &fork_repo, 
+            &fork_branch,
+            &upstream_commit.id().to_string()
+        )?
+    } else {
+        // Cannot directly compare without fetching
+        // Return unknown state - frontend should handle this
+        (0, 0)
+    };
+
+    Ok(HttpResponse::Ok().json(crate::models::ForkDivergence {
+        ahead,
+        behind,
+        fork_branch,
+        upstream_branch,
+    }))
+}

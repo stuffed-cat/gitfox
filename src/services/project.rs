@@ -109,7 +109,12 @@ impl ProjectService {
             VALUES ($1, $2, $3, $4, $5, $6, $6)
             RETURNING id, name, description, visibility, owner_id, created_at, updated_at,
                 $7 as owner_name,
-                $8 as owner_avatar
+                $8 as owner_avatar,
+                0 as stars_count,
+                0 as forks_count,
+                NULL::BIGINT as forked_from_id,
+                NULL::VARCHAR as forked_from_namespace,
+                NULL::VARCHAR as forked_from_name
             "#
         )
         .bind(&req.name)
@@ -145,9 +150,12 @@ impl ProjectService {
             r#"
             SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
                    n.path as owner_name, n.avatar_url as owner_avatar,
-                   p.stars_count, p.forks_count, p.forked_from_id
+                   p.stars_count, p.forks_count, p.forked_from_id,
+                   fn.path as forked_from_namespace, fp.name as forked_from_name
             FROM projects p
             JOIN namespaces n ON p.namespace_id = n.id
+            LEFT JOIN projects fp ON p.forked_from_id = fp.id
+            LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
             WHERE LOWER(n.path) = LOWER($1) AND LOWER(p.name) = LOWER($2)
             "#
         )
@@ -176,9 +184,12 @@ impl ProjectService {
                 r#"
                 SELECT DISTINCT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
                        n.path as owner_name, n.avatar_url as owner_avatar,
-                       p.stars_count, p.forks_count, p.forked_from_id
+                       p.stars_count, p.forks_count, p.forked_from_id,
+                       fn.path as forked_from_namespace, fp.name as forked_from_name
                 FROM projects p
                 JOIN namespaces n ON p.namespace_id = n.id
+                LEFT JOIN projects fp ON p.forked_from_id = fp.id
+                LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
                 LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = $1
                 LEFT JOIN groups g ON n.namespace_type = 'group' AND n.id = g.namespace_id
                 LEFT JOIN group_members gm ON g.id = gm.group_id AND gm.user_id = $1
@@ -200,9 +211,12 @@ impl ProjectService {
                 r#"
                 SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
                        n.path as owner_name, n.avatar_url as owner_avatar,
-                       p.stars_count, p.forks_count, p.forked_from_id
+                       p.stars_count, p.forks_count, p.forked_from_id,
+                       fn.path as forked_from_namespace, fp.name as forked_from_name
                 FROM projects p
                 JOIN namespaces n ON p.namespace_id = n.id
+                LEFT JOIN projects fp ON p.forked_from_id = fp.id
+                LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
                 WHERE p.visibility = 'public'
                 ORDER BY p.updated_at DESC
                 LIMIT $1 OFFSET $2
@@ -373,6 +387,20 @@ impl ProjectService {
     ) -> AppResult<ProjectWithOwner> {
         let now = Utc::now();
 
+        // Get source project namespace and name for fork relationship
+        let (source_namespace, source_name): (String, String) = sqlx::query_as(
+            r#"
+            SELECT n.path, p.name
+            FROM projects p
+            JOIN namespaces n ON p.namespace_id = n.id
+            WHERE p.id = $1
+            "#
+        )
+        .bind(source_project_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Source project not found".to_string()))?;
+
         // Get the namespace to use (user's namespace if not specified)
         let (ns_id, owner_name, owner_avatar): (i64, String, Option<String>) = 
             if let Some(ns_id) = namespace_id {
@@ -426,7 +454,9 @@ impl ProjectService {
                 $9 as owner_avatar,
                 0 as stars_count,
                 0 as forks_count,
-                $6 as forked_from_id
+                $6 as forked_from_id,
+                $10 as forked_from_namespace,
+                $11 as forked_from_name
             "#
         )
         .bind(name)
@@ -438,6 +468,8 @@ impl ProjectService {
         .bind(now)
         .bind(&owner_name)
         .bind(&owner_avatar)
+        .bind(&source_namespace)
+        .bind(&source_name)
         .fetch_one(pool)
         .await?;
 
@@ -453,9 +485,12 @@ impl ProjectService {
             r#"
             SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
                    n.path as owner_name, n.avatar_url as owner_avatar,
-                   p.stars_count, p.forks_count, p.forked_from_id
+                   p.stars_count, p.forks_count, p.forked_from_id,
+                   fn.path as forked_from_namespace, fp.name as forked_from_name
             FROM projects p
             JOIN namespaces n ON p.namespace_id = n.id
+            LEFT JOIN projects fp ON p.forked_from_id = fp.id
+            LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
             JOIN project_forks pf ON pf.forked_project_id = p.id
             WHERE pf.source_project_id = $1
             ORDER BY p.created_at DESC
@@ -507,9 +542,12 @@ impl ProjectService {
             )
             SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
                    n.path as owner_name, n.avatar_url as owner_avatar,
-                   p.stars_count, p.forks_count, p.forked_from_id
+                   p.stars_count, p.forks_count, p.forked_from_id,
+                   fn.path as forked_from_namespace, fp.name as forked_from_name
             FROM projects p
             JOIN namespaces n ON p.namespace_id = n.id
+            LEFT JOIN projects fp ON p.forked_from_id = fp.id
+            LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
             WHERE p.id IN (SELECT id FROM fork_tree)
             ORDER BY p.forked_from_id NULLS FIRST, p.created_at
             "#

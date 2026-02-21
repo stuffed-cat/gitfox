@@ -497,6 +497,27 @@ impl GitService {
         Ok(commits)
     }
 
+    /// Calculate commits ahead and behind between two refs (e.g., fork vs upstream)
+    /// Returns (ahead, behind) tuple
+    pub fn calculate_divergence(repo: &Repository, local_ref: &str, upstream_ref: &str) -> AppResult<(usize, usize)> {
+        let local_commit = Self::resolve_ref_to_commit(repo, local_ref)?;
+        let upstream_commit = Self::resolve_ref_to_commit(repo, upstream_ref)?;
+
+        // Calculate commits ahead (local has but upstream doesn't)
+        let mut ahead_walk = repo.revwalk()?;
+        ahead_walk.push(local_commit.id())?;
+        ahead_walk.hide(upstream_commit.id())?;
+        let ahead = ahead_walk.count();
+
+        // Calculate commits behind (upstream has but local doesn't)
+        let mut behind_walk = repo.revwalk()?;
+        behind_walk.push(upstream_commit.id())?;
+        behind_walk.hide(local_commit.id())?;
+        let behind = behind_walk.count();
+
+        Ok((ahead, behind))
+    }
+
     pub fn get_blob(repo: &Repository, sha: &str) -> AppResult<BlobContent> {
         let oid = Oid::from_str(sha)
             .map_err(|_| AppError::BadRequest(format!("Invalid blob SHA: {}", sha)))?;
@@ -644,7 +665,7 @@ impl GitService {
 
     // Helper methods
 
-    fn resolve_ref_to_commit<'a>(repo: &'a Repository, ref_name: &str) -> AppResult<Commit<'a>> {
+    pub fn resolve_ref_to_commit<'a>(repo: &'a Repository, ref_name: &str) -> AppResult<Commit<'a>> {
         // Try as branch first
         if let Ok(branch) = repo.find_branch(ref_name, BranchType::Local) {
             if let Some(target) = branch.get().target() {

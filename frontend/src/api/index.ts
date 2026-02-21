@@ -276,6 +276,10 @@ class ApiClient {
     getForkNetwork: async (path: ProjectPath): Promise<{ current_project_id: string; projects: Project[] }> => {
       const response = await this.client.get(`${this.projectPath(path)}/fork_network`)
       return response.data
+    },
+    getForkDivergence: async (path: ProjectPath): Promise<ForkDivergence> => {
+      const response = await this.client.get(`${this.projectPath(path)}/fork_divergence`)
+      return response.data
     }
   }
 

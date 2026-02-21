@@ -92,6 +92,8 @@ pub struct ProjectWithOwner {
     #[serde(default)]
     pub forks_count: i32,
     pub forked_from_id: Option<i64>,
+    pub forked_from_namespace: Option<String>,
+    pub forked_from_name: Option<String>,
 }
 
 /// Project star record
@@ -127,4 +129,17 @@ pub struct ForkProjectRequest {
     /// Which branches to include: "all" or "default"
     #[serde(default)]
     pub branches: Option<String>,
+}
+
+/// Fork divergence information (commits ahead/behind upstream)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkDivergence {
+    /// Number of commits ahead of upstream
+    pub ahead: usize,
+    /// Number of commits behind upstream
+    pub behind: usize,
+    /// Default branch of current fork
+    pub fork_branch: String,
+    /// Default branch of upstream
+    pub upstream_branch: String,
 }

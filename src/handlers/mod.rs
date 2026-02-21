@@ -212,6 +212,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/fork", web::post().to(project::fork_project))
             .route("/projects/{namespace}/{project}/forks", web::get().to(project::list_forks))
             .route("/projects/{namespace}/{project}/fork_network", web::get().to(project::get_fork_network))
+            .route("/projects/{namespace}/{project}/fork_divergence", web::get().to(project::get_fork_divergence))
             
             // Repository routes 
             .route("/projects/{namespace}/{project}/repository", web::get().to(repository::get_repository_info))

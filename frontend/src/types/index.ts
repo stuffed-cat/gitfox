@@ -44,6 +44,15 @@ export interface Project {
   stars_count?: number
   forks_count?: number
   forked_from_id?: string
+  forked_from_namespace?: string
+  forked_from_name?: string
+}
+
+export interface ForkDivergence {
+  ahead: number
+  behind: number
+  fork_branch: string
+  upstream_branch: string
 }
 
 export interface CreateProjectRequest {
