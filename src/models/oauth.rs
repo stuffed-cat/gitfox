@@ -156,6 +156,7 @@ pub struct OAuthApplication {
     pub logo_url: Option<String>,
     pub confidential: bool,
     pub trusted: bool,
+    pub skip_authorization: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -173,6 +174,7 @@ pub struct OAuthApplicationInfo {
     pub logo_url: Option<String>,
     pub confidential: bool,
     pub trusted: bool,
+    pub skip_authorization: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -189,6 +191,7 @@ impl From<OAuthApplication> for OAuthApplicationInfo {
             logo_url: app.logo_url,
             confidential: app.confidential,
             trusted: app.trusted,
+            skip_authorization: app.skip_authorization,
             created_at: app.created_at,
         }
     }
@@ -218,6 +221,9 @@ pub struct CreateOAuthApplicationRequest {
     pub description: Option<String>,
     pub homepage_url: Option<String>,
     pub confidential: Option<bool>,
+    // Admin-only fields
+    pub trusted: Option<bool>,
+    pub skip_authorization: Option<bool>,
 }
 
 /// Request to update an OAuth application

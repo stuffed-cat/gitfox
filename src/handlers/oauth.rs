@@ -14,7 +14,7 @@ use crate::models::{
     OAuthAuthorizeRequest, OAuthTokenRequest, OAuthTokenResponse,
     OAuthTokenRevocationRequest, OAuthUserInfoResponse,
     OAuthProviderRecord, OAuthProviderInfo, OAuthProvidersResponse,
-    OAuthIdentityInfo,
+    OAuthIdentityInfo, UserRole,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,6 +179,23 @@ pub async fn create_application(
     let scopes = req.scopes.unwrap_or_else(|| vec!["read_user".to_string()]);
     let confidential = req.confidential.unwrap_or(true);
 
+    // Check if user is admin
+    let is_admin = auth.role == "Admin";
+
+    // Only admins can create trusted applications
+    let trusted = if is_admin {
+        req.trusted.unwrap_or(false)
+    } else {
+        false
+    };
+
+    // Only trusted applications can skip authorization
+    let skip_authorization = if trusted && is_admin {
+        req.skip_authorization.unwrap_or(false)
+    } else {
+        false
+    };
+
     let redirect_uris_json = serde_json::to_value(&req.redirect_uris)
         .map_err(|e| AppError::InternalError(format!("JSON serialization error: {}", e)))?;
     let scopes_json = serde_json::to_value(&scopes)
@@ -188,8 +205,9 @@ pub async fn create_application(
         r#"
         INSERT INTO oauth_applications 
             (owner_id, name, uid, secret_hash, redirect_uris, scopes, 
-             description, homepage_url, confidential, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+             description, homepage_url, confidential, trusted, skip_authorization, 
+             created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
         RETURNING *
         "#
     )
@@ -202,6 +220,8 @@ pub async fn create_application(
     .bind(&req.description)
     .bind(&req.homepage_url)
     .bind(confidential)
+    .bind(trusted)
+    .bind(skip_authorization)
     .fetch_one(pool.get_ref())
     .await?;
 
@@ -424,8 +444,8 @@ pub async fn authorize(
         }
     }
 
-    // For trusted apps, skip consent and issue code directly
-    if app.trusted {
+    // For apps with skip_authorization enabled, skip consent and issue code directly
+    if app.skip_authorization {
         return issue_authorization_code(
             pool.get_ref(),
             &app,
@@ -438,7 +458,7 @@ pub async fn authorize(
         ).await;
     }
 
-    // For non-trusted apps, return info for consent screen
+    // For apps requiring authorization, return info for consent screen
     // In a real implementation, this would render an HTML consent page
     // For API purposes, we return JSON that the frontend can use
     Ok(HttpResponse::Ok().json(serde_json::json!({
@@ -1680,12 +1700,12 @@ pub async fn admin_list_providers(
     auth: AuthenticatedUser,
 ) -> AppResult<HttpResponse> {
     // Check admin role
-    let role = sqlx::query_scalar::<_, String>("SELECT role FROM users WHERE id = $1")
+    let role = sqlx::query_scalar::<_, UserRole>("SELECT role FROM users WHERE id = $1")
         .bind(auth.user_id)
         .fetch_one(pool.get_ref())
         .await?;
     
-    if role != "admin" {
+    if role != UserRole::Admin {
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }
 
@@ -1724,12 +1744,12 @@ pub async fn admin_create_provider(
     body: web::Json<CreateOAuthProviderRequest>,
 ) -> AppResult<HttpResponse> {
     // Check admin role
-    let role = sqlx::query_scalar::<_, String>("SELECT role FROM users WHERE id = $1")
+    let role = sqlx::query_scalar::<_, UserRole>("SELECT role FROM users WHERE id = $1")
         .bind(auth.user_id)
         .fetch_one(pool.get_ref())
         .await?;
     
-    if role != "admin" {
+    if role != UserRole::Admin {
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }
 
@@ -1816,12 +1836,12 @@ pub async fn admin_update_provider(
     body: web::Json<UpdateOAuthProviderRequest>,
 ) -> AppResult<HttpResponse> {
     // Check admin role
-    let role = sqlx::query_scalar::<_, String>("SELECT role FROM users WHERE id = $1")
+    let role = sqlx::query_scalar::<_, UserRole>("SELECT role FROM users WHERE id = $1")
         .bind(auth.user_id)
         .fetch_one(pool.get_ref())
         .await?;
     
-    if role != "admin" {
+    if role != UserRole::Admin {
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }
 
@@ -1924,12 +1944,12 @@ pub async fn admin_delete_provider(
     path: web::Path<i64>,
 ) -> AppResult<HttpResponse> {
     // Check admin role
-    let role = sqlx::query_scalar::<_, String>("SELECT role FROM users WHERE id = $1")
+    let role = sqlx::query_scalar::<_, UserRole>("SELECT role FROM users WHERE id = $1")
         .bind(auth.user_id)
         .fetch_one(pool.get_ref())
         .await?;
     
-    if role != "admin" {
+    if role != UserRole::Admin {
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }
 
@@ -1969,12 +1989,12 @@ pub async fn admin_get_provider(
     path: web::Path<i64>,
 ) -> AppResult<HttpResponse> {
     // Check admin role
-    let role = sqlx::query_scalar::<_, String>("SELECT role FROM users WHERE id = $1")
+    let role = sqlx::query_scalar::<_, UserRole>("SELECT role FROM users WHERE id = $1")
         .bind(auth.user_id)
         .fetch_one(pool.get_ref())
         .await?;
     
-    if role != "admin" {
+    if role != UserRole::Admin {
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }
 

@@ -1,0 +1,18 @@
+{
+  "name": "@gitfox/webide-fs",
+  "version": "1.0.0",
+  "description": "Virtual file system for GitFox WebIDE (BrowserFS-based)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@gitfox/api-client": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

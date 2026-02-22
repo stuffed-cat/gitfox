@@ -33,11 +33,14 @@ pub struct ServerConfigResponse {
     pub ssh_clone_url_prefix: String,
     /// HTTP clone URL prefix, e.g. "http://localhost:8080/"
     pub http_clone_url_prefix: String,
+    /// Whether WebIDE is enabled
+    pub webide_enabled: bool,
 }
 
 /// GET /api/v1/config - Get public server configuration
 pub async fn get_server_config(
     config: web::Data<AppConfig>,
+    pool: web::Data<sqlx::PgPool>,
     req: actix_web::HttpRequest,
 ) -> HttpResponse {
     let connection_info = req.connection_info();
@@ -58,10 +61,25 @@ pub async fn get_server_config(
         String::new()
     };
     
+    // 查询 WebIDE 是否启用
+    let webide_enabled = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT value FROM system_configs WHERE key = 'webide_enabled'"
+    )
+    .fetch_optional(pool.get_ref())
+    .await
+    .ok()
+    .flatten()
+    .and_then(|v| {
+        // Try as bool first (for checkbox values), then as string
+        v.as_bool().or_else(|| v.as_str().map(|s| s == "true"))
+    })
+    .unwrap_or(false);
+    
     HttpResponse::Ok().json(ServerConfigResponse {
         ssh_enabled: config.ssh_enabled,
         ssh_clone_url_prefix,
         http_clone_url_prefix,
+        webide_enabled,
     })
 }
 

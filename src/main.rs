@@ -52,6 +52,11 @@ async fn main() -> std::io::Result<()> {
         log::error!("Failed to seed initial admin: {}", e);
     }
 
+    // Auto-configure WebIDE OAuth2 application if enabled
+    if let Err(e) = services::OAuthService::auto_configure_webide_oauth(&pg_pool, &config).await {
+        log::error!("Failed to auto-configure WebIDE OAuth2: {}", e);
+    }
+
     // Start instance heartbeat in Redis (for multi-instance coordination)
     let heartbeat_redis = redis_pool.clone();
     let heartbeat_instance_id = config.instance_id.clone();

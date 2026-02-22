@@ -257,6 +257,148 @@
         </div>
       </div>
 
+      <!-- WebIDE Section -->
+      <div class="settings-section">
+        <div class="section-header" @click="toggleSection('webide')">
+          <div class="section-title">
+            <h2>WebIDE</h2>
+            <p>在线集成开发环境，提供类似 VS Code 的代码编辑体验</p>
+          </div>
+          <svg class="chevron" :class="{ expanded: expandedSections.webide }" width="16" height="16" viewBox="0 0 16 16">
+            <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div v-show="expandedSections.webide" class="section-body">
+          <div class="form-group checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="form.webide_enabled" />
+              <span>启用 WebIDE</span>
+            </label>
+            <p class="form-hint">允许用户通过浏览器直接编辑代码文件</p>
+          </div>
+          
+          <div class="section-actions">
+            <button class="btn btn-primary" @click="saveSection('webide')" :disabled="saving">
+              {{ saving ? '保存中...' : '保存更改' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- VS Code Extension Marketplace Section -->
+      <div class="settings-section">
+        <div class="section-header" @click="toggleSection('vscode')">
+          <div class="section-title">
+            <h2>VS Code 扩展市场</h2>
+            <p>为 WebIDE 配置 VS Code 扩展仓库</p>
+          </div>
+          <svg class="chevron" :class="{ expanded: expandedSections.vscode }" width="16" height="16" viewBox="0 0 16 16">
+            <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div v-show="expandedSections.vscode" class="section-body">
+          <div class="form-group checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="form.vscode_extensions_enabled" />
+              <span>启用扩展市场</span>
+            </label>
+            <p class="form-hint">为所有用户启用 VS Code 扩展市场</p>
+          </div>
+          
+          <div class="subsection" v-if="form.vscode_extensions_enabled">
+            <h4>扩展仓库设置</h4>
+            <div class="form-group checkbox-group">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="form.vscode_extensions_use_open_vsx" />
+                <span>使用 Open VSX 扩展仓库</span>
+              </label>
+              <p class="form-hint">
+                <a href="https://open-vsx.org/" target="_blank" rel="noopener">了解更多关于 Open VSX 注册表</a>
+              </p>
+            </div>
+            
+            <div class="form-group">
+              <label for="vscode_extensions_service_url">服务 URL</label>
+              <input 
+                id="vscode_extensions_service_url" 
+                v-model="form.vscode_extensions_service_url" 
+                type="url" 
+                placeholder="https://open-vsx.org/vscode/gallery" 
+              />
+            </div>
+            
+            <div class="form-group">
+              <label for="vscode_extensions_item_url">项目 URL</label>
+              <input 
+                id="vscode_extensions_item_url" 
+                v-model="form.vscode_extensions_item_url" 
+                type="url" 
+                placeholder="https://open-vsx.org/vscode/item" 
+              />
+            </div>
+            
+            <div class="form-group">
+              <label for="vscode_extensions_resource_url">资源 URL 模板</label>
+              <input 
+                id="vscode_extensions_resource_url" 
+                v-model="form.vscode_extensions_resource_url" 
+                type="text" 
+                placeholder="https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}" 
+              />
+              <p class="form-hint">支持的变量: {publisher}, {name}, {version}, {path}</p>
+            </div>
+          </div>
+          
+          <div class="section-actions">
+            <button class="btn btn-primary" @click="saveSection('vscode')" :disabled="saving">
+              {{ saving ? '保存中...' : '保存更改' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Gitpod Integration Section -->
+      <div class="settings-section">
+        <div class="section-header" @click="toggleSection('gitpod')">
+          <div class="section-title">
+            <h2>Gitpod</h2>
+            <p>Gitpod 集成后，用户可以从 GitFox 浏览器选项卡启动开发环境</p>
+          </div>
+          <svg class="chevron" :class="{ expanded: expandedSections.gitpod }" width="16" height="16" viewBox="0 0 16 16">
+            <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div v-show="expandedSections.gitpod" class="section-body">
+          <div class="form-group checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="form.gitpod_enabled" />
+              <span>启用 Gitpod 集成</span>
+            </label>
+          </div>
+          
+          <div class="form-group" v-if="form.gitpod_enabled">
+            <label for="gitpod_url">Gitpod 网址</label>
+            <input 
+              id="gitpod_url" 
+              v-model="form.gitpod_url" 
+              type="url" 
+              placeholder="https://gitpod.io/" 
+            />
+            <p class="form-hint">
+              配置为读取 GitFox 项目的 Gitpod 实例的 URL，例如 https://gitpod.example.com。
+              要使用集成，每个用户还必须在其 GitFox 账户上启用 Gitpod。
+              <a href="https://www.gitpod.io/docs" target="_blank" rel="noopener">如何启用它？</a>
+            </p>
+          </div>
+          
+          <div class="section-actions">
+            <button class="btn btn-primary" @click="saveSection('gitpod')" :disabled="saving">
+              {{ saving ? '保存中...' : '保存更改' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- SMTP Settings Section -->
       <div class="settings-section">
         <div class="section-header" @click="toggleSection('smtp')">
@@ -363,6 +505,9 @@ const expandedSections = reactive({
   appearance: false,
   terms: false,
   cicd: false,
+  webide: false,
+  vscode: false,
+  gitpod: false,
   smtp: false,
 })
 
@@ -390,6 +535,17 @@ const form = reactive({
   ci_log_streaming_enabled: true,
   regular_runner_quota_minutes: 2000,
   pro_runner_quota_minutes: 0,
+  // WebIDE settings
+  webide_enabled: false,
+  // VS Code Extension Marketplace settings
+  vscode_extensions_enabled: false,
+  vscode_extensions_use_open_vsx: true,
+  vscode_extensions_service_url: 'https://open-vsx.org/vscode/gallery',
+  vscode_extensions_item_url: 'https://open-vsx.org/vscode/item',
+  vscode_extensions_resource_url: 'https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}',
+  // Gitpod settings
+  gitpod_enabled: false,
+  gitpod_url: 'https://gitpod.io/',
 })
 
 // SMTP config from environment (read-only)
@@ -430,6 +586,20 @@ const sectionKeys: Record<string, string[]> = {
     'ci_log_streaming_enabled',
     'regular_runner_quota_minutes',
     'pro_runner_quota_minutes',
+  ],
+  webide: [
+    'webide_enabled',
+  ],
+  vscode: [
+    'vscode_extensions_enabled',
+    'vscode_extensions_use_open_vsx',
+    'vscode_extensions_service_url',
+    'vscode_extensions_item_url',
+    'vscode_extensions_resource_url',
+  ],
+  gitpod: [
+    'gitpod_enabled',
+    'gitpod_url',
   ],
 }
 

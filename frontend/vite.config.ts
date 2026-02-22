@@ -13,11 +13,12 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 3000,
     proxy: {
-      // WebIDE 独立 SPA 代理
-      '/ide': {
+      // WebIDE (VS Code Web) - 独立运行，与主 SPA 分离
+      // 开发时代理到 webide 的 vite dev server (不做路径重写)
+      '/-/ide': {
         target: 'http://localhost:3002',
         changeOrigin: true,
-        ws: true,  // 启用 WebSocket 支持 (用于 Vite HMR)
+        ws: true,  // WebSocket 支持 (HMR + WebIDE 通信)
       },
       '/api': {
         target: 'http://localhost:8081',
@@ -28,7 +29,9 @@ export default defineConfig({
         target: 'http://localhost:8081',
         changeOrigin: true,
       },
-      // OAuth API 端点转发 (token, revoke, userinfo - 不包括 authorize)
+      // OAuth API 端点转发 (token, revoke, userinfo)
+      // 注意：/oauth/authorize 由前端 Vue router 处理（OAuthAuthorizeView.vue）
+      // 前端会调用 /api/v1/oauth/authorize/info 和 /api/v1/oauth/authorize/confirm
       '/oauth/token': {
         target: 'http://localhost:8081',
         changeOrigin: true,

@@ -727,8 +727,8 @@ async fn get_pending_job(pool: &PgPool, runner_id: i64, redis: &deadpool_redis::
                     .execute(pool)
                     .await;
                     
-                    // Try to get another job
-                    return get_pending_job(pool, runner_id, redis).await;
+                    // Try to get another job (use Box::pin for recursion)
+                    return Box::pin(get_pending_job(pool, runner_id, redis)).await;
                 }
                 Err(e) => {
                     warn!("Failed to check runner quota: {}", e);

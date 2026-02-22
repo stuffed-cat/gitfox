@@ -181,6 +181,10 @@ pub struct Config {
     pub webauthn_origin: String,
     /// Instance identifier for multi-instance deployment (hostname:pid)
     pub instance_id: String,
+    /// WebIDE OAuth2 client ID (固定值，用于识别 WebIDE 应用)
+    pub webide_client_id: String,
+    /// WebIDE OAuth2 redirect URI path
+    pub webide_redirect_uri_path: String,
 }
 
 impl Config {
@@ -271,6 +275,10 @@ impl Config {
                 .unwrap_or_else(|_| env::var("GITFOX_BASE_URL")
                     .unwrap_or_else(|_| "http://localhost:8080".to_string())),
             instance_id,
+            webide_client_id: env::var("WEBIDE_CLIENT_ID")
+                .unwrap_or("gitfox-webide".to_string()),
+            webide_redirect_uri_path: env::var("WEBIDE_REDIRECT_URI_PATH")
+                .unwrap_or("/-/ide/oauth/callback".to_string()),
         }
     }
 }

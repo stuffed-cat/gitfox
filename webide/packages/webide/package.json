@@ -1,0 +1,25 @@
+{
+  "name": "@gitfox/webide",
+  "version": "1.0.0",
+  "description": "GitFox WebIDE main entry - provides start() API",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@gitfox/oauth-client": "*",
+    "@gitfox/api-client": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

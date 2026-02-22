@@ -25,7 +25,7 @@ const routes = [
     path: '/oauth/authorize',
     name: 'OAuthAuthorize',
     component: () => import('@/views/auth/OAuthAuthorizeView.vue'),
-    meta: { guest: true }  // OAuth authorization page should not show sidebar
+    meta: { requiresAuth: true }  // OAuth authorization requires login
   },
   {
     path: '/confirm-email',
@@ -432,6 +432,16 @@ router.beforeEach((to, _from, next) => {
     // 需要管理员权限但非管理员
     next({ name: 'Home' })
   } else if (to.meta.guest && authStore.isAuthenticated) {
+    // 用户已登录但访问 guest 页面
+    // 特殊处理：如果是 /login 且有 redirect 参数指向 /oauth/authorize，直接导航过去
+    if (to.path === '/login' && to.query.redirect) {
+      const redirectPath = decodeURIComponent(to.query.redirect as string)
+      if (redirectPath.startsWith('/oauth/authorize')) {
+        // 直接用 router.push 导航到 OAuth 授权页面
+        next(redirectPath)
+        return
+      }
+    }
     next({ name: 'Home' })
   } else {
     next()

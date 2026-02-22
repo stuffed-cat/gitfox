@@ -1,30 +1,23 @@
 {
-  "name": "gitfox-webide",
+  "name": "@gitfox/web-ide",
   "version": "1.0.0",
-  "description": "GitFox WebIDE - A GitLab-style Web IDE with VSCode extension support",
+  "description": "GitFox WebIDE - VS Code based Web IDE with GitFox integration",
   "type": "module",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc && vite build",
+    "build": "vite build",
     "preview": "vite preview",
-    "type-check": "vue-tsc --noEmit"
-  },
-  "dependencies": {
-    "vue": "^3.4.0",
-    "vue-router": "^4.2.0",
-    "pinia": "^2.1.0",
-    "monaco-editor": "^0.45.0",
-    "xterm": "^5.3.0",
-    "xterm-addon-fit": "^0.8.0",
-    "axios": "^1.6.0",
-    "idb-keyval": "^6.2.0"
+    "build:vscode": "node scripts/build-vscode.js",
+    "postinstall": "node scripts/postinstall.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@vitejs/plugin-vue": "^5.0.0",
-    "sass": "^1.70.0",
     "typescript": "^5.3.0",
     "vite": "^5.0.0",
-    "vue-tsc": "^2.0.0"
+    "tar": "^7.0.0"
   }
 }
