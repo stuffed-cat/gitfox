@@ -1,5 +1,6 @@
 use actix_web::{web, HttpResponse};
 use actix_multipart::Multipart;
+use deadpool_redis::Pool as RedisPool;
 use sqlx::PgPool;
 use std::io::Write;
 use std::path::Path;
@@ -7,7 +8,7 @@ use futures::stream::TryStreamExt;
 
 use crate::error::{AppResult, AppError};
 use crate::models::{UpdateUserRequest, UserInfo};
-use crate::services::UserService;
+use crate::services::{UserService, RunnerUsageService};
 use crate::middleware::auth::AuthenticatedUser;
 
 #[derive(Debug, serde::Deserialize)]
@@ -210,3 +211,44 @@ pub async fn upload_avatar(
     Err(AppError::BadRequest("No avatar field in request".to_string()))
 }
 
+/// GET /api/v1/user/runner-usage - Get current user's runner usage
+pub async fn get_runner_usage(
+    pool: web::Data<PgPool>,
+    redis: web::Data<RedisPool>,
+    auth: AuthenticatedUser,
+) -> AppResult<HttpResponse> {
+    let summary = RunnerUsageService::get_usage_summary(pool.get_ref(), redis.get_ref(), auth.user_id).await?;
+    Ok(HttpResponse::Ok().json(summary))
+}
+
+/// GET /api/v1/user/runner-usage/history - Get current user's runner usage history
+#[derive(Debug, serde::Deserialize)]
+pub struct UsageHistoryQuery {
+    pub limit: Option<i64>,
+}
+
+pub async fn get_runner_usage_history(
+    pool: web::Data<PgPool>,
+    auth: AuthenticatedUser,
+    query: web::Query<UsageHistoryQuery>,
+) -> AppResult<HttpResponse> {
+    let limit = query.limit.unwrap_or(50).min(200);
+    let history = RunnerUsageService::get_usage_history(pool.get_ref(), auth.user_id, limit).await?;
+    Ok(HttpResponse::Ok().json(history))
+}
+
+/// GET /api/v1/user/runner-usage/stats - Get current user's monthly statistics
+#[derive(Debug, serde::Deserialize)]
+pub struct MonthlyStatsQuery {
+    pub months: Option<i32>,
+}
+
+pub async fn get_runner_usage_stats(
+    pool: web::Data<PgPool>,
+    auth: AuthenticatedUser,
+    query: web::Query<MonthlyStatsQuery>,
+) -> AppResult<HttpResponse> {
+    let months = query.months.unwrap_or(6).min(12);
+    let stats = RunnerUsageService::get_monthly_stats(pool.get_ref(), auth.user_id, months).await?;
+    Ok(HttpResponse::Ok().json(stats))
+}

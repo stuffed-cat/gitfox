@@ -1,6 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::config::Config;
 use crate::middleware::auth::{AdminUser, AuthenticatedUser};
+use crate::services::RunnerUsageService;
 use actix::{Actor, ActorContext, Addr, AsyncContext, Handler, Message as ActixMessage, StreamHandler};
 use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web_actors::ws;
@@ -186,6 +187,13 @@ impl Handler<ProcessMessage> for RunnerWebSocket {
                         error!("Failed to update job status: {}", e);
                     }
                     
+                    // Record runner usage when job finishes
+                    if status == "success" || status == "failed" || status == "canceled" {
+                        if let Err(e) = record_job_usage(&pool_clone, &redis_clone, job_id).await {
+                            error!("Failed to record runner usage for job {}: {}", job_id, e);
+                        }
+                    }
+                    
                     // Update pipeline status based on all jobs
                     if let Err(e) = update_pipeline_status(pool.get_ref(), job_id).await {
                         error!("Failed to update pipeline status: {}", e);
@@ -237,8 +245,9 @@ impl Handler<ProcessMessage> for RunnerWebSocket {
             }
             RunnerMessage::RequestJob => {
                 if let Some(runner_id) = current_runner_id {
+                    let redis_clone = self.redis.clone();
                     actix_web::rt::spawn(async move {
-                        match get_pending_job(pool.get_ref(), runner_id).await {
+                        match get_pending_job(pool.get_ref(), runner_id, &redis_clone).await {
                             Ok(Some(job)) => {
                                 info!("Assigning job {} to runner {}", job.id, runner_id);
                                 let response = ServerMessage::JobAssigned { job };
@@ -600,6 +609,46 @@ async fn append_job_log(pool: &PgPool, job_id: i64, output: &str) -> AppResult<(
     Ok(())
 }
 
+/// Record runner usage for a completed job
+async fn record_job_usage(pool: &PgPool, redis: &deadpool_redis::Pool, job_id: i64) -> AppResult<()> {
+    // Get job info including user_id and duration
+    let job_info = sqlx::query(
+        r#"
+        SELECT j.started_at, j.finished_at, p.triggered_by as user_id
+        FROM jobs j
+        INNER JOIN pipelines p ON j.pipeline_id = p.id
+        WHERE j.id = $1
+        "#
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(row) = job_info {
+        let started_at: Option<chrono::DateTime<chrono::Utc>> = row.try_get("started_at")?;
+        let finished_at: Option<chrono::DateTime<chrono::Utc>> = row.try_get("finished_at")?;
+        let user_id: Option<i64> = row.try_get("user_id")?;
+
+        if let (Some(start), Some(end), Some(uid)) = (started_at, finished_at, user_id) {
+            let duration = (end - start).num_seconds();
+            // Convert to minutes, rounding up (at least 1 minute)
+            let minutes = ((duration as f64 / 60.0).ceil() as i32).max(1);
+
+            // Record usage
+            match RunnerUsageService::record_usage(pool, uid, job_id, minutes).await {
+                Ok(_) => {
+                    info!("Recorded {} minutes of runner usage for user {} (job {})", minutes, uid, job_id);
+                }
+                Err(e) => {
+                    error!("Failed to record runner usage: {}", e);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn update_runner_contact(pool: &PgPool, runner_id: i64) -> AppResult<()> {
     sqlx::query(
         "UPDATE runners SET last_contact = NOW() WHERE id = $1"
@@ -610,7 +659,7 @@ async fn update_runner_contact(pool: &PgPool, runner_id: i64) -> AppResult<()> {
     Ok(())
 }
 
-async fn get_pending_job(pool: &PgPool, runner_id: i64) -> AppResult<Option<Job>> {
+async fn get_pending_job(pool: &PgPool, runner_id: i64, redis: &deadpool_redis::Pool) -> AppResult<Option<Job>> {
     // Get runner info (tags and run_untagged)
     let runner_info = sqlx::query_as::<_, (Vec<String>, bool)>(
         "SELECT tags, run_untagged FROM runners WHERE id = $1"
@@ -622,57 +671,88 @@ async fn get_pending_job(pool: &PgPool, runner_id: i64) -> AppResult<Option<Job>
     let (runner_tags, run_untagged) = runner_info;
 
     // Find pending job that matches runner tags
-    // Match logic:
-    // 1. Job has specific tags -> runner must have ALL those tags
-    // 2. Job has no tags && runner.run_untagged = true
-    // 3. Job has no tags && runner has no tags
+    // Before assigning, check user's runner quota
     let job_record = sqlx::query(
         r#"
-        UPDATE jobs
-        SET status = 'running', runner_id = $1, started_at = NOW()
-        WHERE id = (
-            SELECT j.id FROM jobs j
-            WHERE j.status = 'pending'
-            AND (
-                -- Job has tags: runner must have all of them
-                (j.config->'tags' IS NOT NULL 
-                 AND j.config->'tags' != 'null'::jsonb
-                 AND $2::TEXT[] @> ARRAY(
-                   SELECT jsonb_array_elements_text(j.config->'tags')
-                 ))
-                OR
-                -- Job has no tags: runner can run untagged jobs
-                ((j.config->'tags' IS NULL OR j.config->'tags' = 'null'::jsonb OR jsonb_array_length(COALESCE(j.config->'tags', '[]'::jsonb)) = 0)
-                 AND ($3 = true OR $4 = 0))
-            )
-            ORDER BY j.created_at ASC
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED
+        SELECT j.id, j.pipeline_id, j.project_id, j.name, j.stage, j.config, j.allow_failure, j.when_condition,
+               p.triggered_by as user_id
+        FROM jobs j
+        INNER JOIN pipelines p ON j.pipeline_id = p.id
+        WHERE j.status = 'pending'
+        AND (
+            -- Job has tags: runner must have all of them
+            (j.config->'tags' IS NOT NULL 
+             AND j.config->'tags' != 'null'::jsonb
+             AND $1::TEXT[] @> ARRAY(
+               SELECT jsonb_array_elements_text(j.config->'tags')
+             ))
+            OR
+            -- Job has no tags: runner can run untagged jobs
+            ((j.config->'tags' IS NULL OR j.config->'tags' = 'null'::jsonb OR jsonb_array_length(COALESCE(j.config->'tags', '[]'::jsonb)) = 0)
+             AND ($2 = true OR $3 = 0))
         )
-        RETURNING id, pipeline_id, project_id, name, stage, config, allow_failure, when_condition
+        ORDER BY j.created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
         "#
     )
-    .bind(runner_id)
     .bind(&runner_tags)
     .bind(run_untagged)
     .bind(runner_tags.len() as i32)
     .fetch_optional(pool)
-    .await?
-    .map(|row| -> AppResult<(i64, i64, i64, String, String, serde_json::Value, Option<bool>, Option<String>)> {
-        Ok((
-            row.try_get("id")?,
-            row.try_get("pipeline_id")?,
-            row.try_get("project_id")?,
-            row.try_get("name")?,
-            row.try_get("stage")?,
-            row.try_get("config")?,
-            row.try_get("allow_failure")?,
-            row.try_get("when_condition")?,
-        ))
-    })
-    .transpose()?;
+    .await?;
 
-    if let Some((job_id, pipeline_id, project_id, name, stage, config_json, allow_failure, when_condition)) = job_record {
+    if let Some(row) = job_record {
+        let job_id: i64 = row.try_get("id")?;
+        let user_id: Option<i64> = row.try_get("user_id")?;
+        
+        // Check runner quota for the user who triggered the pipeline
+        if let Some(uid) = user_id {
+            match RunnerUsageService::check_quota(pool, redis, uid).await {
+                Ok(true) => {
+                    // User has quota, proceed with job assignment
+                }
+                Ok(false) => {
+                    // User exceeded quota, mark job as failed
+                    let _ = sqlx::query(
+                        r#"
+                        UPDATE jobs 
+                        SET status = 'failed',
+                            finished_at = NOW(),
+                            error_message = 'Runner quota exceeded for this month. Please upgrade to PRO or wait for next month.'
+                        WHERE id = $1
+                        "#
+                    )
+                    .bind(job_id)
+                    .execute(pool)
+                    .await;
+                    
+                    // Try to get another job
+                    return get_pending_job(pool, runner_id, redis).await;
+                }
+                Err(e) => {
+                    warn!("Failed to check runner quota: {}", e);
+                    // Continue with job assignment on quota check error
+                }
+            }
+        }
+
+        // Update job status to running
+        let _ = sqlx::query(
+            "UPDATE jobs SET status = 'running', runner_id = $1, started_at = NOW() WHERE id = $2"
+        )
+        .bind(runner_id)
+        .bind(job_id)
+        .execute(pool)
+        .await?;
+
+        let pipeline_id: i64 = row.try_get("pipeline_id")?;
+        let project_id: i64 = row.try_get("project_id")?;
+        let name: String = row.try_get("name")?;
+        let stage: String = row.try_get("stage")?;
+        let config_json: serde_json::Value = row.try_get("config")?;
+        let allow_failure: Option<bool> = row.try_get("allow_failure")?;
+        let when_condition: Option<String> = row.try_get("when_condition")?;
         let config: JobConfig = serde_json::from_value(config_json)?;
 
         // Get project info for repository URL

@@ -236,6 +236,19 @@
             </label>
             <p class="form-hint">允许在作业运行时实时查看日志输出</p>
           </div>
+          
+          <div class="form-group">
+            <label for="regular_runner_quota_minutes">非 PRO 用户 Runner 限额（分钟/月）</label>
+            <input id="regular_runner_quota_minutes" v-model.number="form.regular_runner_quota_minutes" type="number" min="0" max="1000000" />
+            <p class="form-hint">0 表示不限制。非 PRO 用户每月可使用的 Runner 分钟数</p>
+          </div>
+          
+          <div class="form-group">
+            <label for="pro_runner_quota_minutes">PRO 用户 Runner 限额（分钟/月）</label>
+            <input id="pro_runner_quota_minutes" v-model.number="form.pro_runner_quota_minutes" type="number" min="0" max="1000000" />
+            <p class="form-hint">0 表示不限制。PRO 用户每月可使用的 Runner 分钟数</p>
+          </div>
+          
           <div class="section-actions">
             <button class="btn btn-primary" @click="saveSection('cicd')" :disabled="saving">
               {{ saving ? '保存中...' : '保存更改' }}
@@ -375,6 +388,8 @@ const form = reactive({
   ci_max_log_size_mb: 100,
   ci_runner_registration_enabled: true,
   ci_log_streaming_enabled: true,
+  regular_runner_quota_minutes: 2000,
+  pro_runner_quota_minutes: 0,
 })
 
 // SMTP config from environment (read-only)
@@ -413,6 +428,8 @@ const sectionKeys: Record<string, string[]> = {
     'ci_max_log_size_mb',
     'ci_runner_registration_enabled',
     'ci_log_streaming_enabled',
+    'regular_runner_quota_minutes',
+    'pro_runner_quota_minutes',
   ],
 }
 
