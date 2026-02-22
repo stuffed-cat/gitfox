@@ -31,6 +31,7 @@ pub struct AdminUserInfo {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub projects_count: i64,
+    pub is_pro: bool,
 }
 
 /// Admin user list with pagination
@@ -58,6 +59,7 @@ pub struct AdminUpdateUserRequest {
     pub is_active: Option<bool>,
     pub display_name: Option<String>,
     pub email: Option<String>,
+    pub is_pro: Option<bool>,
 }
 
 /// GET /api/v1/admin/dashboard - System overview statistics
@@ -149,7 +151,7 @@ pub async fn list_users(
     let count_sql = format!("SELECT COUNT(*) FROM users {}", where_clause);
     let list_sql = format!(
         r#"SELECT u.id, u.username, u.email, u.display_name, u.avatar_url, 
-                  u.role, u.is_active, u.created_at, u.updated_at,
+                  u.role, u.is_active, u.created_at, u.updated_at, u.is_pro,
                   COALESCE((SELECT COUNT(*) FROM projects p WHERE p.owner_id = u.id), 0) as projects_count
            FROM users u {}
            ORDER BY u.created_at DESC
@@ -237,6 +239,7 @@ struct AdminUserInfoRow {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub projects_count: i64,
+    pub is_pro: bool,
 }
 
 impl From<AdminUserInfoRow> for AdminUserInfo {
@@ -252,6 +255,7 @@ impl From<AdminUserInfoRow> for AdminUserInfo {
             created_at: row.created_at,
             updated_at: row.updated_at,
             projects_count: row.projects_count,
+            is_pro: row.is_pro,
         }
     }
 }
@@ -266,7 +270,7 @@ pub async fn get_user(
     
     let user = sqlx::query_as::<_, AdminUserInfoRow>(
         r#"SELECT u.id, u.username, u.email, u.display_name, u.avatar_url, 
-                  u.role, u.is_active, u.created_at, u.updated_at,
+                  u.role, u.is_active, u.created_at, u.updated_at, u.is_pro,
                   COALESCE((SELECT COUNT(*) FROM projects p WHERE p.owner_id = u.id), 0) as projects_count
            FROM users u WHERE u.id = $1"#
     )
@@ -310,6 +314,7 @@ pub async fn update_user(
             is_active = COALESCE($3, is_active),
             display_name = COALESCE($4, display_name),
             email = COALESCE($5, email),
+            is_pro = COALESCE($6, is_pro),
             updated_at = NOW()
         WHERE id = $1
         RETURNING *
@@ -320,6 +325,7 @@ pub async fn update_user(
     .bind(body.is_active)
     .bind(&body.display_name)
     .bind(&body.email)
+    .bind(body.is_pro)
     .fetch_optional(pool.get_ref())
     .await?
     .ok_or_else(|| crate::error::AppError::NotFound("User not found".to_string()))?;
@@ -352,6 +358,39 @@ pub async fn delete_user(
     }
 
     Ok(HttpResponse::NoContent().finish())
+}
+
+/// Request to set pro status
+#[derive(Debug, serde::Deserialize)]
+pub struct SetProStatusRequest {
+    pub is_pro: bool,
+}
+
+/// PUT /api/v1/admin/users/{id}/pro - Set user pro status
+pub async fn set_pro_status(
+    pool: web::Data<PgPool>,
+    _admin: AdminUser,
+    path: web::Path<i64>,
+    body: web::Json<SetProStatusRequest>,
+) -> AppResult<HttpResponse> {
+    let user_id = path.into_inner();
+
+    let user = sqlx::query_as::<_, crate::models::User>(
+        r#"
+        UPDATE users
+        SET is_pro = $2,
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#
+    )
+    .bind(user_id)
+    .bind(body.is_pro)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| crate::error::AppError::NotFound("User not found".to_string()))?;
+
+    Ok(HttpResponse::Ok().json(UserInfo::from(user)))
 }
 
 /// GET /api/v1/admin/settings/configs - Get all system configs

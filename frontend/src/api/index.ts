@@ -534,6 +534,10 @@ class ApiClient {
     deleteUser: async (id: string): Promise<void> => {
       await this.client.delete(`/admin/users/${id}`)
     },
+    setProStatus: async (id: string, isPro: boolean): Promise<User> => {
+      const response = await this.client.put(`/admin/users/${id}/pro`, { is_pro: isPro })
+      return response.data
+    },
     getConfigs: async (): Promise<Record<string, any>> => {
       const response = await this.client.get('/admin/settings/configs')
       return response.data

@@ -47,6 +47,7 @@
             <th>邮箱</th>
             <th>角色</th>
             <th>状态</th>
+            <th>PRO</th>
             <th>项目数</th>
             <th>注册时间</th>
             <th>操作</th>
@@ -71,6 +72,15 @@
               <span class="status-badge" :class="user.is_active ? 'active' : 'blocked'">
                 {{ user.is_active ? '活跃' : '已封禁' }}
               </span>
+            </td>
+            <td>
+              <span v-if="user.is_pro" class="pro-badge" title="PRO 用户">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right: 2px;">
+                  <path d="M6 1l1.545 3.13L11 4.635 8.5 7.09l.59 3.41L6 8.885 2.91 10.5l.59-3.41L1 4.635l3.455-.505L6 1z" fill="currentColor"/>
+                </svg>
+                PRO
+              </span>
+              <span v-else class="text-muted">-</span>
             </td>
             <td class="number-cell">{{ user.projects_count }}</td>
             <td class="date-cell">{{ formatDate(user.created_at) }}</td>
@@ -106,6 +116,17 @@
                       @click="toggleBlock(user)"
                     >解除封禁</button>
                     <div class="dropdown-divider"></div>
+                    <button
+                      v-if="!user.is_pro"
+                      class="dropdown-item success"
+                      @click="togglePro(user)"
+                    >设为 PRO 用户</button>
+                    <button
+                      v-else
+                      class="dropdown-item warning"
+                      @click="togglePro(user)"
+                    >取消 PRO 状态</button>
+                    <div class="dropdown-divider"></div>
                     <button class="dropdown-item danger" @click="confirmDelete(user)">删除用户</button>
                   </div>
                 </Transition>
@@ -113,7 +134,7 @@
             </td>
           </tr>
           <tr v-if="users.length === 0">
-            <td colspan="7" class="empty-cell">没有找到用户</td>
+            <td colspan="8" class="empty-cell">没有找到用户</td>
           </tr>
         </tbody>
       </table>
@@ -238,6 +259,16 @@ async function toggleBlock(user: AdminUserInfo) {
   try {
     await api.admin.updateUser(user.id, { is_active: !user.is_active })
     user.is_active = !user.is_active
+    activeActions.value = null
+  } catch (err: any) {
+    alert(err.response?.data?.message || '操作失败')
+  }
+}
+
+async function togglePro(user: AdminUserInfo) {
+  try {
+    await api.admin.setProStatus(user.id, !user.is_pro)
+    user.is_pro = !user.is_pro
     activeActions.value = null
   } catch (err: any) {
     alert(err.response?.data?.message || '操作失败')
@@ -456,6 +487,23 @@ onUnmounted(() => {
 
   &.active { background: rgba(16, 133, 72, 0.1); color: #108548; }
   &.blocked { background: rgba(221, 43, 14, 0.1); color: #dd2b0e; }
+}
+
+.pro-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: $font-size-xs;
+  font-weight: $font-weight-semibold;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.text-muted {
+  color: $text-muted;
 }
 
 .number-cell { color: $text-secondary; text-align: center; }

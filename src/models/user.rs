@@ -37,6 +37,9 @@ pub struct User {
     pub busy: bool,
     pub status_set_at: Option<DateTime<Utc>>,
     pub status_clear_at: Option<DateTime<Utc>>,
+    // Pro user flag
+    #[serde(default)]
+    pub is_pro: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
@@ -96,6 +99,7 @@ pub struct UserInfo {
     pub busy: bool,
     pub status_set_at: Option<DateTime<Utc>>,
     pub status_clear_at: Option<DateTime<Utc>>,
+    pub is_pro: bool,
 }
 
 impl From<User> for UserInfo {
@@ -114,6 +118,7 @@ impl From<User> for UserInfo {
             busy: user.busy,
             status_set_at: user.status_set_at,
             status_clear_at: user.status_clear_at,
+            is_pro: user.is_pro,
         }
     }
 }

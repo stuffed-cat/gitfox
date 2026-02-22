@@ -12,6 +12,7 @@ export interface User {
   busy?: boolean
   status_set_at?: string
   status_clear_at?: string
+  is_pro?: boolean
 }
 
 export interface LoginRequest {
@@ -418,6 +419,7 @@ export interface AdminUserInfo {
   created_at: string
   updated_at: string
   projects_count: number
+  is_pro: boolean
 }
 
 export interface AdminUserListResponse {
@@ -432,6 +434,7 @@ export interface AdminUpdateUserRequest {
   is_active?: boolean
   display_name?: string
   email?: string
+  is_pro?: boolean
 }
 
 export type SystemConfigMap = Record<string, any>

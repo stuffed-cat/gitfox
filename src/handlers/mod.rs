@@ -115,6 +115,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/admin/users/{id}", web::get().to(admin::get_user))
             .route("/admin/users/{id}", web::put().to(admin::update_user))
             .route("/admin/users/{id}", web::delete().to(admin::delete_user))
+            .route("/admin/users/{id}/pro", web::put().to(admin::set_pro_status))
             .route("/admin/settings/configs", web::get().to(admin::get_configs))
             .route("/admin/settings/configs", web::put().to(admin::update_configs))
             // Admin SMTP settings
