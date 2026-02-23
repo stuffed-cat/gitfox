@@ -5,11 +5,17 @@
   "version": "1.0.0",
   "publisher": "gitfox",
   "engines": {
-    "vscode": "^1.95.0"
+    "vscode": "^1.109.0"
   },
   "categories": ["Other"],
-  "activationEvents": ["onFileSystem:gitfox", "*"],
+  "extensionKind": ["web"],
+  "activationEvents": ["*"],
   "browser": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
   "contributes": {},
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=browser --target=es2020 --minify"

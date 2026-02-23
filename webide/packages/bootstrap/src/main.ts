@@ -240,24 +240,19 @@ class WebIDEApp {
 
   private async loadExtensionConfig(): Promise<ExtensionConfig | null> {
     try {
-      const response = await fetch('/api/v1/admin/system-configs', {
-        headers: {
-          'Authorization': `Bearer ${this.accessToken}`,
-        },
-      });
+      const response = await fetch('/api/v1/config');
       
       if (!response.ok) return null;
       
-      const configs = await response.json();
-      const enabled = configs.find((c: any) => c.key === 'vscode_extensions_enabled')?.value === 'true';
+      const config = await response.json();
       
-      if (!enabled) return null;
+      if (!config.vscode_extensions_enabled) return null;
       
       return {
         enabled: true,
-        serviceUrl: configs.find((c: any) => c.key === 'vscode_marketplace_service_url')?.value,
-        itemUrl: configs.find((c: any) => c.key === 'vscode_marketplace_item_url')?.value,
-        resourceUrl: configs.find((c: any) => c.key === 'vscode_marketplace_resource_url')?.value,
+        serviceUrl: config.vscode_marketplace_service_url,
+        itemUrl: config.vscode_marketplace_item_url,
+        resourceUrl: config.vscode_marketplace_resource_url,
       };
     } catch {
       return null;
@@ -293,12 +288,13 @@ class WebIDEApp {
     
     const userInfo = await userInfoResponse.json();
     
-    const config = {
-      folderUri: { 
-        scheme: 'gitfox', 
-        authority: this.projectInfo!.owner, 
-        path: `/${this.projectInfo!.repo}` 
-      },
+    // 获取服务器配置以确定是否启用集成
+    const configResponse = await fetch('/api/v1/config');
+    const serverConfig = configResponse.ok ? await configResponse.json() : {};
+    
+    const config: any = {
+      // 嵌入器标识：禁用远程连接相关功能
+      embedderIdentifier: 'gitfox-webide',
       workspaceProvider: {
         payload: btoa(JSON.stringify({
           owner: this.projectInfo!.owner,
@@ -306,17 +302,42 @@ class WebIDEApp {
           ref: this.projectInfo!.ref,
         }))
       },
-      // 加载 GitFox 内置扩展
-      additionalBuiltinExtensions: [{
-        scheme: 'http',
-        path: '/-/ide/extensions/gitfox-provider'
-      }],
+      // 加载 GitFox 内置扩展 - 直接指向扩展的 package.json 所在目录
+      additionalBuiltinExtensions: [
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/extensions/gitfox-provider',
+        }
+      ],
       productConfiguration: {
         extensionsGallery: (window as any).__GITFOX_EXTENSION_GALLERY__,
         nameShort: 'GitFox IDE',
         nameLong: 'GitFox Web IDE',
-      }
+      },
+      // 禁用所有远程相关功能
+      settingsSyncOptions: {
+        enabled: false
+      },
+      // 显式禁用 remote authority
+      remoteAuthority: undefined,
+      _: []
     };
+    
+    // 只有在集成启用时才配置远程连接
+    if (serverConfig.gitfox_integration_enabled && serverConfig.openvscode_server_uri) {
+      // 集成模式：启用远程连接
+      delete config.embedderIdentifier;
+      config.remoteAuthority = serverConfig.openvscode_server_uri;
+      config.connectionToken = serverConfig.openvscode_server_uri.split('?token=')[1] || undefined;
+      // 使用后端返回的 commit 和 quality
+      if (serverConfig.openvscode_server_commit) {
+        config.productConfiguration.commit = serverConfig.openvscode_server_commit;
+      }
+      if (serverConfig.openvscode_server_quality) {
+        config.productConfiguration.quality = serverConfig.openvscode_server_quality;
+      }
+    }
     
     // 在 window 上暴露配置给扩展
     (window as any).__GITFOX_CONFIG__ = {

@@ -35,6 +35,22 @@ pub struct ServerConfigResponse {
     pub http_clone_url_prefix: String,
     /// Whether WebIDE is enabled
     pub webide_enabled: bool,
+    /// Whether GitFox integration (backend connection) is enabled
+    pub gitfox_integration_enabled: bool,
+    /// OpenVSCode Server WebSocket URI (only when integration is enabled)
+    pub openvscode_server_uri: Option<String>,
+    /// OpenVSCode Server commit hash
+    pub openvscode_server_commit: Option<String>,
+    /// OpenVSCode Server quality (stable/insider)
+    pub openvscode_server_quality: Option<String>,
+    /// VS Code extension marketplace enabled
+    pub vscode_extensions_enabled: bool,
+    /// VS Code marketplace service URL
+    pub vscode_marketplace_service_url: Option<String>,
+    /// VS Code marketplace item URL
+    pub vscode_marketplace_item_url: Option<String>,
+    /// VS Code marketplace resource URL template
+    pub vscode_marketplace_resource_url: Option<String>,
 }
 
 /// GET /api/v1/config - Get public server configuration
@@ -61,25 +77,55 @@ pub async fn get_server_config(
         String::new()
     };
     
-    // 查询 WebIDE 是否启用
-    let webide_enabled = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT value FROM system_configs WHERE key = 'webide_enabled'"
+    // 查询 WebIDE 和 VS Code 扩展配置
+    let configs = sqlx::query_as::<_, (String, serde_json::Value)>(
+        "SELECT key, value FROM system_configs WHERE key IN ('webide_enabled', 'gitfox_integration_enabled', 'openvscode_server_uri', 'openvscode_server_commit', 'openvscode_server_quality', 'vscode_extensions_enabled', 'vscode_marketplace_service_url', 'vscode_marketplace_item_url', 'vscode_marketplace_resource_url')"
     )
-    .fetch_optional(pool.get_ref())
+    .fetch_all(pool.get_ref())
     .await
-    .ok()
-    .flatten()
-    .and_then(|v| {
-        // Try as bool first (for checkbox values), then as string
-        v.as_bool().or_else(|| v.as_str().map(|s| s == "true"))
-    })
-    .unwrap_or(false);
+    .unwrap_or_default();
+    
+    let get_bool_config = |key: &str| -> bool {
+        configs.iter()
+            .find(|(k, _)| k == key)
+            .and_then(|(_, v)| v.as_bool().or_else(|| v.as_str().map(|s| s == "true")))
+            .unwrap_or(false)
+    };
+    
+    let get_string_config = |key: &str| -> Option<String> {
+        configs.iter()
+            .find(|(k, _)| k == key)
+            .and_then(|(_, v)| v.as_str().map(|s| s.to_string()))
+    };
+    
+    let webide_enabled = get_bool_config("webide_enabled");
+    let gitfox_integration_enabled = get_bool_config("gitfox_integration_enabled");
+    let vscode_extensions_enabled = get_bool_config("vscode_extensions_enabled");
+    
+    // 只有在集成启用时才返回服务器信息
+    let (openvscode_server_uri, openvscode_server_commit, openvscode_server_quality) = if gitfox_integration_enabled {
+        (
+            get_string_config("openvscode_server_uri"),
+            get_string_config("openvscode_server_commit"),
+            get_string_config("openvscode_server_quality"),
+        )
+    } else {
+        (None, None, None)
+    };
     
     HttpResponse::Ok().json(ServerConfigResponse {
         ssh_enabled: config.ssh_enabled,
         ssh_clone_url_prefix,
         http_clone_url_prefix,
         webide_enabled,
+        gitfox_integration_enabled,
+        openvscode_server_uri,
+        openvscode_server_commit,
+        openvscode_server_quality,
+        vscode_extensions_enabled,
+        vscode_marketplace_service_url: get_string_config("vscode_marketplace_service_url"),
+        vscode_marketplace_item_url: get_string_config("vscode_marketplace_item_url"),
+        vscode_marketplace_resource_url: get_string_config("vscode_marketplace_resource_url"),
     })
 }
 

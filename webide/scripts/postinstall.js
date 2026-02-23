@@ -6,19 +6,28 @@
  */
 
 import { execSync } from 'child_process'
-import { existsSync, mkdirSync, createWriteStream } from 'fs'
+import { existsSync, mkdirSync, createWriteStream, readFileSync, writeFileSync } from 'fs'
 import { pipeline } from 'stream/promises'
 import { createGunzip } from 'zlib'
 import { extract } from 'tar'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import vm from 'vm'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STATIC_DIR = join(__dirname, '..', 'static', 'vscode')
+const EXTENSIONS_DIR = join(STATIC_DIR, 'extensions')
 
 // openvscode-server version to use
 const OPENVSCODE_VERSION = 'v1.109.5'
 const RELEASE_URL = `https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-${OPENVSCODE_VERSION}/openvscode-server-${OPENVSCODE_VERSION}-linux-x64.tar.gz`
+
+// VS Code Language Packs
+const LANGUAGE_PACKS = [
+  {
+    id: 'ms-ceintl.vscode-language-pack-zh-hans'
+  }
+]
 
 async function downloadAndExtract() {
   if (existsSync(STATIC_DIR)) {
@@ -45,9 +54,139 @@ async function downloadAndExtract() {
   }
 }
 
+async function downloadLanguagePacks() {
+  console.log('\nDownloading language packs...')
+  
+  for (const pack of LANGUAGE_PACKS) {
+    const packDir = join(EXTENSIONS_DIR, pack.id)
+    
+    if (existsSync(packDir)) {
+      console.log(`Language pack ${pack.id} already exists, skipping`)
+      continue
+    }
+    
+    console.log(`Downloading ${pack.id}...`)
+    
+    try {
+      // Fetch download URL from Open VSX
+      const apiUrl = `https://open-vsx.org/api/${pack.id.replace('.', '/')}/latest`
+      const response = await fetch(apiUrl)
+      const data = await response.json()
+      const downloadUrl = data.files.download
+      
+      if (!downloadUrl) {
+        throw new Error('Download URL not found in API response')
+      }
+      
+      mkdirSync(packDir, { recursive: true })
+      
+      // Download and extract vsix
+      const vsixPath = `/tmp/${pack.id}.vsix`
+      const cmd = `curl -L "${downloadUrl}" -o "${vsixPath}" && unzip -q "${vsixPath}" -d "${packDir}" && rm "${vsixPath}"`
+      execSync(cmd, { stdio: 'inherit' })
+      
+      console.log(`✓ Downloaded ${pack.id}`)
+    } catch (error) {
+      console.error(`Failed to download language pack ${pack.id}:`, error.message)
+      console.log('Continuing without this language pack...')
+    }
+  }
+}
+
+async function generateNLSFiles() {
+  console.log('\nGenerating NLS translation files...')
+  
+  // First, load the English messages as the base
+  const enFile = join(STATIC_DIR, 'out', 'nls.messages.js')
+  if (!existsSync(enFile)) {
+    console.error('English NLS file not found, cannot generate translations')
+    return
+  }
+  
+  // Load the English messages using VM sandbox
+  const enContent = readFileSync(enFile, 'utf-8')
+  const sandbox = { globalThis: { _VSCODE_NLS_MESSAGES: null } }
+  vm.createContext(sandbox)
+  vm.runInContext(enContent, sandbox)
+  const enMessages = sandbox.globalThis._VSCODE_NLS_MESSAGES
+  
+  if (!enMessages || !Array.isArray(enMessages)) {
+    console.error('Could not parse English NLS file')
+    return
+  }
+  
+  console.log(`Base English messages: ${enMessages.length}`)
+  
+  for (const pack of LANGUAGE_PACKS) {
+    const packDir = join(EXTENSIONS_DIR, pack.id, 'extension')
+    const translationFile = join(packDir, 'translations', 'main.i18n.json')
+    
+    if (!existsSync(translationFile)) {
+      console.log(`Translation file not found for ${pack.id}, skipping`)
+      continue
+    }
+    
+    try {
+      const translations = JSON.parse(readFileSync(translationFile, 'utf-8'))
+      
+      // Create translated messages array starting with English as fallback
+      const translatedMessages = [...enMessages]
+      
+      // Build index map from translation file
+      const indexMap = {}
+      function extractWithIndex(obj, prefix = '') {
+        for (const key in obj) {
+          const value = obj[key]
+          const fullKey = prefix ? `${prefix}/${key}` : key
+          if (typeof value === 'string') {
+            indexMap[fullKey] = value
+          } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+            extractWithIndex(value, fullKey)
+          }
+        }
+      }
+      
+      if (translations.contents) {
+        extractWithIndex(translations.contents)
+      }
+      
+      // Read the nls.keys.json to map translations to indices
+      const keysFile = join(STATIC_DIR, 'out', 'nls.keys.json')
+      if (existsSync(keysFile)) {
+        const keysData = JSON.parse(readFileSync(keysFile, 'utf-8'))
+        
+        // keysData is array of [modulePath, [key1, key2, ...]]
+        let messageIndex = 0
+        for (const [modulePath, keys] of keysData) {
+          for (const key of keys) {
+            const fullKey = `${modulePath}/${key}`
+            if (indexMap[fullKey]) {
+              translatedMessages[messageIndex] = indexMap[fullKey]
+            }
+            messageIndex++
+          }
+        }
+      }
+      
+      // Generate the NLS JavaScript file
+      const languageId = pack.id.includes('zh-hans') ? 'zh-cn' : 'en'
+      const nlsFile = join(STATIC_DIR, 'out', `nls.messages.${languageId}.js`)
+      const nlsContent = `globalThis._VSCODE_NLS_MESSAGES=${JSON.stringify(translatedMessages)};`
+      
+      writeFileSync(nlsFile, nlsContent, 'utf-8')
+      console.log(`✓ Generated ${nlsFile} (${translatedMessages.length} messages, ${Object.keys(indexMap).length} translated)`)
+    } catch (error) {
+      console.error(`Failed to generate NLS file for ${pack.id}:`, error.message)
+    }
+  }
+}
+
 // Only run if called directly
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  downloadAndExtract().catch(console.error)
+  downloadAndExtract()
+    .then(() => downloadLanguagePacks())
+    .then(() => generateNLSFiles())
+    .catch(console.error)
 }
 
 // export { downloadAndExtract }

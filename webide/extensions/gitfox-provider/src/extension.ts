@@ -59,6 +59,13 @@ export function activate(context: vscode.ExtensionContext) {
   );
   console.log('[GitFox] File system provider registered for gitfox://');
 
+  // 在扩展激活后，打开 gitfox:// 工作区
+  const folderUri = vscode.Uri.parse(`gitfox://${config.projectInfo.owner}/${config.projectInfo.repo}`);
+  console.log('[GitFox] Opening workspace:', folderUri.toString());
+  
+  // 使用 updateWorkspaceFolders 添加工作区
+  vscode.workspace.updateWorkspaceFolders(0, 0, { uri: folderUri });
+
   console.log('[GitFox] Extension activated successfully');
 }
 

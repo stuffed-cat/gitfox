@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run build --workspaces --if-present",
     "preview": "vite preview",
     "build:vscode": "node scripts/build-vscode.js",
     "postinstall": "node scripts/postinstall.js"
