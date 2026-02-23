@@ -30,6 +30,38 @@ class WebIDEApp {
   private apiClient: GitFoxApiClient | null = null;
   private oauthClient: GitFoxOAuthClient;
 
+  private async persistRuntimeConfig(config: unknown): Promise<void> {
+    try {
+      if (!('indexedDB' in window)) {
+        return;
+      }
+
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('gitfox-webide', 1);
+        request.onupgradeneeded = () => {
+          const database = request.result;
+          if (!database.objectStoreNames.contains('runtime')) {
+            database.createObjectStore('runtime');
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction('runtime', 'readwrite');
+        const store = tx.objectStore('runtime');
+        store.put(config, 'gitfox.config');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+
+      db.close();
+    } catch {
+    }
+  }
+
   constructor() {
     this.oauthClient = new GitFoxOAuthClient({
       gitfoxUrl: window.location.origin,
@@ -319,8 +351,16 @@ class WebIDEApp {
       settingsSyncOptions: {
         enabled: false
       },
-      // 显式禁用 remote authority
+      // 显式禁用 remote authority 和 connection
       remoteAuthority: undefined,
+      connectionToken: undefined,
+      // 禁用开发选项中的远程功能
+      developmentOptions: {
+        enableSmokeTestDriver: false,
+        logLevel: 0
+      },
+      // 禁用 WebSocket 工厂，防止 VS Code 尝试建立连接
+      webSocketFactory: null,
       _: []
     };
     
@@ -340,7 +380,7 @@ class WebIDEApp {
     }
     
     // 在 window 上暴露配置给扩展
-    (window as any).__GITFOX_CONFIG__ = {
+    const gitfoxConfig = {
       accessToken: this.accessToken,
       projectInfo: this.projectInfo,
       userInfo: {
@@ -349,8 +389,15 @@ class WebIDEApp {
         name: userInfo.name,
         email: userInfo.email,
       },
-      apiClient: this.apiClient,
     };
+
+    (window as any).__GITFOX_CONFIG__ = gitfoxConfig;
+    try {
+      localStorage.setItem('gitfox.webide.config', JSON.stringify(gitfoxConfig));
+      sessionStorage.setItem('gitfox.webide.config', JSON.stringify(gitfoxConfig));
+    } catch {
+    }
+    await this.persistRuntimeConfig(gitfoxConfig);
     
     // 替换模板变量
     html = html.replace(/\{\{WORKBENCH_WEB_BASE_URL\}\}/g, baseUrl);

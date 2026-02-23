@@ -6,7 +6,7 @@
  */
 
 import { execSync } from 'child_process'
-import { existsSync, mkdirSync, createWriteStream, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, createWriteStream, readFileSync, writeFileSync, readdirSync, statSync } from 'fs'
 import { pipeline } from 'stream/promises'
 import { createGunzip } from 'zlib'
 import { extract } from 'tar'
@@ -17,6 +17,8 @@ import vm from 'vm'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STATIC_DIR = join(__dirname, '..', 'static', 'vscode')
 const EXTENSIONS_DIR = join(STATIC_DIR, 'extensions')
+const DIST_VSCODE_DIR = join(__dirname, '..', 'dist', 'vscode')
+const DIST_DIR = join(__dirname, '..', 'dist')
 
 // openvscode-server version to use
 const OPENVSCODE_VERSION = 'v1.109.5'
@@ -52,6 +54,80 @@ async function downloadAndExtract() {
     console.log(`\nAnd extract to: ${STATIC_DIR}`)
     process.exit(1)
   }
+}
+
+function patchQualityAndCommit() {
+  const targets = [STATIC_DIR, DIST_VSCODE_DIR, DIST_DIR].filter((p) => existsSync(p))
+  if (targets.length === 0) {
+    console.log('No VS Code assets found to patch')
+    return
+  }
+
+  const replacers = [
+    {
+      description: 'quality/commit tuple',
+      regex: /quality:"[^"]+",version:"([^"]+)",commit:"[^"]+"/g,
+      replacement: 'quality:void 0,version:"$1",commit:void 0'
+    },
+    {
+      description: 'productConfiguration.commit literal',
+      regex: /productConfiguration\.commit="[^"]+"/g,
+      replacement: 'productConfiguration.commit=void 0'
+    },
+    {
+      description: 'productConfiguration.quality literal',
+      regex: /productConfiguration\.quality="[^"]+"/g,
+      replacement: 'productConfiguration.quality=void 0'
+    },
+    {
+      description: 'CLI commit variable',
+      regex: /COMMIT="[a-f0-9]+"/g,
+      replacement: 'COMMIT=""'
+    }
+  ]
+
+  let patchedFiles = 0
+  let patchedReplacements = 0
+
+  function walk(dir) {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry)
+      const stat = statSync(full)
+      if (stat.isDirectory()) {
+        // Skip node_modules to keep traversal fast
+        if (entry === 'node_modules') continue
+        walk(full)
+        continue
+      }
+
+      const isJs = full.endsWith('.js')
+      const isCli = full.endsWith('openvscode-server')
+      if (!isJs && !isCli) continue
+
+      let content = readFileSync(full, 'utf-8')
+      let changed = false
+      for (const { regex, replacement } of replacers) {
+        const next = content.replace(regex, replacement)
+        if (next !== content) {
+          content = next
+          changed = true
+          patchedReplacements += 1
+        }
+      }
+
+      if (changed) {
+        writeFileSync(full, content, 'utf-8')
+        patchedFiles += 1
+      }
+    }
+  }
+
+  for (const dir of targets) {
+    console.log(`Patching VS Code assets in ${dir}...`)
+    walk(dir)
+  }
+
+  console.log(`Patched ${patchedFiles} files (${patchedReplacements} replacement operations).`)
 }
 
 async function downloadLanguagePacks() {
@@ -183,10 +259,17 @@ async function generateNLSFiles() {
 
 // Only run if called directly
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  downloadAndExtract()
-    .then(() => downloadLanguagePacks())
-    .then(() => generateNLSFiles())
-    .catch(console.error)
+  const patchOnly = process.argv.includes('--patch-only')
+
+  if (patchOnly) {
+    patchQualityAndCommit()
+  } else {
+    downloadAndExtract()
+      .then(() => downloadLanguagePacks())
+      .then(() => generateNLSFiles())
+      .then(() => patchQualityAndCommit())
+      .catch(console.error)
+  }
 }
 
 // export { downloadAndExtract }

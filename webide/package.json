@@ -9,10 +9,12 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present && npm run patch:vscode",
     "preview": "vite preview",
     "build:vscode": "node scripts/build-vscode.js",
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "patch:vscode": "node scripts/postinstall.js --patch-only",
+    "postbuild": "npm run patch:vscode"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
