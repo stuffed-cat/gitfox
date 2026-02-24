@@ -199,6 +199,52 @@ function patchQualityAndCommit() {
   console.log(`Patched ${patchedFiles} files (${patchedReplacements} replacement operations).`)
 }
 
+/**
+ * 为 VS Code 内置扩展的 package.json 添加 extensionKind: ["web"]
+ * grammar/language/theme 等纯声明式扩展没有此字段时 VS Code web 会跳过加载。
+ */
+function patchExtensionsForWeb() {
+  const dirs = [EXTENSIONS_DIR, join(DIST_VSCODE_DIR, 'extensions')].filter(existsSync)
+  if (dirs.length === 0) {
+    console.log('No extensions directory found, skipping web extension patch')
+    return
+  }
+
+  let patched = 0
+  for (const dir of dirs) {
+    for (const entry of readdirSync(dir)) {
+      const pkgPath = join(dir, entry, 'package.json')
+      if (!existsSync(pkgPath)) continue
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
+
+        // 已有 extensionKind 的跳过（避免覆盖有意设为 ui-only 的扩展）
+        if (pkg.extensionKind) continue
+
+        const hasBrowser = !!pkg.browser
+        const hasMain = !!pkg.main
+
+        // 只有 main 没有 browser → 仅桌面端，跳过
+        if (hasMain && !hasBrowser) continue
+
+        // 有 browser 字段时，检查文件是否真的存在（有些构建只保留了 main）
+        if (hasBrowser) {
+          const browserFile = pkg.browser.replace(/\.(js)?$/, '') + '.js'
+          const browserPath = join(dir, entry, browserFile)
+          if (!existsSync(browserPath)) continue // browser 文件不存在，不加
+        }
+
+        pkg.extensionKind = ['web']
+        writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf-8')
+        patched++
+      } catch {
+        // 跳过解析失败的扩展
+      }
+    }
+  }
+  console.log(`Patched ${patched} extension package.json files with extensionKind: ["web"]`)
+}
+
 async function downloadLanguagePacks() {
   console.log('\nDownloading language packs...')
   
@@ -387,12 +433,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   if (patchOnly) {
     patchVSCodePackageJson()
+    patchExtensionsForWeb()
     patchQualityAndCommit()
   } else {
     downloadAndExtract()
       .then(() => patchVSCodePackageJson())
       .then(() => downloadLanguagePacks())
       .then(() => generateNLSFiles())
+      .then(() => patchExtensionsForWeb())
       .then(() => patchQualityAndCommit())
       .catch(console.error)
   }
