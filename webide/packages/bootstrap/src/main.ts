@@ -324,15 +324,15 @@ class WebIDEApp {
     const configResponse = await fetch('/api/v1/config');
     const serverConfig = configResponse.ok ? await configResponse.json() : {};
     
+    const { owner, repo, ref } = this.projectInfo!;
+
     const config: any = {
       // 嵌入器标识：禁用远程连接相关功能
       embedderIdentifier: 'gitfox-webide',
+      // 直接以 gitfox://{owner}/{repo} 作为单文件夹工作区根（不使用 .code-workspace 文件）
+      folderUri: { scheme: 'gitfox', authority: owner, path: `/${repo}` },
       workspaceProvider: {
-        payload: btoa(JSON.stringify({
-          owner: this.projectInfo!.owner,
-          repo: this.projectInfo!.repo,
-          ref: this.projectInfo!.ref,
-        }))
+        payload: btoa(JSON.stringify({ owner, repo, ref }))
       },
       // 加载 GitFox 内置扩展 - 直接指向扩展的 package.json 所在目录
       additionalBuiltinExtensions: [
@@ -402,6 +402,15 @@ class WebIDEApp {
     }
     await this.persistRuntimeConfig(gitfoxConfig);
     
+    // 替换 URL：用 ?folder=gitfox://{owner}/{repo} 替代可能的 ?workspace=…
+    // 确保 VS Code 以单文件夹模式打开，而非多根 .code-workspace
+    {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('workspace');
+      url.searchParams.set('folder', `gitfox://${owner}/${repo}`);
+      window.history.replaceState(null, '', url.toString());
+    }
+
     // 替换模板变量
     html = html.replace(/\{\{WORKBENCH_WEB_BASE_URL\}\}/g, baseUrl);
     html = html.replace(/\{\{WORKBENCH_WEB_CONFIGURATION\}\}/g, JSON.stringify(config).replace(/"/g, '&quot;'));

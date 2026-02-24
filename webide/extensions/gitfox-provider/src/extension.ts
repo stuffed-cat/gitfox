@@ -88,18 +88,11 @@ async function activateInternal(context: vscode.ExtensionContext): Promise<void>
   console.log('[GitFox] Page URL:', pageUrl);
   console.log('[GitFox] Initial file path:', initialFilePath);
 
-  // 打开 gitfox:// 工作区 —— 始终确保只有这一个根目录（单根时 VS Code 会自动展开）
-  const { owner, repo, ref } = config.projectInfo;
+  // 工作区文件夹已由 main.ts 在 workbench config 中通过 folderUri 设置，
+  // 此处不再调用 updateWorkspaceFolders，避免引入多根工作区或刷新循环。
+  const { owner, repo } = config.projectInfo;
   const folderUri = vscode.Uri.parse(`gitfox://${owner}/${repo}`);
-  console.log('[GitFox] Opening workspace:', folderUri.toString());
-
-  const existingFolders = vscode.workspace.workspaceFolders ?? [];
-  const isSingleRoot =
-    existingFolders.length === 1 && existingFolders[0].uri.toString() === folderUri.toString();
-  if (!isSingleRoot) {
-    // 替换所有已有文件夹，确保 gitfox 是唯一根（会自动展开根目录）
-    vscode.workspace.updateWorkspaceFolders(0, existingFolders.length, { uri: folderUri });
-  }
+  console.log('[GitFox] Workspace folder (from main.ts config):', folderUri.toString());
 
   // 等待 FileSystemProvider 就绪（最多 8 秒），然后打开初始文件
   void waitForFsReady(folderUri).then(ready => {
@@ -405,22 +398,28 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
   constructor(private config: GitFoxConfig) {}
 
   /**
-   * 从 URI 中提取相对于仓库根目录的文件路径
+   * 从 URI 提取相对于 repo 根目录的文件路径。
+   *
    * URI 格式: gitfox://{owner}/{repo}/{...path}
-   * uri.path = /{repo}/{...path}
-   * 需要去掉 /{repo}/ 前缀，得到真正的文件路径
+   *   uri.authority = owner
+   *   uri.path = '/{repo}/{...path}'
+   *
+   * 映射规则（全部映射到 repo 内的相对路径）：
+   *   path = '' | '/'            → '' （repo 根）
+   *   path = '/{repo}'           → '' （repo 根）
+   *   path = '/{repo}/{file}'    → '{file}'
+   *   path = '/{anything}'      → '{anything}' （fallback，去掉 '/')
    */
   private getFilePath(uri: vscode.Uri): string {
     const repo = this.config.projectInfo.repo;
     const prefix = `/${repo}/`;
     const rootPath = `/${repo}`;
 
-    if (uri.path === rootPath || uri.path === rootPath + '/' || uri.path === '/' || uri.path === '') {
+    if (uri.path === '' || uri.path === '/' || uri.path === rootPath || uri.path === rootPath + '/') {
       return '';
     } else if (uri.path.startsWith(prefix)) {
       return uri.path.slice(prefix.length);
     } else {
-      // fallback: 去掉前导斜杠
       return uri.path.replace(/^\//, '');
     }
   }
@@ -507,7 +506,7 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
 
     const filePath = this.getFilePath(uri);
 
-    // 根目录始终是 Directory
+    // repo 根目录（包括虚拟父根 '/' 以及 '/{repo}'）始终是 Directory
     if (filePath === '') {
       return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
     }
