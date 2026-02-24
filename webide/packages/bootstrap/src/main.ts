@@ -382,6 +382,7 @@ class WebIDEApp {
     // 在 window 上暴露配置给扩展
     const gitfoxConfig = {
       accessToken: this.accessToken,
+      apiBaseUrl: window.location.origin,
       projectInfo: this.projectInfo,
       userInfo: {
         id: parseInt(userInfo.sub),

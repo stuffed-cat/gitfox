@@ -7,6 +7,8 @@ import * as vscode from 'vscode';
 
 interface GitFoxConfig {
   accessToken: string;
+  /** API 基础 URL（含 origin），如 http://localhost:8080 */
+  apiBaseUrl: string;
   projectInfo: {
     owner: string;
     repo: string;
@@ -188,9 +190,9 @@ function getStoredAccessToken(): string | null {
   return null;
 }
 
-async function fetchUserInfo(accessToken: string): Promise<GitFoxConfig['userInfo'] | null> {
+async function fetchUserInfo(accessToken: string, baseUrl: string): Promise<GitFoxConfig['userInfo'] | null> {
   try {
-    const response = await fetch('/oauth/userinfo', {
+    const response = await fetch(`${baseUrl}/oauth/userinfo`, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -215,6 +217,10 @@ async function fetchUserInfo(accessToken: string): Promise<GitFoxConfig['userInf
 async function resolveConfig(): Promise<GitFoxConfig | null> {
   const runtimeConfig = (globalThis as any).__GITFOX_CONFIG__ as GitFoxConfig | undefined;
   if (runtimeConfig?.accessToken && runtimeConfig?.projectInfo) {
+    // 如果没有 apiBaseUrl，尝试从 location 推断
+    if (!runtimeConfig.apiBaseUrl) {
+      runtimeConfig.apiBaseUrl = typeof location !== 'undefined' ? location.origin : '';
+    }
     return runtimeConfig;
   }
 
@@ -241,13 +247,20 @@ async function resolveConfig(): Promise<GitFoxConfig | null> {
         throw new Error('no projectInfo from storage/url');
       }
 
-      const userInfo = (storedConfig?.userInfo as GitFoxConfig['userInfo'] | undefined) || (await fetchUserInfo(accessToken));
+      // apiBaseUrl: 优先从存储的配置读取，否则从 location.origin 推断
+      const apiBaseUrl =
+        (storedConfig as any)?.apiBaseUrl ||
+        (typeof location !== 'undefined' ? location.origin : '') ||
+        '';
+
+      const userInfo = (storedConfig?.userInfo as GitFoxConfig['userInfo'] | undefined) || (await fetchUserInfo(accessToken, apiBaseUrl));
       if (!userInfo) {
         throw new Error('userInfo fetch failed');
       }
 
       return {
         accessToken,
+        apiBaseUrl,
         projectInfo,
         userInfo,
       };
@@ -310,8 +323,31 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
 
   constructor(private config: GitFoxConfig) {}
 
+  /**
+   * 从 URI 中提取相对于仓库根目录的文件路径
+   * URI 格式: gitfox://{owner}/{repo}/{...path}
+   * uri.path = /{repo}/{...path}
+   * 需要去掉 /{repo}/ 前缀，得到真正的文件路径
+   */
+  private getFilePath(uri: vscode.Uri): string {
+    const repo = this.config.projectInfo.repo;
+    const prefix = `/${repo}/`;
+    const rootPath = `/${repo}`;
+
+    if (uri.path === rootPath || uri.path === rootPath + '/' || uri.path === '/' || uri.path === '') {
+      return '';
+    } else if (uri.path.startsWith(prefix)) {
+      return uri.path.slice(prefix.length);
+    } else {
+      // fallback: 去掉前导斜杠
+      return uri.path.replace(/^\//, '');
+    }
+  }
+
   private async apiFetch<T>(endpoint: string): Promise<T> {
-    const response = await fetch(`/api/v1${endpoint}`, {
+    const url = `${this.config.apiBaseUrl}/api/v1${endpoint}`;
+    console.log('[GitFox] apiFetch:', url);
+    const response = await fetch(url, {
       headers: {
         Authorization: `Bearer ${this.config.accessToken}`,
         'Content-Type': 'application/json',
@@ -332,58 +368,71 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
 
   async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
     console.log('[GitFox] stat:', uri.toString());
-    
-    const path = uri.path;
-    if (path === '/' || path === '') {
-      return {
-        type: vscode.FileType.Directory,
-        ctime: 0,
-        mtime: 0,
-        size: 0,
-      };
+
+    const filePath = this.getFilePath(uri);
+
+    // 根目录始终是 Directory
+    if (filePath === '') {
+      return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
     }
 
-    // 检查缓存
-    if (this.fileCache.has(path)) {
+    // 检查文件缓存
+    if (this.fileCache.has(filePath)) {
       return {
         type: vscode.FileType.File,
         ctime: 0,
         mtime: Date.now(),
-        size: this.fileCache.get(path)!.byteLength,
+        size: this.fileCache.get(filePath)!.byteLength,
       };
     }
 
-    // TODO: 从 API 获取文件信息
-    return {
-      type: vscode.FileType.File,
-      ctime: 0,
-      mtime: 0,
-      size: 0,
-    };
+    // 检查目录缓存
+    if (this.dirCache.has(filePath)) {
+      return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
+    }
+
+    // 从已缓存的父目录条目中推断类型
+    const lastSlash = filePath.lastIndexOf('/');
+    const parentPath = lastSlash >= 0 ? filePath.substring(0, lastSlash) : '';
+    const baseName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
+    const parentEntries = this.dirCache.get(parentPath);
+    if (parentEntries) {
+      const entry = parentEntries.find(([name]) => name === baseName);
+      if (entry) {
+        return { type: entry[1], ctime: 0, mtime: 0, size: 0 };
+      }
+      // 父目录已缓存但没有这个条目 → 确实不存在
+      throw vscode.FileSystemError.FileNotFound(uri);
+    }
+
+    // 缓存中查不到且未加载父目录：
+    // 不主动发请求，返回文件类型默认值，让 readFile/readDirectory 去实际获取
+    // 这样 VS Code 不会因为 stat 失败而完全阻止文件操作
+    return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: 0 };
   }
 
   async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
     console.log('[GitFox] readDirectory:', uri.toString());
-    
-    const path = uri.path === '/' ? '' : uri.path.replace(/^\//, '');
-    
+
+    const filePath = this.getFilePath(uri);
+
     // 检查缓存
-    if (this.dirCache.has(path)) {
-      return this.dirCache.get(path)!;
+    if (this.dirCache.has(filePath)) {
+      return this.dirCache.get(filePath)!;
     }
 
     // 从 API 获取目录内容
     try {
       const { projectInfo } = this.config;
-      const projectPath = `${projectInfo.owner}/${projectInfo.repo}`;
+      const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
 
       const params = new URLSearchParams({
-        ref: projectInfo.ref,
-        ...(path && { path }),
+        ref_name: projectInfo.ref,
+        ...(filePath && { path: filePath }),
       });
 
       const entries = await this.apiFetch<TreeEntry[]>(
-        `/projects/${encodeURIComponent(projectPath)}/repository/tree?${params.toString()}`
+        `${apiBase}/repository/tree?${params.toString()}`
       );
 
       const result: [string, vscode.FileType][] = entries.map((entry: any) => [
@@ -391,7 +440,7 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
         entry.type === 'tree' ? vscode.FileType.Directory : vscode.FileType.File
       ]);
 
-      this.dirCache.set(path, result);
+      this.dirCache.set(filePath, result);
       console.log(`[GitFox] readDirectory result: ${result.length} entries`);
       return result;
     } catch (error) {
@@ -402,22 +451,22 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
 
   async readFile(uri: vscode.Uri): Promise<Uint8Array> {
     console.log('[GitFox] readFile:', uri.toString());
-    
-    const path = uri.path.replace(/^\//, '');
 
-    // 检查缓存
-    if (this.fileCache.has(path)) {
-      return this.fileCache.get(path)!;
+    const filePath = this.getFilePath(uri);
+
+    // 检查缓存（stat 预缓存或上次读取的内容）
+    if (this.fileCache.has(filePath)) {
+      return this.fileCache.get(filePath)!;
     }
 
     // 从 API 获取文件内容
     try {
       const { projectInfo } = this.config;
-      const projectPath = `${projectInfo.owner}/${projectInfo.repo}`;
+      const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
 
-      const params = new URLSearchParams({ ref: projectInfo.ref });
+      const params = new URLSearchParams({ ref_name: projectInfo.ref });
       const fileContent = await this.apiFetch<FileContent>(
-        `/projects/${encodeURIComponent(projectPath)}/repository/files/${encodeURIComponent(path)}?${params.toString()}`
+        `${apiBase}/repository/files/${filePath}?${params.toString()}`
       );
 
       // 解码内容
@@ -425,7 +474,7 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
         ? Uint8Array.from(atob(fileContent.content), c => c.charCodeAt(0))
         : new TextEncoder().encode(fileContent.content);
 
-      this.fileCache.set(path, content);
+      this.fileCache.set(filePath, content);
       console.log(`[GitFox] readFile success: ${content.byteLength} bytes`);
       return content;
     } catch (error) {
@@ -440,9 +489,9 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
     options: { create: boolean; overwrite: boolean }
   ): Promise<void> {
     console.log('[GitFox] writeFile:', uri.toString());
-    
-    const path = uri.path.replace(/^\//, '');
-    this.fileCache.set(path, content);
+
+    const filePath = this.getFilePath(uri);
+    this.fileCache.set(filePath, content);
 
     this._emitter.fire([{
       type: vscode.FileChangeType.Changed,
@@ -454,9 +503,9 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
 
   async delete(uri: vscode.Uri): Promise<void> {
     console.log('[GitFox] delete:', uri.toString());
-    
-    const path = uri.path.replace(/^\//, '');
-    this.fileCache.delete(path);
+
+    const filePath = this.getFilePath(uri);
+    this.fileCache.delete(filePath);
 
     this._emitter.fire([{
       type: vscode.FileChangeType.Deleted,
@@ -466,10 +515,10 @@ class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
 
   async rename(oldUri: vscode.Uri, newUri: vscode.Uri): Promise<void> {
     console.log('[GitFox] rename:', oldUri.toString(), '->', newUri.toString());
-    
-    const oldPath = oldUri.path.replace(/^\//, '');
-    const newPath = newUri.path.replace(/^\//, '');
-    
+
+    const oldPath = this.getFilePath(oldUri);
+    const newPath = this.getFilePath(newUri);
+
     const content = this.fileCache.get(oldPath);
     if (content) {
       this.fileCache.set(newPath, content);
