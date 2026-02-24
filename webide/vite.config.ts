@@ -7,7 +7,7 @@ export default defineConfig({
   base: '/-/ide/',
   publicDir: resolve(__dirname, 'static'),
   build: {
-    outDir: resolve(__dirname, 'dist'),
+    outDir: resolve(__dirname, 'dist'), // 相对于 vite.config.ts 所在目录（webide）
     emptyOutDir: true,
   },
   server: {
@@ -33,20 +33,29 @@ export default defineConfig({
     },
   },
   plugins: [
-    // 提供 VS Code 静态文件
+    // 提供 VS Code 静态文件（包括扩展）
     {
       name: 'serve-vscode',
       enforce: 'pre',
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
-          if (req.url && req.url.startsWith('/vscode/')) {
-            const filePath = req.url.split('?')[0];
+          // 处理 /vscode/ 或 /-/ide/vscode/ 路径
+          if (req.url && (req.url.startsWith('/vscode/') || req.url.startsWith('/-/ide/vscode/'))) {
+            let filePath = req.url.split('?')[0].replace('/-/ide', '');
+            // 去掉开头的 / 避免 resolve 将其视为绝对路径
+            if (filePath.startsWith('/')) {
+              filePath = filePath.substring(1);
+            }
+            // URL 解码（处理空格等特殊字符）
+            filePath = decodeURIComponent(filePath);
             const fullPath = resolve(__dirname, 'static', filePath);
             
             if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
               let contentType = 'application/octet-stream';
-              if (fullPath.endsWith('.js')) {
+              if (fullPath.endsWith('.js') || fullPath.endsWith('.mjs') || fullPath.endsWith('.cjs')) {
                 contentType = 'application/javascript; charset=utf-8';
+              } else if (fullPath.endsWith('.wasm')) {
+                contentType = 'application/wasm';
               } else if (fullPath.endsWith('.json')) {
                 contentType = 'application/json; charset=utf-8';
               } else if (fullPath.endsWith('.css')) {
@@ -55,15 +64,30 @@ export default defineConfig({
                 contentType = 'text/html; charset=utf-8';
               } else if (fullPath.endsWith('.ttf') || fullPath.endsWith('.woff') || fullPath.endsWith('.woff2')) {
                 contentType = 'font/ttf';
+              } else if (fullPath.endsWith('.tmLanguage') || fullPath.endsWith('.tmLanguage.json')) {
+                contentType = 'application/json; charset=utf-8';
+              } else if (fullPath.endsWith('.xml') || fullPath.endsWith('.plist')) {
+                contentType = 'text/xml; charset=utf-8';
+              } else if (fullPath.endsWith('.svg')) {
+                contentType = 'image/svg+xml';
+              } else if (fullPath.endsWith('.png')) {
+                contentType = 'image/png';
+              } else if (fullPath.endsWith('.jpg') || fullPath.endsWith('.jpeg')) {
+                contentType = 'image/jpeg';
+              } else if (fullPath.endsWith('.ico')) {
+                contentType = 'image/x-icon';
               }
               
               res.setHeader('Content-Type', contentType);
               res.setHeader('Cache-Control', 'public, max-age=31536000');
+              res.setHeader('Access-Control-Allow-Origin', '*');
               res.end(fs.readFileSync(fullPath));
               return;
             }
             
+            // 文件不存在，返回 404 并设置正确的 Content-Type
             res.statusCode = 404;
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
             res.end('Not found');
             return;
           }
@@ -96,7 +120,9 @@ export default defineConfig({
         server.middlewares.use((req, res, next) => {
           if (req.url && req.url.startsWith('/-/ide/extensions/')) {
             console.log(`[serve-extensions] Request: ${req.method} ${req.url}`);
-            const extensionPath = req.url.replace('/-/ide/extensions/', '');
+            let extensionPath = req.url.replace('/-/ide/extensions/', '');
+            // URL 解码（处理空格等特殊字符）
+            extensionPath = decodeURIComponent(extensionPath);
             const filePath = resolve(__dirname, 'extensions', extensionPath);
             
             // 如果请求的是目录（没有扩展名），返回 package.json
@@ -133,6 +159,7 @@ export default defineConfig({
             
             console.log(`[serve-extensions] Not found: ${extensionPath}`);
             res.statusCode = 404;
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
             res.end('Not found');
           } else {
             next();

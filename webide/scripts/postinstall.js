@@ -83,6 +83,46 @@ function patchQualityAndCommit() {
       description: 'CLI commit variable',
       regex: /COMMIT="[a-f0-9]+"/g,
       replacement: 'COMMIT=""'
+    },
+    {
+      description: 'VSCODE_DEV userDataPath override',
+      regex: /process\.env\.VSCODE_DEV&&\(([a-z])="code-oss-dev"\)/g,
+      replacement: '!1&&($1="code-oss-dev")'
+    },
+    {
+      description: 'VSCODE_DEV product modification',
+      regex: /Us\.VSCODE_DEV&&Object\.assign\(As,\{[^}]+\}\)/g,
+      replacement: '!1&&Object.assign(As,{})'
+    },
+    {
+      description: 'VSCODE_DEV environment check with assignment',
+      regex: /process\.env\.VSCODE_DEV\|\|([a-z])===?"pseudo"/g,
+      replacement: '$1==="pseudo"'
+    },
+    {
+      description: 'code-oss-dev string literal',
+      regex: /"code-oss-dev"/g,
+      replacement: '""'
+    },
+    {
+      description: 'oss-dev string literal',
+      regex: /"oss-dev"/g,
+      replacement: '""'
+    },
+    {
+      description: 'Force expectsResolverExtension to return false',
+      regex: /get expectsResolverExtension\(\)\{return!!this\.options\.remoteAuthority\?\.includes\("\+"\)&&!this\.options\.webSocketFactory\}/g,
+      replacement: 'get expectsResolverExtension(){return!1}'
+    },
+    {
+      description: 'Disable remoteAuthority resolution in workspace trust',
+      regex: /this\.I\.remoteAuthority&&this\.F\.resolveAuthority\(this\.I\.remoteAuthority\)\.then\(async [^}]+\}\)\.finally\([^}]+\}\)/g,
+      replacement: 'Promise.resolve().finally(()=>{this.h()})'
+    },
+    {
+      description: 'Do not unconditionally override remoteAuthority with window.location.host',
+      regex: /\{\.\.\.t,remoteAuthority:window\.location\.host\}/g,
+      replacement: '{...t,remoteAuthority:t.remoteAuthority}'
     }
   ]
 
@@ -122,9 +162,38 @@ function patchQualityAndCommit() {
     }
   }
 
+  // Patch JS/binary files
   for (const dir of targets) {
     console.log(`Patching VS Code assets in ${dir}...`)
     walk(dir)
+  }
+
+  // Patch product.json files
+  for (const dir of targets) {
+    const productJsonPath = join(dir, 'product.json')
+    if (!existsSync(productJsonPath)) continue
+    
+    try {
+      const productJson = JSON.parse(readFileSync(productJsonPath, 'utf-8'))
+      let changed = false
+      
+      if (productJson.quality) {
+        productJson.quality = undefined
+        changed = true
+      }
+      if (productJson.commit) {
+        productJson.commit = undefined
+        changed = true
+      }
+      
+      if (changed) {
+        writeFileSync(productJsonPath, JSON.stringify(productJson, null, 2), 'utf-8')
+        patchedFiles++
+        console.log(`Patched product.json: ${productJsonPath}`)
+      }
+    } catch (err) {
+      console.error(`Failed to patch product.json at ${productJsonPath}:`, err)
+    }
   }
 
   console.log(`Patched ${patchedFiles} files (${patchedReplacements} replacement operations).`)
@@ -166,6 +235,61 @@ async function downloadLanguagePacks() {
       console.error(`Failed to download language pack ${pack.id}:`, error.message)
       console.log('Continuing without this language pack...')
     }
+  }
+}
+
+function patchVSCodePackageJson() {
+  console.log('\nPatching VS Code package.json and creating module alias...')
+  
+  const packageJsonPath = join(STATIC_DIR, 'package.json')
+  if (!existsSync(packageJsonPath)) {
+    console.log('VS Code package.json not found, skipping patch')
+    return
+  }
+  
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'))
+    
+    // Add alias for vscode-regexp-languagedetection -> vscode-regexpp in overrides
+    if (!packageJson.overrides) {
+      packageJson.overrides = {}
+    }
+    
+    packageJson.overrides['vscode-regexp-languagedetection'] = 'npm:vscode-regexpp@^1'
+    
+    writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n', 'utf-8')
+    console.log('✓ Added vscode-regexp-languagedetection alias in overrides')
+    
+    // Create module directory for vscode-regexp-languagedetection
+    const nodeModulesDir = join(STATIC_DIR, 'node_modules')
+    const regexppDir = join(nodeModulesDir, 'vscode-regexpp')
+    const languageDetectionDir = join(nodeModulesDir, 'vscode-regexp-languagedetection')
+    
+    if (existsSync(regexppDir)) {
+      // Remove existing dir if exists
+      if (existsSync(languageDetectionDir)) {
+        execSync(`rm -rf "${languageDetectionDir}"`, { stdio: 'inherit' })
+      }
+      
+      // Create directory structure
+      mkdirSync(join(languageDetectionDir, 'dist'), { recursive: true })
+      
+      // Create symlinks for files
+      const files = ['index.js', 'index.mjs', 'package.json', 'LICENSE']
+      for (const file of files) {
+        const src = join(regexppDir, file)
+        const dest = join(languageDetectionDir, 'dist', file)
+        if (existsSync(src)) {
+          execSync(`ln -s "${src}" "${dest}"`, { stdio: 'inherit' })
+        }
+      }
+      
+      console.log('✓ Created vscode-regexp-languagedetection module structure')
+    } else {
+      console.log('⚠ vscode-regexpp not found, cannot create alias')
+    }
+  } catch (error) {
+    console.error('Failed to patch VS Code:', error.message)
   }
 }
 
@@ -262,9 +386,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const patchOnly = process.argv.includes('--patch-only')
 
   if (patchOnly) {
+    patchVSCodePackageJson()
     patchQualityAndCommit()
   } else {
     downloadAndExtract()
+      .then(() => patchVSCodePackageJson())
       .then(() => downloadLanguagePacks())
       .then(() => generateNLSFiles())
       .then(() => patchQualityAndCommit())

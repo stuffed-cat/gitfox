@@ -340,7 +340,103 @@ class WebIDEApp {
           scheme: window.location.protocol.replace(':', ''),
           authority: window.location.host,
           path: '/-/ide/extensions/gitfox-provider',
-        }
+        },
+        // VS Code 内置语法高亮扩展
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/javascript',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/typescript-basics',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/json',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/html',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/css',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/markdown-basics',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/python',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/go',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/rust',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/cpp',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/java',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/php',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/xml',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/yaml',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/shellscript',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/sql',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/docker',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/csharp',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/ruby',
+        },
       ],
       productConfiguration: {
         extensionsGallery: (window as any).__GITFOX_EXTENSION_GALLERY__,

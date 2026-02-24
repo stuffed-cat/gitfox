@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "npm run build --workspaces --if-present && npm run patch:vscode && cd extensions/gitfox-provider && npm run build && cd ../..",
+    "build": "npm run build:packages && vite build && npm run patch:vscode && cd extensions/gitfox-provider && npm run build && cd ../..",
+    "build:packages": "npm run build --workspace=@gitfox/api-client --workspace=@gitfox/oauth-client --workspace=@gitfox/webide-fs --workspace=@gitfox/webide",
     "preview": "vite preview",
     "build:vscode": "node scripts/build-vscode.js",
     "postinstall": "node scripts/postinstall.js",

@@ -9,7 +9,7 @@
   },
   "categories": ["Other"],
   "extensionKind": ["web"],
-  "activationEvents": ["*"],
+  "activationEvents": ["*", "onFileSystem:gitfox"],
   "browser": "./dist/extension.js",
   "capabilities": {
     "untrustedWorkspaces": {

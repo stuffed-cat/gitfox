@@ -25,7 +25,7 @@ const routes = [
     path: '/oauth/authorize',
     name: 'OAuthAuthorize',
     component: () => import('@/views/auth/OAuthAuthorizeView.vue'),
-    meta: { requiresAuth: true }  // OAuth authorization requires login
+    meta: { requiresAuth: false }  // Component handles auth internally
   },
   {
     path: '/confirm-email',
@@ -173,12 +173,6 @@ const routes = [
     component: () => import('@/views/settings/OAuthApplicationsView.vue'),
     meta: { requiresAuth: true }
   },
-  {
-    path: '/-/profile/runners',
-    name: 'UserRunners',
-    component: () => import('@/views/settings/UserRunnersView.vue'),
-    meta: { requiresAuth: true }
-  },
   
   // Admin routes (require admin role)
   {
@@ -217,12 +211,6 @@ const routes = [
     component: () => import('@/views/admin/AdminOAuthProvidersView.vue'),
     meta: { requiresAuth: true, requiresAdmin: true }
   },
-  {
-    path: '/admin/runners',
-    name: 'AdminRunners',
-    component: () => import('@/views/admin/AdminRunnersView.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true }
-  },
   
   // User/Group profile (single segment path - handles both users and groups)
   {
@@ -245,28 +233,8 @@ const routes = [
     component: () => import('@/views/groups/GroupSettingsView.vue'),
     meta: { requiresAuth: true, contextType: 'group' }
   },
-  {
-    path: '/:namespace/-/runners',
-    name: 'GroupRunners',
-    component: () => import('@/views/groups/GroupRunnersView.vue'),
-    meta: { requiresAuth: true, contextType: 'group' }
-  },
   
   // Project routes (must be LAST - catches /:owner/:repo)
-  // WebIDE route - redirect to standalone SPA (before /:owner/:repo to take precedence)
-  {
-    path: '/:owner/:repo/-/ide/:ref?/:path(.*)?',
-    name: 'WebIDE',
-    redirect: (to: any) => {
-      // Redirect to standalone WebIDE SPA
-      const { owner, repo, ref, path } = to.params
-      const pathQuery = ref && path ? `/${ref}/${path}` : ref ? `/${ref}` : ''
-      window.location.href = `/ide/${owner}/${repo}${pathQuery}`
-      return '/'
-    },
-    meta: { requiresAuth: true }
-  },
-
   {
     path: '/:owner/:repo',
     name: 'Project',
@@ -349,31 +317,6 @@ const routes = [
         component: () => import('@/views/pipelines/PipelineDetailView.vue')
       },
       {
-        path: '-/jobs',
-        name: 'ProjectJobs',
-        component: () => import('@/views/pipelines/JobListView.vue')
-      },
-      {
-        path: '-/ci/editor',
-        name: 'PipelineEditor',
-        component: () => import('@/views/pipelines/PipelineEditorView.vue')
-      },
-      {
-        path: '-/pipeline_schedules',
-        name: 'PipelineSchedules',
-        component: () => import('@/views/pipelines/PipelineScheduleView.vue')
-      },
-      {
-        path: '-/artifacts',
-        name: 'ProjectArtifacts',
-        component: () => import('@/views/pipelines/ArtifactListView.vue')
-      },
-      {
-        path: '-/runners',
-        name: 'ProjectRunners',
-        component: () => import('@/views/projects/ProjectRunnersView.vue')
-      },
-      {
         path: '-/settings',
         name: 'ProjectSettings',
         component: () => import('@/views/projects/ProjectSettingsView.vue')
@@ -432,16 +375,6 @@ router.beforeEach((to, _from, next) => {
     // 需要管理员权限但非管理员
     next({ name: 'Home' })
   } else if (to.meta.guest && authStore.isAuthenticated) {
-    // 用户已登录但访问 guest 页面
-    // 特殊处理：如果是 /login 且有 redirect 参数指向 /oauth/authorize，直接导航过去
-    if (to.path === '/login' && to.query.redirect) {
-      const redirectPath = decodeURIComponent(to.query.redirect as string)
-      if (redirectPath.startsWith('/oauth/authorize')) {
-        // 直接用 router.push 导航到 OAuth 授权页面
-        next(redirectPath)
-        return
-      }
-    }
     next({ name: 'Home' })
   } else {
     next()
