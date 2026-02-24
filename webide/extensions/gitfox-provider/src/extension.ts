@@ -9,6 +9,8 @@ interface GitFoxConfig {
   accessToken: string;
   /** API 基础 URL（含 origin），如 http://localhost:8080 */
   apiBaseUrl: string;
+  /** 页面完整 URL，由 main.ts 在主线程传入（扩展在 Web Worker 里无法直接读取页面 URL） */
+  pageUrl?: string;
   projectInfo: {
     owner: string;
     repo: string;
@@ -79,15 +81,42 @@ async function activateInternal(context: vscode.ExtensionContext): Promise<void>
   );
   console.log('[GitFox] File system provider registered for gitfox://');
 
-  // 打开 gitfox:// 工作区（如果尚未添加）
-  const folderUri = vscode.Uri.parse(`gitfox://${config.projectInfo.owner}/${config.projectInfo.repo}`);
+  // 解析初始文件路径：必须用 main.ts 传入的页面 URL，
+  // 因为扩展运行在 Web Worker 里，Worker 的 location.href 是 worker 脚本 URL，不是页面 URL
+  const pageUrl = config.pageUrl ?? '';
+  const initialFilePath = pageUrl ? parseInitialFilePathFromUrl(pageUrl) : null;
+  console.log('[GitFox] Page URL:', pageUrl);
+  console.log('[GitFox] Initial file path:', initialFilePath);
+
+  // 打开 gitfox:// 工作区 —— 始终确保只有这一个根目录（单根时 VS Code 会自动展开）
+  const { owner, repo, ref } = config.projectInfo;
+  const folderUri = vscode.Uri.parse(`gitfox://${owner}/${repo}`);
   console.log('[GitFox] Opening workspace:', folderUri.toString());
 
   const existingFolders = vscode.workspace.workspaceFolders ?? [];
-  const alreadyOpen = existingFolders.some(f => f.uri.toString() === folderUri.toString());
-  if (!alreadyOpen) {
-    vscode.workspace.updateWorkspaceFolders(existingFolders.length, 0, { uri: folderUri });
+  const isSingleRoot =
+    existingFolders.length === 1 && existingFolders[0].uri.toString() === folderUri.toString();
+  if (!isSingleRoot) {
+    // 替换所有已有文件夹，确保 gitfox 是唯一根（会自动展开根目录）
+    vscode.workspace.updateWorkspaceFolders(0, existingFolders.length, { uri: folderUri });
   }
+
+  // 等待 FileSystemProvider 就绪（最多 8 秒），然后打开初始文件
+  void waitForFsReady(folderUri).then(ready => {
+    if (!ready) {
+      console.warn('[GitFox] FS provider not ready in time');
+      return;
+    }
+    void vscode.commands.executeCommand('workbench.view.explorer');
+    if (initialFilePath) {
+      const fileUri = vscode.Uri.parse(`gitfox://${owner}/${repo}/${initialFilePath}`);
+      console.log('[GitFox] Opening initial file:', fileUri.toString());
+      void vscode.window.showTextDocument(fileUri, { preview: false }).then(
+        () => console.log('[GitFox] Initial file opened'),
+        err => console.error('[GitFox] Failed to open initial file:', err),
+      );
+    }
+  });
 
   console.log('[GitFox] Extension activated successfully');
 }
@@ -114,6 +143,42 @@ function parseProjectInfoFromUrl(url: string): GitFoxConfig['projectInfo'] | nul
   } catch {
     return null;
   }
+}
+
+/**
+ * 从 WebIDE URL 中提取初始要打开的文件路径
+ * URL 格式: /-/ide/project/{owner}/{repo}/edit/{ref}/-/{filepath}
+ */
+function parseInitialFilePathFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const rawPath = parsed.pathname.replace(/^\/-\/ide\/?/, '');
+    // 匹配 edit/{ref}/-/{filepath}
+    const match = rawPath.match(/^project\/[^\/]+\/[^\/]+\/edit\/[^\/]+\/-\/(.+)$/);
+    if (!match) {
+      return null;
+    }
+    const filePath = decodeURIComponent(match[1]).replace(/\/+$/, '');
+    return filePath || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 轮询直到 gitfox FileSystemProvider 能够响应 stat 请求（最多等 maxMs 毫秒）
+ */
+async function waitForFsReady(uri: vscode.Uri, maxMs = 8000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try {
+      await vscode.workspace.fs.stat(uri);
+      return true;
+    } catch {
+      await new Promise<void>(r => setTimeout(r, 300));
+    }
+  }
+  return false;
 }
 
 function loadConfigFromStorage(): Partial<GitFoxConfig> | null {
@@ -267,9 +332,12 @@ async function resolveConfig(): Promise<GitFoxConfig | null> {
         throw new Error('userInfo fetch failed');
       }
 
+      const pageUrl = (storedConfig as any)?.pageUrl as string | undefined;
+
       return {
         accessToken,
         apiBaseUrl,
+        pageUrl,
         projectInfo,
         userInfo,
       };

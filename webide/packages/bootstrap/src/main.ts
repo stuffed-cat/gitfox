@@ -383,6 +383,8 @@ class WebIDEApp {
     const gitfoxConfig = {
       accessToken: this.accessToken,
       apiBaseUrl: window.location.origin,
+      /** 页面 URL，用于扩展（运行在 Web Worker 里）解析初始文件路径 */
+      pageUrl: window.location.href,
       projectInfo: this.projectInfo,
       userInfo: {
         id: parseInt(userInfo.sub),
