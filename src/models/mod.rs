@@ -14,6 +14,7 @@ pub mod personal_access_token;
 pub mod oauth;
 pub mod two_factor;
 pub mod runner_usage;
+pub mod scope;  // 新增：类型安全的 scope 模块
 
 pub use user::*;
 pub use project::*;
@@ -29,4 +30,6 @@ pub use ssh_key::*;
 pub use issue::*;
 pub use personal_access_token::*;
 pub use oauth::*;
-pub use two_factor::*;pub use runner_usage::*;
+pub use two_factor::*;
+pub use runner_usage::*;
+pub use scope::*;  // 导出 scope 类型

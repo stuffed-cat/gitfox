@@ -7,7 +7,7 @@ use sqlx::PgPool;
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
-use crate::models::{Claims, CreateUserRequest, LoginRequest, LoginResponse, User, UserInfo, UserRole};
+use crate::models::{Claims, CreateUserRequest, LoginRequest, LoginResponse, User, UserInfo, UserRole, TokenScope};
 
 pub struct UserService;
 
@@ -74,6 +74,7 @@ impl UserService {
             role: user.role.clone(),
             exp: exp.timestamp(),
             iat: now.timestamp(),
+            scopes: TokenScope::Full, // JWT has full access
         };
 
         let token = encode(

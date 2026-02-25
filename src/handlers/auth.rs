@@ -13,6 +13,7 @@ use crate::middleware::validate_token;
 use crate::models::{
     Claims, CreateUserRequest, LoginRequest, LoginResponse, TwoFactorRequiredResponse,
     UserInfo, VerifyTwoFactorRequest, WebAuthnAuthStartRequest, WebAuthnAuthFinishRequest,
+    TokenScope,
 };
 use crate::services::{two_factor, SmtpService, SystemConfigService, UserService};
 
@@ -270,6 +271,7 @@ pub async fn verify_two_factor(
         role: user.role.clone(),
         exp: exp.timestamp(),
         iat: now.timestamp(),
+        scopes: TokenScope::Full, // JWT has full access
     };
 
     let token = encode(
@@ -538,6 +540,7 @@ pub async fn passkey_login_finish(
         role: user.role.clone(),
         exp: exp.timestamp(),
         iat: now.timestamp(),
+        scopes: TokenScope::Full, // JWT has full access
     };
 
     let token = encode(
@@ -682,6 +685,7 @@ pub async fn webauthn_auth_finish(
         role: user.role.clone(),
         exp: exp.timestamp(),
         iat: now.timestamp(),
+        scopes: TokenScope::Full, // JWT has full access
     };
 
     let token = encode(

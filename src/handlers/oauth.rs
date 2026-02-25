@@ -1411,6 +1411,7 @@ pub async fn provider_callback(
         role: user.role.clone(),
         exp: exp.timestamp(),
         iat: now.timestamp(),
+        scopes: crate::models::TokenScope::Full, // JWT has full access
     };
 
     let token = jsonwebtoken::encode(

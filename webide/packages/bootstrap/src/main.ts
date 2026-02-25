@@ -341,6 +341,37 @@ class WebIDEApp {
           authority: window.location.host,
           path: '/-/ide/extensions/gitfox-provider',
         },
+        // VS Code Language Features 扩展 - 提供 IntelliSense、代码补全等核心功能
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/typescript-language-features',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/html-language-features',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/css-language-features',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/json-language-features',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/markdown-language-features',
+        },
+        {
+          scheme: window.location.protocol.replace(':', ''),
+          authority: window.location.host,
+          path: '/-/ide/vscode/extensions/emmet',
+        },
         // VS Code 内置语法高亮扩展
         {
           scheme: window.location.protocol.replace(':', ''),

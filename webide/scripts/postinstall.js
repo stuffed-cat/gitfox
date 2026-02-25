@@ -31,6 +31,11 @@ const LANGUAGE_PACKS = [
   }
 ]
 
+// 需要额外下载完整版本的扩展（openvscode-server 版本缺失 browser 构建）
+const ADDITIONAL_WEB_EXTENSIONS = [
+  { name: 'emmet' }
+]
+
 async function downloadAndExtract() {
   if (existsSync(STATIC_DIR)) {
     console.log('VS Code static assets already exist, skipping download')
@@ -239,6 +244,73 @@ function createOnigurumaSymlink() {
 }
 
 /**
+ * 为某些只有 node 版本的扩展创建 browser 版本的软链接或副本
+ * emmet 等扩展在 package.json 中声明了 browser 字段，但实际只有 node 版本
+ */
+function createBrowserVersionLinks() {
+  const extensionBrowserMappings = [
+    {
+      name: 'emmet',
+      nodeMain: 'dist/node/emmetNodeMain.js',
+      browserMain: 'dist/browser/emmetBrowserMain.js'
+    },
+    {
+      name: 'php-language-features',
+      nodeMain: 'dist/phpMain.js',
+      browserMain: 'dist/browser/phpBrowserMain.js'
+    }
+  ]
+
+  const dirs = [EXTENSIONS_DIR, join(DIST_VSCODE_DIR, 'extensions')].filter(existsSync)
+  let created = 0
+
+  for (const dir of dirs) {
+    for (const mapping of extensionBrowserMappings) {
+      const extDir = join(dir, mapping.name)
+      if (!existsSync(extDir)) continue
+
+      const nodeMainPath = join(extDir, mapping.nodeMain)
+      const browserMainPath = join(extDir, mapping.browserMain)
+
+      // 如果 node 版本存在但 browser 版本不存在
+      if (existsSync(nodeMainPath) && !existsSync(browserMainPath)) {
+        try {
+          // 创建 browser 目录
+          const browserDir = dirname(browserMainPath)
+          mkdirSync(browserDir, { recursive: true })
+
+          // 创建符号链接指向 node 版本
+          const relativePath = join('..', '..', mapping.nodeMain)
+          symlinkSync(relativePath, browserMainPath)
+          
+          console.log(`✓ Created browser symlink for ${mapping.name}: ${mapping.browserMain} -> ${mapping.nodeMain}`)
+          created++
+
+          // 同时更新 package.json 的 browser 字段
+          const pkgPath = join(extDir, 'package.json')
+          if (existsSync(pkgPath)) {
+            try {
+              const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
+              pkg.browser = './' + mapping.browserMain.replace(/\.js$/, '')
+              writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf-8')
+              console.log(`  ✓ Updated ${mapping.name}/package.json browser field`)
+            } catch (err) {
+              console.error(`  ⚠ Failed to update package.json for ${mapping.name}:`, err.message)
+            }
+          }
+        } catch (err) {
+          console.error(`Failed to create browser link for ${mapping.name}:`, err.message)
+        }
+      }
+    }
+  }
+
+  if (created > 0) {
+    console.log(`Created ${created} browser version links for extensions`)
+  }
+}
+
+/**
  * 为 VS Code 内置扩展的 package.json 添加 extensionKind: ["web"]
  * grammar/language/theme 等纯声明式扩展没有此字段时 VS Code web 会跳过加载。
  */
@@ -261,7 +333,7 @@ function patchExtensionsForWeb() {
         if (pkg.extensionKind) continue
 
         const hasBrowser = !!pkg.browser
-        const hasMain = !!pkg.main
+        const hasMain = !!pkg.        main
 
         // 只有 main 没有 browser → 仅桌面端，跳过
         if (hasMain && !hasBrowser) continue
@@ -319,6 +391,107 @@ async function downloadLanguagePacks() {
     } catch (error) {
       console.error(`Failed to download language pack ${pack.id}:`, error.message)
       console.log('Continuing without this language pack...')
+    }
+  }
+}
+
+/**
+ * 下载缺失 browser 版本的完整扩展
+ * openvscode-server 某些扩展没有编译 browser 版本，从 Open VSX 下载官方版本
+ */
+async function downloadMissingWebExtensions() {
+  console.log('\nDownloading missing web extension browser builds...')
+  
+  for (const ext of ADDITIONAL_WEB_EXTENSIONS) {
+    const extDir = join(EXTENSIONS_DIR, ext.name)
+    const pkgPath = join(extDir, 'package.json')
+    
+    // 检查 browser 版本是否已存在且有效
+    if (existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
+        if (pkg.browser) {
+          const browserFile = pkg.browser.replace(/\.(js)?$/, '') + '.js'
+          const browserPath = join(extDir, browserFile)
+          if (existsSync(browserPath)) {
+            console.log(`✓ ${ext.name} already has valid browser version`)
+            continue
+          }
+        }
+      } catch {}
+    }
+    
+    console.log(`Downloading ${ext.name} from Open VSX...`)
+    
+    try {
+      // 从 Open VSX 获取扩展信息
+      const apiUrl = `https://open-vsx.org/api/vscode/${ext.name}/latest`
+      console.log(`  Fetching extension info from ${apiUrl}...`)
+      
+      const response = await fetch(apiUrl)
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      
+      const data = await response.json()
+      const downloadUrl = data.files?.download
+      
+      if (!downloadUrl) {
+        throw new Error('Download URL not found in API response')
+      }
+      
+      const tmpDir = `/tmp/vscode-ext-${Date.now()}`
+      mkdirSync(tmpDir, { recursive: true })
+      
+      // 下载并解压 VSIX
+      const vsixPath = `${tmpDir}/${ext.name}.vsix`
+      console.log(`  Downloading from ${downloadUrl}...`)
+      const downloadCmd = `curl -L "${downloadUrl}" -o "${vsixPath}" && unzip -q "${vsixPath}" -d "${tmpDir}"`
+      execSync(downloadCmd, { stdio: 'pipe' })
+      
+      // 备份旧版本
+      if (existsSync(extDir)) {
+        execSync(`mv "${extDir}" "${extDir}.backup"`, { stdio: 'pipe' })
+      }
+      
+      // copyextension 目录
+      const extSourceDir = join(tmpDir, 'extension')
+      if (existsSync(extSourceDir)) {
+        execSync(`cp -r "${extSourceDir}" "${extDir}"`, { stdio: 'inherit' })
+                // 修改 package.json，移除 main 字段以强制使用 browser 版本
+        const newPkgPath = join(extDir, 'package.json')
+        if (existsSync(newPkgPath)) {
+          try {
+            const pkg = JSON.parse(readFileSync(newPkgPath, 'utf-8'))
+            if (pkg.browser && pkg.main) {
+              console.log(`  Removing 'main' field from package.json to force browser version`)
+              delete pkg.main
+              writeFileSync(newPkgPath, JSON.stringify(pkg, null, 2))
+            }
+          } catch (err) {
+            console.warn(`  Warning: Failed to patch package.json: ${err.message}`)
+          }
+        }
+                // 删除备份
+        if (existsSync(extDir + '.backup')) {
+          execSync(`rm -rf "${extDir}.backup"`, { stdio: 'pipe' })
+        }
+        
+        console.log(`✓ Installed ${ext.name} with browser support`)
+      } else {
+        throw new Error('Extension directory not found in VSIX')
+      }
+      
+      // 清理临时文件
+      execSync(`rm -rf "${tmpDir}"`, { stdio: 'pipe' })
+    } catch (error) {
+      console.error(`Failed to download ${ext.name}:`, error.message)
+      console.log('Extension may not work properly in Web IDE')
+      
+      // 如果有备份，恢复它
+      if (existsSync(extDir + '.backup')) {
+        execSync(`rm -rf "${extDir}" && mv "${extDir}.backup" "${extDir}"`, { stdio: 'pipe' })
+      }
     }
   }
 }
@@ -479,6 +652,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     downloadAndExtract()
       .then(() => patchVSCodePackageJson())
       .then(() => downloadLanguagePacks())
+      .then(() => downloadMissingWebExtensions())
       .then(() => generateNLSFiles())
       .then(() => createOnigurumaSymlink())
       .then(() => patchExtensionsForWeb())

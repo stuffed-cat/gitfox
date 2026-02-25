@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use validator::Validate;
 
+use crate::models::{TokenScope, Scope};
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
     pub id: i64,
@@ -130,6 +132,14 @@ pub struct Claims {
     pub role: UserRole,
     pub exp: i64,
     pub iat: i64,
+    /// Token scopes: Full = JWT (full access), Limited = PAT/OAuth (restricted by scopes)
+    #[serde(default = "default_token_scope")]
+    pub scopes: TokenScope,
+}
+
+// Default to Full access for backward compatibility with old JWT tokens
+fn default_token_scope() -> TokenScope {
+    TokenScope::Full
 }
 
 // Two-factor authentication response during login
