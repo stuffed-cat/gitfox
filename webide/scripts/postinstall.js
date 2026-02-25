@@ -6,7 +6,7 @@
  */
 
 import { execSync } from 'child_process'
-import { existsSync, mkdirSync, createWriteStream, readFileSync, writeFileSync, readdirSync, statSync } from 'fs'
+import { existsSync, mkdirSync, createWriteStream, readFileSync, writeFileSync, readdirSync, statSync, symlinkSync, lstatSync, unlinkSync } from 'fs'
 import { pipeline } from 'stream/promises'
 import { createGunzip } from 'zlib'
 import { extract } from 'tar'
@@ -123,6 +123,14 @@ function patchQualityAndCommit() {
       description: 'Do not unconditionally override remoteAuthority with window.location.host',
       regex: /\{\.\.\.t,remoteAuthority:window\.location\.host\}/g,
       replacement: '{...t,remoteAuthority:t.remoteAuthority}'
+    },
+    {
+      // commit 字段被我们清空后 BrowserWorkbenchEnvironmentService.isBuilt 返回 false，
+      // 导致静态内置扩展（typescript-basics 等语法高亮）数组女设置为空，语法高亮全部失效。
+      // 强制返回 true 修复此问题。
+      description: 'Force isBuilt to return true so static builtin extensions (grammars) are loaded',
+      regex: /get isBuilt\(\)\{return!!this\.f\.commit\}/g,
+      replacement: 'get isBuilt(){return!0}'
     }
   ]
 
@@ -197,6 +205,37 @@ function patchQualityAndCommit() {
   }
 
   console.log(`Patched ${patchedFiles} files (${patchedReplacements} replacement operations).`)
+}
+
+/**
+ * 在 extensions/ 下为 vscode-oniguruma 创建指向 node_modules 的符号链接。
+ * Web 模式下 VS Code 从 extensions/vscode-oniguruma/release/onig.wasm 加载 WASM，
+ * 而 openvscode-server 将其打包在 node_modules/ 中，需要此链接桥接。
+ */
+function createOnigurumaSymlink() {
+  const dirs = [EXTENSIONS_DIR, join(DIST_VSCODE_DIR, 'extensions')].filter(existsSync)
+  for (const extDir of dirs) {
+    const linkPath = join(extDir, 'vscode-oniguruma')
+    const targetPath = join(extDir, '..', 'node_modules', 'vscode-oniguruma')
+    if (!existsSync(targetPath)) {
+      console.log(`vscode-oniguruma not found at ${targetPath}, skipping symlink`)
+      continue
+    }
+    // 如果已经存在（文件或链接），跳过
+    try {
+      lstatSync(linkPath)
+      console.log('extensions/vscode-oniguruma already exists, skipping symlink')
+      continue
+    } catch {
+      // 不存在，继续创建
+    }
+    try {
+      symlinkSync('../node_modules/vscode-oniguruma', linkPath)
+      console.log(`Created symlink: extensions/vscode-oniguruma -> ../node_modules/vscode-oniguruma`)
+    } catch (err) {
+      console.error(`Failed to create vscode-oniguruma symlink:`, err.message)
+    }
+  }
 }
 
 /**
@@ -433,6 +472,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   if (patchOnly) {
     patchVSCodePackageJson()
+    createOnigurumaSymlink()
     patchExtensionsForWeb()
     patchQualityAndCommit()
   } else {
@@ -440,6 +480,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       .then(() => patchVSCodePackageJson())
       .then(() => downloadLanguagePacks())
       .then(() => generateNLSFiles())
+      .then(() => createOnigurumaSymlink())
       .then(() => patchExtensionsForWeb())
       .then(() => patchQualityAndCommit())
       .catch(console.error)
