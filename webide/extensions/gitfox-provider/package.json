@@ -1,13 +1,13 @@
 {
   "name": "gitfox-provider",
-  "displayName": "GitFox File System Provider",
-  "description": "Provides gitfox:// file system and authentication for GitFox WebIDE",
-  "version": "1.0.0",
+  "displayName": "GitFox Source Control",
+  "description": "Provides gitfox:// file system, authentication, and source control for GitFox WebIDE",
+  "version": "1.1.0",
   "publisher": "gitfox",
   "engines": {
     "vscode": "^1.109.0"
   },
-  "categories": ["Other"],
+  "categories": ["SCM Providers", "Other"],
   "extensionKind": ["web"],
   "activationEvents": ["*", "onFileSystem:gitfox"],
   "browser": "./dist/extension.js",
@@ -16,7 +16,117 @@
       "supported": true
     }
   },
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitfox.commit",
+        "title": "Commit Changes",
+        "icon": "$(check)",
+        "category": "GitFox"
+      },
+      {
+        "command": "gitfox.refresh",
+        "title": "Refresh Changes",
+        "icon": "$(refresh)",
+        "category": "GitFox"
+      },
+      {
+        "command": "gitfox.discardAll",
+        "title": "Discard All Changes",
+        "icon": "$(discard)",
+        "category": "GitFox"
+      },
+      {
+        "command": "gitfox.stageAll",
+        "title": "Stage All Changes",
+        "icon": "$(add)",
+        "category": "GitFox"
+      },
+      {
+        "command": "gitfox.unstageAll",
+        "title": "Unstage All Changes",
+        "icon": "$(remove)",
+        "category": "GitFox"
+      },
+      {
+        "command": "gitfox.openFile",
+        "title": "Open File",
+        "icon": "$(go-to-file)",
+        "category": "GitFox"
+      },
+      {
+        "command": "gitfox.discardChange",
+        "title": "Discard Change",
+        "icon": "$(discard)",
+        "category": "GitFox"
+      },
+      {
+        "command": "gitfox.stageChange",
+        "title": "Stage Change",
+        "icon": "$(add)",
+        "category": "GitFox"
+      },
+      {
+        "command": "gitfox.unstageChange",
+        "title": "Unstage Change",
+        "icon": "$(remove)",
+        "category": "GitFox"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "gitfox.commit",
+          "group": "navigation",
+          "when": "scmProvider == gitfox"
+        },
+        {
+          "command": "gitfox.refresh",
+          "group": "navigation",
+          "when": "scmProvider == gitfox"
+        }
+      ],
+      "scm/resourceGroup/context": [
+        {
+          "command": "gitfox.stageAll",
+          "group": "inline",
+          "when": "scmProvider == gitfox && scmResourceGroup == changes"
+        },
+        {
+          "command": "gitfox.discardAll",
+          "group": "inline",
+          "when": "scmProvider == gitfox && scmResourceGroup == changes"
+        },
+        {
+          "command": "gitfox.unstageAll",
+          "group": "inline",
+          "when": "scmProvider == gitfox && scmResourceGroup == staged"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "gitfox.openFile",
+          "group": "inline",
+          "when": "scmProvider == gitfox"
+        },
+        {
+          "command": "gitfox.stageChange",
+          "group": "inline",
+          "when": "scmProvider == gitfox && scmResourceGroup == changes"
+        },
+        {
+          "command": "gitfox.discardChange",
+          "group": "inline",
+          "when": "scmProvider == gitfox && scmResourceGroup == changes"
+        },
+        {
+          "command": "gitfox.unstageChange",
+          "group": "inline",
+          "when": "scmProvider == gitfox && scmResourceGroup == staged"
+        }
+      ]
+    }
+  },
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=browser --target=es2020 --minify"
   },

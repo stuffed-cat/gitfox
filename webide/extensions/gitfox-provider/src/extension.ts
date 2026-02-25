@@ -1,9 +1,20 @@
 /**
  * GitFox VS Code Extension
- * 注册 gitfox:// FileSystemProvider 和 GitFox AuthenticationProvider
+ * 
+ * 提供完整的源代码管理功能:
+ * - gitfox:// FileSystemProvider - 远程文件读写
+ * - SourceControl Provider - 变更跟踪、暂存、提交
+ * - AuthenticationProvider - OAuth2 认证
+ * 
+ * 核心策略：
+ * 1. 文件通过 API 按需加载，缓存在内存中
+ * 2. 本地修改跟踪在 pendingChanges 中
+ * 3. 提交通过 batch_commit API 一次性推送到服务器
  */
 
 import * as vscode from 'vscode';
+
+// ==================== 类型定义 ====================
 
 interface GitFoxConfig {
   accessToken: string;
@@ -34,6 +45,31 @@ interface FileContent {
   content: string;
 }
 
+interface FileChange {
+  path: string;
+  action: 'create' | 'update' | 'delete';
+  originalContent?: Uint8Array;  // 原始内容 (用于 diff)
+  localContent?: Uint8Array;     // 修改后的内容
+}
+
+interface BatchCommitRequest {
+  branch: string;
+  commit_message: string;
+  actions: Array<{
+    action: string;
+    file_path: string;
+    content?: string;
+  }>;
+}
+
+interface CommitResponse {
+  sha: string;
+}
+
+// ==================== 扩展入口 ====================
+
+let extensionInstance: GitFoxExtension | null = null;
+
 export function activate(context: vscode.ExtensionContext): Promise<void> {
   return activateInternal(context);
 }
@@ -53,45 +89,904 @@ async function activateInternal(context: vscode.ExtensionContext): Promise<void>
     ref: config.projectInfo.ref
   });
 
-  // 1. 注册认证提供者
-  const authProvider = new GitFoxAuthProvider(config);
-  context.subscriptions.push(
-    vscode.authentication.registerAuthenticationProvider(
-      'gitfox',
-      'GitFox',
-      authProvider,
-      { supportsMultipleAccounts: false }
-    )
-  );
-  console.log('[GitFox] Authentication provider registered');
-
-  // 2. 注册文件系统提供者
-  const fsProvider = new GitFoxFileSystemProvider(config);
-  context.subscriptions.push(
-    vscode.workspace.registerFileSystemProvider('gitfox', fsProvider, {
-      isCaseSensitive: true,
-      isReadonly: false,
-    })
-  );
-  console.log('[GitFox] File system provider registered for gitfox://');
-
-  // 在扩展激活后，打开 gitfox:// 工作区
-  const folderUri = vscode.Uri.parse(`gitfox://${config.projectInfo.owner}/${config.projectInfo.repo}`);
-  console.log('[GitFox] Opening workspace:', folderUri.toString());
+  extensionInstance = new GitFoxExtension(config, context);
+  await extensionInstance.initialize();
   
-  // 仅在工作区中尚无该 folder 时才添加（bootstrap 可能已设置）
-  const existingFolders = vscode.workspace.workspaceFolders || [];
-  const alreadyOpen = existingFolders.some(f => f.uri.toString() === folderUri.toString());
-  if (!alreadyOpen) {
-    vscode.workspace.updateWorkspaceFolders(existingFolders.length, 0, { uri: folderUri });
-  }
-
   console.log('[GitFox] Extension activated successfully');
 }
 
 export function deactivate() {
+  extensionInstance?.dispose();
+  extensionInstance = null;
   console.log('[GitFox] Extension deactivated');
 }
+
+// ==================== GitFox Extension 主类 ====================
+
+class GitFoxExtension {
+  private fsProvider: GitFoxFileSystemProvider;
+  private scmProvider: GitFoxSourceControlProvider;
+  private authProvider: GitFoxAuthProvider;
+  private disposables: vscode.Disposable[] = [];
+
+  constructor(
+    private config: GitFoxConfig,
+    private context: vscode.ExtensionContext
+  ) {
+    this.fsProvider = new GitFoxFileSystemProvider(config);
+    this.scmProvider = new GitFoxSourceControlProvider(config, this.fsProvider);
+    this.authProvider = new GitFoxAuthProvider(config);
+  }
+
+  async initialize() {
+    // 1. 注册认证提供者
+    this.disposables.push(
+      vscode.authentication.registerAuthenticationProvider(
+        'gitfox',
+        'GitFox',
+        this.authProvider,
+        { supportsMultipleAccounts: false }
+      )
+    );
+    console.log('[GitFox] Authentication provider registered');
+
+    // 2. 注册文件系统提供者
+    this.disposables.push(
+      vscode.workspace.registerFileSystemProvider('gitfox', this.fsProvider, {
+        isCaseSensitive: true,
+        isReadonly: false,
+      })
+    );
+    console.log('[GitFox] File system provider registered');
+
+    // 3. 注册 SCM 提供者
+    this.scmProvider.register();
+    this.disposables.push(this.scmProvider);
+    console.log('[GitFox] Source control provider registered');
+
+    // 4. 注册命令
+    this.registerCommands();
+
+    // 5. 监听文件变更
+    this.disposables.push(
+      vscode.workspace.onDidSaveTextDocument(doc => this.onDocumentSaved(doc))
+    );
+
+    // 6. 打开工作区
+    const folderUri = vscode.Uri.parse(
+      `gitfox://${this.config.projectInfo.owner}/${this.config.projectInfo.repo}`
+    );
+    
+    const existingFolders = vscode.workspace.workspaceFolders || [];
+    const alreadyOpen = existingFolders.some(f => f.uri.toString() === folderUri.toString());
+    if (!alreadyOpen) {
+      vscode.workspace.updateWorkspaceFolders(existingFolders.length, 0, { uri: folderUri });
+    }
+  }
+
+  private registerCommands() {
+    // 提交
+    this.disposables.push(
+      vscode.commands.registerCommand('gitfox.commit', () => this.scmProvider.commit())
+    );
+    
+    // 刷新
+    this.disposables.push(
+      vscode.commands.registerCommand('gitfox.refresh', () => this.scmProvider.refresh())
+    );
+    
+    // 丢弃所有更改
+    this.disposables.push(
+      vscode.commands.registerCommand('gitfox.discardAll', () => this.scmProvider.discardAll())
+    );
+    
+    // 暂存所有
+    this.disposables.push(
+      vscode.commands.registerCommand('gitfox.stageAll', () => this.scmProvider.stageAll())
+    );
+    
+    // 取消暂存所有
+    this.disposables.push(
+      vscode.commands.registerCommand('gitfox.unstageAll', () => this.scmProvider.unstageAll())
+    );
+    
+    // 打开文件
+    this.disposables.push(
+      vscode.commands.registerCommand('gitfox.openFile', (resource: vscode.SourceControlResourceState) => {
+        if (resource?.resourceUri) {
+          vscode.commands.executeCommand('vscode.open', resource.resourceUri);
+        }
+      })
+    );
+    
+    // 暂存单个文件
+    this.disposables.push(
+      vscode.commands.registerCommand('gitfox.stageChange', (resource: vscode.SourceControlResourceState) => {
+        if (resource?.resourceUri) {
+          this.scmProvider.stage(resource.resourceUri);
+        }
+      })
+    );
+    
+    // 取消暂存单个文件
+    this.disposables.push(
+      vscode.commands.registerCommand('gitfox.unstageChange', (resource: vscode.SourceControlResourceState) => {
+        if (resource?.resourceUri) {
+          this.scmProvider.unstage(resource.resourceUri);
+        }
+      })
+    );
+    
+    // 丢弃单个更改
+    this.disposables.push(
+      vscode.commands.registerCommand('gitfox.discardChange', (resource: vscode.SourceControlResourceState) => {
+        if (resource?.resourceUri) {
+          this.scmProvider.discard(resource.resourceUri);
+        }
+      })
+    );
+  }
+
+  private onDocumentSaved(doc: vscode.TextDocument) {
+    if (doc.uri.scheme === 'gitfox') {
+      // 文件已保存到 FileSystemProvider，SCM 会自动检测到变更
+      this.scmProvider.notifyFileChanged(doc.uri);
+    }
+  }
+
+  dispose() {
+    this.disposables.forEach(d => d.dispose());
+    this.disposables = [];
+  }
+}
+
+// ==================== Source Control Provider ====================
+
+class GitFoxSourceControlProvider implements vscode.Disposable {
+  private scm: vscode.SourceControl;
+  private changesGroup: vscode.SourceControlResourceGroup;
+  private stagedGroup: vscode.SourceControlResourceGroup;
+  
+  /** 所有待处理的更改 (path -> change) */
+  private changes = new Map<string, FileChange>();
+  /** 已暂存的文件路径 */
+  private stagedPaths = new Set<string>();
+  
+  private disposables: vscode.Disposable[] = [];
+
+  constructor(
+    private config: GitFoxConfig,
+    private fsProvider: GitFoxFileSystemProvider
+  ) {
+    const rootUri = vscode.Uri.parse(
+      `gitfox://${config.projectInfo.owner}/${config.projectInfo.repo}`
+    );
+    
+    this.scm = vscode.scm.createSourceControl('gitfox', 'GitFox', rootUri);
+    this.scm.inputBox.placeholder = `提交到 ${config.projectInfo.ref} 分支的消息`;
+    this.scm.acceptInputCommand = {
+      command: 'gitfox.commit',
+      title: 'Commit'
+    };
+    
+    // 创建资源组
+    this.changesGroup = this.scm.createResourceGroup('changes', 'Changes');
+    this.stagedGroup = this.scm.createResourceGroup('staged', 'Staged Changes');
+    
+    this.changesGroup.hideWhenEmpty = true;
+    this.stagedGroup.hideWhenEmpty = true;
+  }
+
+  register() {
+    // 监听 FileSystemProvider 的变更
+    this.disposables.push(
+      this.fsProvider.onDidChangeFile(events => this.onFileSystemChange(events))
+    );
+  }
+
+  private onFileSystemChange(events: readonly vscode.FileChangeEvent[]) {
+    for (const event of events) {
+      const path = this.getFilePath(event.uri);
+      
+      switch (event.type) {
+        case vscode.FileChangeType.Created:
+          this.trackChange(path, 'create');
+          break;
+        case vscode.FileChangeType.Changed:
+          // 只有在不是新建文件时才标记为 update
+          if (!this.changes.has(path) || this.changes.get(path)?.action !== 'create') {
+            this.trackChange(path, 'update');
+          }
+          break;
+        case vscode.FileChangeType.Deleted:
+          this.trackChange(path, 'delete');
+          break;
+      }
+    }
+    this.updateResourceGroups();
+  }
+
+  notifyFileChanged(uri: vscode.Uri) {
+    const path = this.getFilePath(uri);
+    
+    // 检查文件是否真的有变更
+    const localContent = this.fsProvider.getFileCache(path);
+    const originalContent = this.fsProvider.getOriginalContent(path);
+    
+    if (localContent && originalContent) {
+      // 比较内容
+      if (this.arraysEqual(localContent, originalContent)) {
+        // 没有变更，移除跟踪
+        this.changes.delete(path);
+        this.stagedPaths.delete(path);
+      } else {
+        // 有变更
+        this.trackChange(path, 'update', originalContent, localContent);
+      }
+    } else if (localContent && !originalContent) {
+      // 新文件
+      this.trackChange(path, 'create', undefined, localContent);
+    }
+    
+    this.updateResourceGroups();
+  }
+
+  private trackChange(
+    path: string, 
+    action: 'create' | 'update' | 'delete',
+    originalContent?: Uint8Array,
+    localContent?: Uint8Array
+  ) {
+    const existing = this.changes.get(path);
+    
+    // 如果删除一个新建的文件，直接移除记录
+    if (action === 'delete' && existing?.action === 'create') {
+      this.changes.delete(path);
+      this.stagedPaths.delete(path);
+      return;
+    }
+    
+    this.changes.set(path, {
+      path,
+      action,
+      originalContent: originalContent ?? existing?.originalContent,
+      localContent: localContent ?? existing?.localContent,
+    });
+  }
+
+  private updateResourceGroups() {
+    const changedResources: vscode.SourceControlResourceState[] = [];
+    const stagedResources: vscode.SourceControlResourceState[] = [];
+    
+    for (const [path, change] of this.changes) {
+      const uri = this.pathToUri(path);
+      const resource = this.createResourceState(uri, change);
+      
+      if (this.stagedPaths.has(path)) {
+        stagedResources.push(resource);
+      } else {
+        changedResources.push(resource);
+      }
+    }
+    
+    this.changesGroup.resourceStates = changedResources;
+    this.stagedGroup.resourceStates = stagedResources;
+    
+    // 更新徽章计数
+    this.scm.count = this.changes.size;
+  }
+
+  private createResourceState(
+    uri: vscode.Uri, 
+    change: FileChange
+  ): vscode.SourceControlResourceState {
+    let decorations: vscode.SourceControlResourceDecorations;
+    
+    switch (change.action) {
+      case 'create':
+        decorations = {
+          strikeThrough: false,
+          tooltip: 'New File',
+          iconPath: new vscode.ThemeIcon('add', new vscode.ThemeColor('gitDecoration.addedResourceForeground')),
+        };
+        break;
+      case 'delete':
+        decorations = {
+          strikeThrough: true,
+          tooltip: 'Deleted',
+          iconPath: new vscode.ThemeIcon('trash', new vscode.ThemeColor('gitDecoration.deletedResourceForeground')),
+        };
+        break;
+      default:
+        decorations = {
+          strikeThrough: false,
+          tooltip: 'Modified',
+          iconPath: new vscode.ThemeIcon('edit', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground')),
+        };
+    }
+    
+    return {
+      resourceUri: uri,
+      decorations,
+      command: change.action !== 'delete' ? {
+        command: 'vscode.open',
+        title: 'Open',
+        arguments: [uri]
+      } : undefined,
+    };
+  }
+
+  // ==================== SCM 操作 ====================
+
+  async commit() {
+    const message = this.scm.inputBox.value?.trim();
+    if (!message) {
+      vscode.window.showWarningMessage('请输入提交消息');
+      return;
+    }
+    
+    // 获取要提交的更改 (优先暂存区，否则全部)
+    const pathsToCommit = this.stagedPaths.size > 0 
+      ? [...this.stagedPaths] 
+      : [...this.changes.keys()];
+    
+    if (pathsToCommit.length === 0) {
+      vscode.window.showInformationMessage('没有要提交的更改');
+      return;
+    }
+    
+    // 构建提交请求
+    const actions: BatchCommitRequest['actions'] = [];
+    
+    for (const path of pathsToCommit) {
+      const change = this.changes.get(path);
+      if (!change) continue;
+      
+      if (change.action === 'delete') {
+        actions.push({
+          action: 'delete',
+          file_path: path,
+        });
+      } else {
+        const content = this.fsProvider.getFileCache(path);
+        if (content) {
+          // 将 Uint8Array 转换为字符串
+          const textContent = new TextDecoder().decode(content);
+          actions.push({
+            action: change.action,
+            file_path: path,
+            content: textContent,
+          });
+        }
+      }
+    }
+    
+    if (actions.length === 0) {
+      vscode.window.showWarningMessage('没有有效的更改可提交');
+      return;
+    }
+    
+    // 发送提交请求
+    try {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.SourceControl,
+          title: '正在提交更改...',
+        },
+        async () => {
+          const { projectInfo, accessToken } = this.config;
+          const base = this.config.apiBaseUrl || 
+            (typeof self !== 'undefined' && (self as any).location?.origin) ||
+            (typeof location !== 'undefined' ? location.origin : '');
+          
+          const response = await fetch(
+            `${base}/api/v1/projects/${projectInfo.owner}/${projectInfo.repo}/repository/commits/batch`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                branch: projectInfo.ref,
+                commit_message: message,
+                actions,
+              }),
+            }
+          );
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`提交失败: ${errorText}`);
+          }
+          
+          const result: CommitResponse = await response.json();
+          return result;
+        }
+      );
+      
+      // 提交成功，清理状态
+      for (const path of pathsToCommit) {
+        // 更新原始内容为当前内容
+        const content = this.fsProvider.getFileCache(path);
+        if (content) {
+          this.fsProvider.setOriginalContent(path, content);
+        }
+        this.changes.delete(path);
+        this.stagedPaths.delete(path);
+      }
+      
+      this.scm.inputBox.value = '';
+      this.updateResourceGroups();
+      vscode.window.showInformationMessage(`成功提交 ${actions.length} 个文件变更`);
+      
+    } catch (error) {
+      vscode.window.showErrorMessage(`${error}`);
+    }
+  }
+
+  refresh() {
+    // 清除缓存并重新检测变更
+    this.fsProvider.clearCache();
+    this.changes.clear();
+    this.stagedPaths.clear();
+    this.updateResourceGroups();
+    vscode.window.showInformationMessage('已刷新');
+  }
+
+  stageAll() {
+    for (const path of this.changes.keys()) {
+      this.stagedPaths.add(path);
+    }
+    this.updateResourceGroups();
+  }
+
+  unstageAll() {
+    this.stagedPaths.clear();
+    this.updateResourceGroups();
+  }
+
+  stage(uri: vscode.Uri) {
+    const path = this.getFilePath(uri);
+    this.stagedPaths.add(path);
+    this.updateResourceGroups();
+  }
+
+  unstage(uri: vscode.Uri) {
+    const path = this.getFilePath(uri);
+    this.stagedPaths.delete(path);
+    this.updateResourceGroups();
+  }
+
+  async discard(uri: vscode.Uri) {
+    const path = this.getFilePath(uri);
+    const change = this.changes.get(path);
+    
+    if (!change) return;
+    
+    const confirm = await vscode.window.showWarningMessage(
+      `确定要丢弃对 "${path}" 的更改吗？`,
+      { modal: true },
+      '丢弃'
+    );
+    
+    if (confirm !== '丢弃') return;
+    
+    if (change.action === 'create') {
+      // 删除新建的文件
+      this.fsProvider.deleteFromCache(path);
+    } else if (change.originalContent) {
+      // 恢复原始内容
+      this.fsProvider.restoreContent(path, change.originalContent);
+    }
+    
+    this.changes.delete(path);
+    this.stagedPaths.delete(path);
+    this.updateResourceGroups();
+  }
+
+  async discardAll() {
+    if (this.changes.size === 0) return;
+    
+    const confirm = await vscode.window.showWarningMessage(
+      `确定要丢弃所有 ${this.changes.size} 个更改吗？`,
+      { modal: true },
+      '丢弃全部'
+    );
+    
+    if (confirm !== '丢弃全部') return;
+    
+    for (const [path, change] of this.changes) {
+      if (change.action === 'create') {
+        this.fsProvider.deleteFromCache(path);
+      } else if (change.originalContent) {
+        this.fsProvider.restoreContent(path, change.originalContent);
+      }
+    }
+    
+    this.changes.clear();
+    this.stagedPaths.clear();
+    this.updateResourceGroups();
+  }
+
+  // ==================== 工具方法 ====================
+
+  private getFilePath(uri: vscode.Uri): string {
+    const repo = this.config.projectInfo.repo;
+    const prefix = `/${repo}/`;
+    const rootPath = `/${repo}`;
+
+    if (uri.path === rootPath || uri.path === rootPath + '/' || uri.path === '/' || uri.path === '') {
+      return '';
+    } else if (uri.path.startsWith(prefix)) {
+      return uri.path.slice(prefix.length);
+    } else {
+      return uri.path.replace(/^\//, '');
+    }
+  }
+
+  private pathToUri(path: string): vscode.Uri {
+    const { owner, repo } = this.config.projectInfo;
+    return vscode.Uri.parse(`gitfox://${owner}/${repo}/${path}`);
+  }
+
+  private arraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  }
+
+  dispose() {
+    this.disposables.forEach(d => d.dispose());
+    this.scm.dispose();
+  }
+}
+
+// ==================== File System Provider ====================
+
+class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
+  private _emitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
+  readonly onDidChangeFile = this._emitter.event;
+
+  private fileCache = new Map<string, Uint8Array>();
+  private dirCache = new Map<string, [string, vscode.FileType][]>();
+  private typeCache = new Map<string, vscode.FileType>();
+  
+  /** 原始内容 (从服务器获取的版本，用于 diff 比较) */
+  private originalContent = new Map<string, Uint8Array>();
+
+  constructor(private config: GitFoxConfig) {}
+
+  // ==================== 缓存访问方法 (供 SCM Provider 使用) ====================
+
+  getFileCache(path: string): Uint8Array | undefined {
+    return this.fileCache.get(path);
+  }
+
+  getOriginalContent(path: string): Uint8Array | undefined {
+    return this.originalContent.get(path);
+  }
+
+  setOriginalContent(path: string, content: Uint8Array) {
+    this.originalContent.set(path, content);
+  }
+
+  deleteFromCache(path: string) {
+    this.fileCache.delete(path);
+    this.originalContent.delete(path);
+  }
+
+  restoreContent(path: string, content: Uint8Array) {
+    this.fileCache.set(path, content);
+    // 触发文件内容变更
+    const uri = this.pathToUri(path);
+    this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+  }
+
+  clearCache() {
+    this.fileCache.clear();
+    this.dirCache.clear();
+    this.typeCache.clear();
+    this.originalContent.clear();
+  }
+
+  private pathToUri(path: string): vscode.Uri {
+    const { owner, repo } = this.config.projectInfo;
+    return vscode.Uri.parse(`gitfox://${owner}/${repo}/${path}`);
+  }
+
+  // ==================== FileSystemProvider 实现 ====================
+
+  private getFilePath(uri: vscode.Uri): string {
+    const repo = this.config.projectInfo.repo;
+    const prefix = `/${repo}/`;
+    const rootPath = `/${repo}`;
+
+    if (uri.path === rootPath || uri.path === rootPath + '/' || uri.path === '/' || uri.path === '') {
+      return '';
+    } else if (uri.path.startsWith(prefix)) {
+      return uri.path.slice(prefix.length);
+    } else {
+      return uri.path.replace(/^\//, '');
+    }
+  }
+
+  private async apiFetch<T>(endpoint: string): Promise<T> {
+    const base = this.config.apiBaseUrl ||
+      (typeof self !== 'undefined' && (self as any).location?.origin) ||
+      (typeof location !== 'undefined' ? location.origin : '');
+    const response = await fetch(`${base}/api/v1${endpoint}`, {
+      headers: {
+        Authorization: `Bearer ${this.config.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API Error ${response.status}: ${errorText}`);
+    }
+
+    return response.json();
+  }
+
+  watch(): vscode.Disposable {
+    return new vscode.Disposable(() => {});
+  }
+
+  async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
+    console.log('[GitFox] stat:', uri.toString());
+
+    const filePath = this.getFilePath(uri);
+
+    if (filePath === '') {
+      return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
+    }
+
+    if (this.fileCache.has(filePath)) {
+      return {
+        type: vscode.FileType.File,
+        ctime: 0,
+        mtime: Date.now(),
+        size: this.fileCache.get(filePath)!.byteLength,
+      };
+    }
+
+    if (this.dirCache.has(filePath)) {
+      return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
+    }
+
+    const lastSlash = filePath.lastIndexOf('/');
+    const parentPath = lastSlash >= 0 ? filePath.slice(0, lastSlash) : '';
+    const entryName = lastSlash >= 0 ? filePath.slice(lastSlash + 1) : filePath;
+
+    if (!this.dirCache.has(parentPath)) {
+      try {
+        const { projectInfo } = this.config;
+        const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
+        const params = new URLSearchParams({
+          ref: projectInfo.ref,
+          ...(parentPath && { path: parentPath }),
+        });
+        const entries = await this.apiFetch<TreeEntry[]>(
+          `${apiBase}/repository/tree?${params.toString()}`
+        );
+        const result: [string, vscode.FileType][] = entries.map((e: any) => [
+          e.name,
+          e.entry_type === 'Directory' ? vscode.FileType.Directory : vscode.FileType.File,
+        ]);
+        this.dirCache.set(parentPath, result);
+        this.typeCache.set(parentPath.length ? parentPath : '__root__', vscode.FileType.Directory);
+        const prefix = parentPath ? `${parentPath}/` : '';
+        for (const [n, t] of result) {
+          this.typeCache.set(`${prefix}${n}`, t);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const parentEntries = this.dirCache.get(parentPath);
+    if (parentEntries) {
+      const entry = parentEntries.find(([n]) => n === entryName);
+      if (!entry) {
+        throw vscode.FileSystemError.FileNotFound(uri);
+      }
+      const [, type] = entry;
+      if (type === vscode.FileType.Directory) {
+        return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
+      }
+      try {
+        const { projectInfo } = this.config;
+        const params = new URLSearchParams({ ref: projectInfo.ref });
+        const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
+        const fileContent = await this.apiFetch<FileContent>(
+          `${apiBase}/repository/files/${encodeURIComponent(filePath)}?${params.toString()}`
+        );
+        const content = fileContent.encoding === 'base64'
+          ? Uint8Array.from(atob(fileContent.content), c => c.charCodeAt(0))
+          : new TextEncoder().encode(fileContent.content);
+        this.fileCache.set(filePath, content);
+        this.originalContent.set(filePath, content);  // 保存原始内容
+        return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: content.byteLength };
+      } catch {
+        return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: 0 };
+      }
+    }
+
+    const cachedType = this.typeCache.get(filePath);
+    if (cachedType === vscode.FileType.Directory) {
+      return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
+    }
+
+    throw vscode.FileSystemError.FileNotFound(uri);
+  }
+
+  async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
+    console.log('[GitFox] readDirectory:', uri.toString());
+
+    const filePath = this.getFilePath(uri);
+
+    if (this.dirCache.has(filePath)) {
+      return this.dirCache.get(filePath)!;
+    }
+
+    try {
+      const { projectInfo } = this.config;
+      const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
+
+      const params = new URLSearchParams({
+        ref: projectInfo.ref,
+        ...(filePath && { path: filePath }),
+      });
+
+      const entries = await this.apiFetch<TreeEntry[]>(
+        `${apiBase}/repository/tree?${params.toString()}`
+      );
+
+      const result: [string, vscode.FileType][] = entries.map((entry: any) => [
+        entry.name,
+        entry.entry_type === 'Directory' ? vscode.FileType.Directory : vscode.FileType.File
+      ]);
+
+      this.dirCache.set(filePath, result);
+      if (filePath) {
+        this.typeCache.set(filePath, vscode.FileType.Directory);
+      }
+      const prefix = filePath ? `${filePath}/` : '';
+      for (const [name, type] of result) {
+        this.typeCache.set(`${prefix}${name}`, type);
+      }
+      console.log(`[GitFox] readDirectory result: ${result.length} entries`);
+      return result;
+    } catch (error) {
+      console.error('[GitFox] readDirectory error:', error);
+      throw vscode.FileSystemError.FileNotFound(uri);
+    }
+  }
+
+  async readFile(uri: vscode.Uri): Promise<Uint8Array> {
+    console.log('[GitFox] readFile:', uri.toString());
+
+    const filePath = this.getFilePath(uri);
+
+    if (this.fileCache.has(filePath)) {
+      return this.fileCache.get(filePath)!;
+    }
+
+    try {
+      const { projectInfo } = this.config;
+      const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
+
+      const params = new URLSearchParams({ ref: projectInfo.ref });
+      const fileContent = await this.apiFetch<FileContent>(
+        `${apiBase}/repository/files/${encodeURIComponent(filePath)}?${params.toString()}`
+      );
+
+      const content = fileContent.encoding === 'base64'
+        ? Uint8Array.from(atob(fileContent.content), c => c.charCodeAt(0))
+        : new TextEncoder().encode(fileContent.content);
+
+      this.fileCache.set(filePath, content);
+      this.originalContent.set(filePath, content);  // 保存原始内容
+      console.log(`[GitFox] readFile success: ${content.byteLength} bytes`);
+      return content;
+    } catch (error) {
+      console.error('[GitFox] readFile error:', error);
+      throw vscode.FileSystemError.FileNotFound(uri);
+    }
+  }
+
+  async writeFile(
+    uri: vscode.Uri,
+    content: Uint8Array,
+    options: { create: boolean; overwrite: boolean }
+  ): Promise<void> {
+    console.log('[GitFox] writeFile:', uri.toString());
+
+    const filePath = this.getFilePath(uri);
+    const isNew = !this.fileCache.has(filePath) && !this.originalContent.has(filePath);
+    
+    this.fileCache.set(filePath, content);
+
+    this._emitter.fire([{
+      type: isNew ? vscode.FileChangeType.Created : vscode.FileChangeType.Changed,
+      uri
+    }]);
+  }
+
+  async delete(uri: vscode.Uri): Promise<void> {
+    console.log('[GitFox] delete:', uri.toString());
+
+    const filePath = this.getFilePath(uri);
+    this.fileCache.delete(filePath);
+
+    this._emitter.fire([{
+      type: vscode.FileChangeType.Deleted,
+      uri
+    }]);
+  }
+
+  async rename(oldUri: vscode.Uri, newUri: vscode.Uri): Promise<void> {
+    console.log('[GitFox] rename:', oldUri.toString(), '->', newUri.toString());
+
+    const oldPath = this.getFilePath(oldUri);
+    const newPath = this.getFilePath(newUri);
+
+    const content = this.fileCache.get(oldPath);
+    if (content) {
+      this.fileCache.set(newPath, content);
+      this.fileCache.delete(oldPath);
+    }
+
+    this._emitter.fire([
+      { type: vscode.FileChangeType.Deleted, uri: oldUri },
+      { type: vscode.FileChangeType.Created, uri: newUri }
+    ]);
+  }
+
+  async createDirectory(uri: vscode.Uri): Promise<void> {
+    console.log('[GitFox] createDirectory:', uri.toString());
+    // 目录通过写入文件隐式创建
+  }
+}
+
+// ==================== Authentication Provider ====================
+
+class GitFoxAuthProvider implements vscode.AuthenticationProvider {
+  private _onDidChangeSessions = new vscode.EventEmitter<vscode.AuthenticationProviderAuthenticationSessionsChangeEvent>();
+  readonly onDidChangeSessions = this._onDidChangeSessions.event;
+
+  private _session: vscode.AuthenticationSession;
+
+  constructor(private config: GitFoxConfig) {
+    this._session = {
+      id: `gitfox-${config.userInfo.id}`,
+      accessToken: config.accessToken,
+      account: {
+        id: config.userInfo.id.toString(),
+        label: config.userInfo.username,
+      },
+      scopes: ['api', 'read_user', 'read_repository', 'write_repository'],
+    };
+  }
+
+  async getSessions(scopes?: string[]): Promise<vscode.AuthenticationSession[]> {
+    return [this._session];
+  }
+
+  async createSession(scopes: string[]): Promise<vscode.AuthenticationSession> {
+    return this._session;
+  }
+
+  async removeSession(sessionId: string): Promise<void> {
+    throw new Error('Session removal not supported in GitFox WebIDE');
+  }
+}
+
+// ==================== 配置解析 ====================
 
 function parseProjectInfoFromUrl(url: string): GitFoxConfig['projectInfo'] | null {
   try {
@@ -123,8 +1018,7 @@ function loadConfigFromStorage(): Partial<GitFoxConfig> | null {
         return JSON.parse(raw) as Partial<GitFoxConfig>;
       }
     }
-  } catch {
-  }
+  } catch {}
 
   try {
     if (typeof sessionStorage !== 'undefined') {
@@ -133,8 +1027,7 @@ function loadConfigFromStorage(): Partial<GitFoxConfig> | null {
         return JSON.parse(raw) as Partial<GitFoxConfig>;
       }
     }
-  } catch {
-  }
+  } catch {}
 
   return null;
 }
@@ -171,8 +1064,7 @@ async function loadConfigFromIndexedDb(): Promise<Partial<GitFoxConfig> | null> 
     if (value && typeof value === 'object') {
       return value as Partial<GitFoxConfig>;
     }
-  } catch {
-  }
+  } catch {}
 
   return null;
 }
@@ -185,8 +1077,7 @@ function getStoredAccessToken(): string | null {
         return token;
       }
     }
-  } catch {
-  }
+  } catch {}
 
   const storedConfig = loadConfigFromStorage();
   if (storedConfig?.accessToken) {
@@ -268,329 +1159,4 @@ async function resolveConfig(): Promise<GitFoxConfig | null> {
   }
 
   return null;
-}
-
-/**
- * GitFox 认证提供者
- */
-class GitFoxAuthProvider implements vscode.AuthenticationProvider {
-  private _onDidChangeSessions = new vscode.EventEmitter<vscode.AuthenticationProviderAuthenticationSessionsChangeEvent>();
-  readonly onDidChangeSessions = this._onDidChangeSessions.event;
-
-  private _session: vscode.AuthenticationSession;
-
-  constructor(private config: GitFoxConfig) {
-    this._session = {
-      id: `gitfox-${config.userInfo.id}`,
-      accessToken: config.accessToken,
-      account: {
-        id: config.userInfo.id.toString(),
-        label: config.userInfo.username,
-      },
-      scopes: ['api', 'read_user', 'read_repository', 'write_repository'],
-    };
-  }
-
-  async getSessions(scopes?: string[]): Promise<vscode.AuthenticationSession[]> {
-    // 简单实现：总是返回当前会话
-    return [this._session];
-  }
-
-  async createSession(scopes: string[]): Promise<vscode.AuthenticationSession> {
-    return this._session;
-  }
-
-  async removeSession(sessionId: string): Promise<void> {
-    // 不支持移除会话
-    throw new Error('Session removal not supported in GitFox WebIDE');
-  }
-}
-
-/**
- * GitFox 文件系统提供者
- */
-class GitFoxFileSystemProvider implements vscode.FileSystemProvider {
-  private _emitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
-  readonly onDidChangeFile = this._emitter.event;
-
-  private fileCache = new Map<string, Uint8Array>();
-  private dirCache = new Map<string, [string, vscode.FileType][]>();
-  /** 记录已知路径的文件类型，避免 stat 对目录发出 files API 请求 */
-  private typeCache = new Map<string, vscode.FileType>();
-
-  constructor(private config: GitFoxConfig) {}
-
-  /**
-   * 从 URI 中提取相对于仓库根目录的文件路径
-   * URI 格式: gitfox://{owner}/{repo}/{...path}
-   * uri.path = /{repo}/{...path}
-   * 需要去掉 /{repo}/ 前缀，得到真正的文件路径
-   */
-  private getFilePath(uri: vscode.Uri): string {
-    const repo = this.config.projectInfo.repo;
-    const prefix = `/${repo}/`;
-    const rootPath = `/${repo}`;
-
-    if (uri.path === rootPath || uri.path === rootPath + '/' || uri.path === '/' || uri.path === '') {
-      return '';
-    } else if (uri.path.startsWith(prefix)) {
-      return uri.path.slice(prefix.length);
-    } else {
-      // fallback: 去掉前导斜杠
-      return uri.path.replace(/^\//, '');
-    }
-  }
-
-  private async apiFetch<T>(endpoint: string): Promise<T> {
-    // 在 extension host worker 中相对路径可能解析错误，使用绝对 URL
-    const base = this.config.apiBaseUrl ||
-      (typeof self !== 'undefined' && (self as any).location?.origin) ||
-      (typeof location !== 'undefined' ? location.origin : '');
-    const response = await fetch(`${base}/api/v1${endpoint}`, {
-      headers: {
-        Authorization: `Bearer ${this.config.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`API Error ${response.status}: ${errorText}`);
-    }
-
-    return response.json();
-  }
-
-  watch(): vscode.Disposable {
-    return new vscode.Disposable(() => {});
-  }
-
-  async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
-    console.log('[GitFox] stat:', uri.toString());
-
-    const filePath = this.getFilePath(uri);
-
-    // 根目录始终是 Directory
-    if (filePath === '') {
-      return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
-    }
-
-    // 检查文件内容缓存（stat 无需再请求）
-    if (this.fileCache.has(filePath)) {
-      return {
-        type: vscode.FileType.File,
-        ctime: 0,
-        mtime: Date.now(),
-        size: this.fileCache.get(filePath)!.byteLength,
-      };
-    }
-
-    // 检查目录子项缓存（已确认是目录）
-    if (this.dirCache.has(filePath)) {
-      return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
-    }
-
-    // ── 核心策略：先从父目录列表获取类型，完全避免对目录调用 files API ──
-    const lastSlash = filePath.lastIndexOf('/');
-    const parentPath = lastSlash >= 0 ? filePath.slice(0, lastSlash) : '';
-    const entryName = lastSlash >= 0 ? filePath.slice(lastSlash + 1) : filePath;
-
-    // 确保父目录已加载（若未加载则立即获取）
-    if (!this.dirCache.has(parentPath)) {
-      try {
-        const { projectInfo } = this.config;
-        const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
-        const params = new URLSearchParams({
-          ref: projectInfo.ref,
-          ...(parentPath && { path: parentPath }),
-        });
-        const entries = await this.apiFetch<TreeEntry[]>(
-          `${apiBase}/repository/tree?${params.toString()}`
-        );
-        const result: [string, vscode.FileType][] = entries.map((e: any) => [
-          e.name,
-          e.entry_type === 'Directory' ? vscode.FileType.Directory : vscode.FileType.File,
-        ]);
-        this.dirCache.set(parentPath, result);
-        this.typeCache.set(parentPath.length ? parentPath : '__root__', vscode.FileType.Directory);
-        const prefix = parentPath ? `${parentPath}/` : '';
-        for (const [n, t] of result) {
-          this.typeCache.set(`${prefix}${n}`, t);
-        }
-      } catch {
-        // 父目录不可达，留给后续 typeCache 检查
-      }
-    }
-
-    // 从父目录缓存直接读取类型
-    const parentEntries = this.dirCache.get(parentPath);
-    if (parentEntries) {
-      const entry = parentEntries.find(([n]) => n === entryName);
-      if (!entry) {
-        throw vscode.FileSystemError.FileNotFound(uri);
-      }
-      const [, type] = entry;
-      if (type === vscode.FileType.Directory) {
-        return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
-      }
-      // 是文件：获取内容以拿到 size（同时填充 fileCache 避免 readFile 重复请求）
-      try {
-        const { projectInfo } = this.config;
-        const params = new URLSearchParams({ ref: projectInfo.ref });
-        const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
-        const fileContent = await this.apiFetch<FileContent>(
-          `${apiBase}/repository/files/${filePath}?${params.toString()}`
-        );
-        const content = fileContent.encoding === 'base64'
-          ? Uint8Array.from(atob(fileContent.content), c => c.charCodeAt(0))
-          : new TextEncoder().encode(fileContent.content);
-        this.fileCache.set(filePath, content);
-        return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: content.byteLength };
-      } catch {
-        // 文件元数据不可用，返回占位 stat
-        return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: 0 };
-      }
-    }
-
-    // typeCache 最后兜底（父目录获取失败时保留旧逻辑）
-    const cachedType = this.typeCache.get(filePath);
-    if (cachedType === vscode.FileType.Directory) {
-      return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 };
-    }
-
-    throw vscode.FileSystemError.FileNotFound(uri);
-  }
-
-  async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
-    console.log('[GitFox] readDirectory:', uri.toString());
-
-    const filePath = this.getFilePath(uri);
-
-    // 检查缓存
-    if (this.dirCache.has(filePath)) {
-      return this.dirCache.get(filePath)!;
-    }
-
-    // 从 API 获取目录内容
-    try {
-      const { projectInfo } = this.config;
-      const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
-
-      const params = new URLSearchParams({
-        ref: projectInfo.ref,
-        ...(filePath && { path: filePath }),
-      });
-
-      const entries = await this.apiFetch<TreeEntry[]>(
-        `${apiBase}/repository/tree?${params.toString()}`
-      );
-
-      const result: [string, vscode.FileType][] = entries.map((entry: any) => [
-        entry.name,
-        entry.entry_type === 'Directory' ? vscode.FileType.Directory : vscode.FileType.File
-      ]);
-
-      this.dirCache.set(filePath, result);
-      if (filePath) {
-        this.typeCache.set(filePath, vscode.FileType.Directory);
-      }
-      // 填充子条目类型缓存，让后续 stat 直接返回，不发出多余的 files API 请求
-      const prefix = filePath ? `${filePath}/` : '';
-      for (const [name, type] of result) {
-        this.typeCache.set(`${prefix}${name}`, type);
-      }
-      console.log(`[GitFox] readDirectory result: ${result.length} entries`);
-      return result;
-    } catch (error) {
-      console.error('[GitFox] readDirectory error:', error);
-      throw vscode.FileSystemError.FileNotFound(uri);
-    }
-  }
-
-  async readFile(uri: vscode.Uri): Promise<Uint8Array> {
-    console.log('[GitFox] readFile:', uri.toString());
-
-    const filePath = this.getFilePath(uri);
-
-    // 检查缓存（stat 预缓存或上次读取的内容）
-    if (this.fileCache.has(filePath)) {
-      return this.fileCache.get(filePath)!;
-    }
-
-    // 从 API 获取文件内容
-    try {
-      const { projectInfo } = this.config;
-      const apiBase = `/projects/${projectInfo.owner}/${projectInfo.repo}`;
-
-      const params = new URLSearchParams({ ref: projectInfo.ref });
-      const fileContent = await this.apiFetch<FileContent>(
-        `${apiBase}/repository/files/${filePath}?${params.toString()}`
-      );
-
-      // 解码内容
-      const content = fileContent.encoding === 'base64'
-        ? Uint8Array.from(atob(fileContent.content), c => c.charCodeAt(0))
-        : new TextEncoder().encode(fileContent.content);
-
-      this.fileCache.set(filePath, content);
-      console.log(`[GitFox] readFile success: ${content.byteLength} bytes`);
-      return content;
-    } catch (error) {
-      console.error('[GitFox] readFile error:', error);
-      throw vscode.FileSystemError.FileNotFound(uri);
-    }
-  }
-
-  async writeFile(
-    uri: vscode.Uri,
-    content: Uint8Array,
-    options: { create: boolean; overwrite: boolean }
-  ): Promise<void> {
-    console.log('[GitFox] writeFile:', uri.toString());
-
-    const filePath = this.getFilePath(uri);
-    this.fileCache.set(filePath, content);
-
-    this._emitter.fire([{
-      type: vscode.FileChangeType.Changed,
-      uri
-    }]);
-
-    // TODO: 标记为待提交的更改
-  }
-
-  async delete(uri: vscode.Uri): Promise<void> {
-    console.log('[GitFox] delete:', uri.toString());
-
-    const filePath = this.getFilePath(uri);
-    this.fileCache.delete(filePath);
-
-    this._emitter.fire([{
-      type: vscode.FileChangeType.Deleted,
-      uri
-    }]);
-  }
-
-  async rename(oldUri: vscode.Uri, newUri: vscode.Uri): Promise<void> {
-    console.log('[GitFox] rename:', oldUri.toString(), '->', newUri.toString());
-
-    const oldPath = this.getFilePath(oldUri);
-    const newPath = this.getFilePath(newUri);
-
-    const content = this.fileCache.get(oldPath);
-    if (content) {
-      this.fileCache.set(newPath, content);
-      this.fileCache.delete(oldPath);
-    }
-
-    this._emitter.fire([
-      { type: vscode.FileChangeType.Deleted, uri: oldUri },
-      { type: vscode.FileChangeType.Created, uri: newUri }
-    ]);
-  }
-
-  async createDirectory(uri: vscode.Uri): Promise<void> {
-    console.log('[GitFox] createDirectory:', uri.toString());
-    // 目录通过写入文件隐式创建
-  }
 }
