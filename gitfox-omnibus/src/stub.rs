@@ -35,6 +35,7 @@ pub fn generate_stub_project(
     copy_dir_all(&assets.webide_dir, &embedded_dir.join("webide"))?;
     copy_dir_all(&assets.binaries_dir, &embedded_dir.join("bin"))?;
     copy_dir_all(&assets.migrations_dir, &embedded_dir.join("migrations"))?;
+    copy_dir_all(&assets.templates_dir, &embedded_dir.join("templates"))?;
 
     // 生成 Cargo.toml (从模板复制)
     generate_cargo_toml(stub_dir, &template_dir)?;

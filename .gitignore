@@ -9,3 +9,4 @@ node_modules
 assets
 /gitfox-runner/target
 /gitfox-runner/builds
+gitfox-omnibus/gitfox

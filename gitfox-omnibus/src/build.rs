@@ -38,6 +38,8 @@ pub struct CollectedAssets {
     pub binaries_dir: PathBuf,
     /// Migrations 目录
     pub migrations_dir: PathBuf,
+    /// 配置模板目录
+    pub templates_dir: PathBuf,
 }
 
 /// 执行构建
@@ -108,6 +110,11 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
 
     // Step 4: 复制 migrations
     copy_migrations(&config.workspace_root, &migrations_dir)?;
+    
+    // Step 4.5: 复制配置模板文件
+    let templates_dir = assets_dir.join("templates");
+    fs::create_dir_all(&templates_dir)?;
+    copy_templates(&config.workspace_root, &templates_dir)?;
 
     // Step 5: 生成 stub 程序源码
     let assets = CollectedAssets {
@@ -115,6 +122,7 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
         webide_dir,
         binaries_dir,
         migrations_dir,
+        templates_dir,
     };
 
     // omnibus 目录 (包含 stub/ 模板)
@@ -287,6 +295,31 @@ fn copy_binary(manifest_dir: &Path, bin_name: &str, target: &str, profile: &str,
         return Err(anyhow::anyhow!("Binary not found: {}", src.display()));
     }
 
+    Ok(())
+}
+
+/// 复制配置模板文件
+fn copy_templates(workspace: &Path, output_dir: &Path) -> Result<()> {
+    info!("Copying configuration templates...");
+    
+    // 复制 .env.example
+    let env_example = workspace.join(".env.example");
+    if env_example.exists() {
+        fs::copy(&env_example, output_dir.join("gitfox.env.template"))?;
+        info!("Copied .env.example → gitfox.env.template");
+    } else {
+        warn!(".env.example not found");
+    }
+    
+    // 复制 config.example.toml
+    let workhorse_config = workspace.join("gitfox-workhorse").join("config.example.toml");
+    if workhorse_config.exists() {
+        fs::copy(&workhorse_config, output_dir.join("workhorse.toml.template"))?;
+        info!("Copied config.example.toml → workhorse.toml.template");
+    } else {
+        warn!("gitfox-workhorse/config.example.toml not found");
+    }
+    
     Ok(())
 }
 

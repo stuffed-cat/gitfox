@@ -36,6 +36,9 @@ shellexpand = "3"
 # Random generation
 rand = "0.8"
 
+# Interactive TUI
+inquire = "0.7"
+
 # Process management
 nix = { version = "0.27", features = ["process", "signal"] }
 

@@ -1,14 +1,14 @@
 listen_addr = "0.0.0.0"
-listen_port = 8080
+listen_port = {{LISTEN_PORT}}
 
-# 后端服务器地址
+# 后端服务器地址（内部通信，自动协调）
 backend_url = "http://127.0.0.1:8081"
 
-# 静态文件路径（相对于 workhorse 工作目录）
-frontend_dist_path = "../frontend/dist"
-webide_dist_path = "../webide/dist"
-assets_path = "../assets"
-git_repos_path = "../repos"
+# 静态文件路径
+frontend_dist_path = "{{FRONTEND_DIST_PATH}}"
+webide_dist_path = "{{WEBIDE_DIST_PATH}}"
+assets_path = "{{ASSETS_PATH}}"
+git_repos_path = "{{GIT_REPOS_PATH}}"
 
 # 启用请求日志
 enable_request_logging = true

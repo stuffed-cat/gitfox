@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use inquire::{Confirm, Text};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use rand::Rng;
@@ -51,6 +52,12 @@ struct BinaryAssets;
 #[folder = "embedded/migrations"]
 #[prefix = ""]
 struct MigrationAssets;
+
+/// 配置模板文件
+#[derive(RustEmbed)]
+#[folder = "embedded/templates"]
+#[prefix = ""]
+struct TemplateAssets;
 
 // ============================================================================
 // CLI
@@ -581,12 +588,106 @@ fn init_config(data_dir: &Path) -> Result<()> {
     let gitfox_env = data_dir.join("gitfox.env");
     let workhorse_toml = data_dir.join("workhorse.toml");
     
+    println!("\n🚀 GitFox Configuration Wizard\n");
+    
+    // 交互式收集配置
+    let base_url = Text::new("GitFox public URL (用于 OAuth 回调等):")
+        .with_default("http://localhost:8080")
+        .with_help_message("例如: https://git.example.com or http://192.168.1.100:8080")
+        .prompt()
+        .unwrap_or_else(|_| "http://localhost:8080".to_string());
+    
+    let http_port: u16 = Text::new("HTTP 监听端口:")
+        .with_default("8080")
+        .with_help_message("Workhorse 对外服务的端口")
+        .prompt()
+        .unwrap_or_else(|_| "8080".to_string())
+        .parse()
+        .unwrap_or(8080);
+    
+    let enable_smtp = Confirm::new("启用 SMTP 邮件服务?")
+        .with_default(false)
+        .with_help_message("用于发送注册确认、密码重置等邮件")
+        .prompt()
+        .unwrap_or(false);
+    
+    // 如果启用 SMTP，收集详细配置
+    let smtp_config = if enable_smtp {
+        println!("\n📧 SMTP 配置\n");
+        
+        let host = Text::new("SMTP 服务器地址:")
+            .with_default("smtp.gmail.com")
+            .with_help_message("例如: smtp.gmail.com, smtp.office365.com, smtp.qq.com")
+            .prompt()
+            .unwrap_or_else(|_| "smtp.gmail.com".to_string());
+        
+        let port: u16 = Text::new("SMTP 端口:")
+            .with_default("587")
+            .with_help_message("587 (TLS/STARTTLS) 或 465 (SSL)")
+            .prompt()
+            .unwrap_or_else(|_| "587".to_string())
+            .parse()
+            .unwrap_or(587);
+        
+        let username = Text::new("SMTP 用户名:")
+            .with_help_message("通常是你的邮箱地址")
+            .prompt()
+            .unwrap_or_else(|_| "your-email@gmail.com".to_string());
+        
+        let password = Text::new("SMTP 密码:")
+            .with_help_message("Gmail 需使用应用专用密码，QQ邮箱需使用授权码")
+            .prompt()
+            .unwrap_or_else(|_| "your-app-password".to_string());
+        
+        let from_email = Text::new("发件人邮箱:")
+            .with_default(&username)
+            .with_help_message("邮件的发件人地址")
+            .prompt()
+            .unwrap_or_else(|_| username.clone());
+        
+        let from_name = Text::new("发件人名称:")
+            .with_default("GitFox")
+            .prompt()
+            .unwrap_or_else(|_| "GitFox".to_string());
+        
+        let use_tls = port == 587;
+        let use_ssl = port == 465;
+        
+        Some(SmtpConfig {
+            host,
+            port,
+            username,
+            password,
+            from_email,
+            from_name,
+            use_tls,
+            use_ssl,
+        })
+    } else {
+        None
+    };
+    
+    // 从 base_url 提取域名作为 WebAuthn RP ID 的默认值
+    let default_rp_id = extract_domain(&base_url);
+    let webauthn_rp_id = Text::new("WebAuthn RP ID (域名):")
+        .with_default(&default_rp_id)
+        .with_help_message("用于 Passkey/WebAuthn 认证的域名（不含协议和端口）")
+        .prompt()
+        .unwrap_or(default_rp_id);
+    
     // 生成随机密钥和密码
     let jwt_secret = generate_random_secret(64);
     let shell_secret = generate_random_secret(64);
     let admin_username = "admin".to_string();
     let admin_email = "admin@localhost".to_string();
     let admin_password = generate_random_password(16);
+    
+    let user_config = UserConfig {
+        base_url,
+        http_port,
+        smtp_config,
+        webauthn_rp_id: webauthn_rp_id.clone(),
+    };
     
     let secrets = GeneratedSecrets {
         jwt_secret,
@@ -600,7 +701,7 @@ fn init_config(data_dir: &Path) -> Result<()> {
     if gitfox_env.exists() {
         warn!("{} already exists, skipping", gitfox_env.display());
     } else {
-        let env_template = generate_gitfox_env_template(data_dir, &secrets);
+        let env_template = generate_gitfox_env_template(data_dir, &secrets, &user_config);
         fs::write(&gitfox_env, env_template)?;
         info!("Created: {}", gitfox_env.display());
     }
@@ -609,7 +710,7 @@ fn init_config(data_dir: &Path) -> Result<()> {
     if workhorse_toml.exists() {
         warn!("{} already exists, skipping", workhorse_toml.display());
     } else {
-        let toml_template = generate_workhorse_toml_template(data_dir);
+        let toml_template = generate_workhorse_toml_template(data_dir, http_port);
         fs::write(&workhorse_toml, toml_template)?;
         info!("Created: {}", workhorse_toml.display());
     }
@@ -624,10 +725,25 @@ fn init_config(data_dir: &Path) -> Result<()> {
     println!("  Password: {}", admin_password);
     println!("{}", "=".repeat(60));
     println!("\n⚠️  Please save this password! It will be used on first startup.");
+    println!("\n📝 Configuration Summary:");
+    println!("   Public URL: {}", user_config.base_url);
+    println!("   HTTP Port:  {}", user_config.http_port);
+    if let Some(ref smtp) = user_config.smtp_config {
+        println!("   SMTP:       Enabled");
+        println!("     Server:   {}:{}", smtp.host, smtp.port);
+        println!("     From:     {} <{}>", smtp.from_name, smtp.from_email);
+    } else {
+        println!("   SMTP:       Disabled");
+    }
+    println!("   WebAuthn:   {}", user_config.webauthn_rp_id);
     println!("\nNext steps:");
     println!("1. Edit {} with your PostgreSQL and Redis settings", gitfox_env.display());
-    println!("2. Configure SMTP, OAuth if needed (optional)");
-    println!("3. Run: gitfox start");
+    if user_config.smtp_config.is_some() {
+        println!("2. Review SMTP settings in {}", gitfox_env.display());
+        println!("3. Run: gitfox start");
+    } else {
+        println!("2. Run: gitfox start");
+    }
     
     Ok(())
 }
@@ -638,6 +754,24 @@ struct GeneratedSecrets {
     admin_username: String,
     admin_email: String,
     admin_password: String,
+}
+
+struct UserConfig {
+    base_url: String,
+    http_port: u16,
+    smtp_config: Option<SmtpConfig>,
+    webauthn_rp_id: String,
+}
+
+struct SmtpConfig {
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    from_email: String,
+    from_name: String,
+    use_tls: bool,
+    use_ssl: bool,
 }
 
 /// 生成随机密钥（十六进制）
@@ -657,92 +791,43 @@ fn generate_random_password(length: usize) -> String {
         .collect()
 }
 
-fn generate_gitfox_env_template(data_dir: &Path, secrets: &GeneratedSecrets) -> String {
-    let repos_dir = data_dir.join("repos");
-    let assets_dir = data_dir.join("assets");
-    let ssh_dir = data_dir.join("ssh");
-    let shell_path = data_dir.join("bin").join("gitfox-shell");
-    
-    format!(r#"# GitFox 主配置文件
-# 
-# 此文件由 'gitfox init' 自动生成
-# 请修改数据库和 Redis 连接信息后运行: gitfox start
+/// 从 URL 中提取域名
+fn extract_domain(url: &str) -> String {
+    url.trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .split(':')
+        .next()
+        .unwrap_or("localhost")
+        .to_string()
+}
 
-# ============================================================================
-# 核心配置 (必需)
-# ============================================================================
+/// 生成 SMTP 配置部分
+fn generate_smtp_config_section(smtp_config: &Option<SmtpConfig>) -> String {
+    if let Some(smtp) = smtp_config {
+        format!(r#"# SMTP 服务器
+SMTP_HOST={}
+SMTP_PORT={}
+SMTP_USERNAME={}
+SMTP_PASSWORD={}
 
-# PostgreSQL 数据库连接
-# 格式: postgres://username:password@hostname:port/database
-DATABASE_URL=postgres://gitfox:password@localhost:5432/gitfox
+# 发件人信息
+SMTP_FROM_EMAIL={}
+SMTP_FROM_NAME={}
 
-# Redis 连接
-REDIS_URL=redis://127.0.0.1:6379
-
-# JWT 密钥 (自动生成，请勿修改)
-JWT_SECRET={}
-
-# ============================================================================
-# 内部组件配置 (自动管理，无需修改)
-# ============================================================================
-
-# 后端 API 内部监听端口 (Workhorse 会自动代理)
-SERVER_HOST=127.0.0.1
-SERVER_PORT=8081
-
-# Git 仓库存储路径
-GIT_REPOS_PATH={}
-
-# 用户上传文件路径
-ASSETS_PATH={}
-
-# ============================================================================
-# SSH 配置
-# ============================================================================
-
-# 启用 SSH 服务器
-SSH_ENABLED=true
-
-# SSH 监听地址
-SSH_HOST=0.0.0.0
-SSH_PORT=22
-
-# SSH 公开访问地址（用于 git clone 显示）
-SSH_PUBLIC_HOST=localhost
-SSH_PUBLIC_PORT=22
-
-# SSH 主机密钥路径
-SSH_HOST_KEY_PATH={}/host_key
-
-# ============================================================================
-# 外部访问配置
-# ============================================================================
-
-# GitFox 实例的公开 URL（用于 OAuth 回调等）
-GITFOX_BASE_URL=http://localhost:8080
-
-# GitFox Shell 配置 (SSH Git 操作)
-GITFOX_SHELL_PATH={}
-GITFOX_SHELL_SECRET={}
-
-# ============================================================================
-# 初始管理员 (自动生成)
-# ============================================================================
-
-# 首次启动时会自动创建此管理员账号
-# 创建后请立即登录并修改密码！
-INITIAL_ADMIN_USERNAME={}
-INITIAL_ADMIN_EMAIL={}
-INITIAL_ADMIN_PASSWORD={}
-
-# ============================================================================
-# SMTP 邮件配置 (可选)
-# ============================================================================
-
-# 启用邮件发送
-SMTP_ENABLED=false
-
-# SMTP 服务器
+# TLS/SSL 配置
+SMTP_USE_TLS={}   # STARTTLS (端口 587)
+SMTP_USE_SSL={}   # SSL (端口 465)"#,
+            smtp.host,
+            smtp.port,
+            smtp.username,
+            smtp.password,
+            smtp.from_email,
+            smtp.from_name,
+            if smtp.use_tls { "true" } else { "false" },
+            if smtp.use_ssl { "true" } else { "false" }
+        )
+    } else {
+        r#"# SMTP 服务器（未配置，如需启用请取消注释并填写）
 # SMTP_HOST=smtp.gmail.com
 # SMTP_PORT=587
 # SMTP_USERNAME=your-email@gmail.com
@@ -754,154 +839,83 @@ SMTP_ENABLED=false
 
 # TLS/SSL 配置
 # SMTP_USE_TLS=true   # STARTTLS (端口 587)
-# SMTP_USE_SSL=false  # SSL (端口 465)
-
-# ============================================================================
-# OAuth 配置 (可选)
-# ============================================================================
-
-# GitHub OAuth
-# OAUTH_GITHUB_CLIENT_ID=your-github-client-id
-# OAUTH_GITHUB_CLIENT_SECRET=your-github-client-secret
-
-# GitLab OAuth
-# OAUTH_GITLAB_CLIENT_ID=your-gitlab-client-id
-# OAUTH_GITLAB_CLIENT_SECRET=your-gitlab-client-secret
-# OAUTH_GITLAB_URL=https://gitlab.com  # 自建实例可修改
-
-# Google OAuth
-# OAUTH_GOOGLE_CLIENT_ID=your-google-client-id
-# OAUTH_GOOGLE_CLIENT_SECRET=your-google-client-secret
-
-# ============================================================================
-# WebAuthn / Passkey 配置
-# ============================================================================
-
-# WebAuthn Relying Party Name (显示名称)
-WEBAUTHN_RP_NAME=GitFox
-
-# WebAuthn RP ID (域名，不含协议和端口)
-WEBAUTHN_RP_ID=localhost
-
-# WebAuthn Origin (完整 URL)
-WEBAUTHN_ORIGIN=http://localhost:8080
-
-# ============================================================================
-# Personal Access Token 配置
-# ============================================================================
-
-# PAT 默认过期天数 (0 = 永不过期)
-PAT_DEFAULT_EXPIRATION_DAYS=365
-
-# PAT 最大过期天数 (0 = 无限制)
-PAT_MAX_EXPIRATION_DAYS=0
-
-# ============================================================================
-# WebIDE 配置
-# ============================================================================
-
-# WebIDE OAuth2 客户端 ID (固定值)
-WEBIDE_CLIENT_ID=gitfox-webide
-
-# WebIDE OAuth2 回调路径
-WEBIDE_REDIRECT_URI_PATH=/-/ide/oauth/callback
-
-# ============================================================================
-# 高级配置
-# ============================================================================
-
-# JWT 过期时间 (秒，默认 24 小时)
-JWT_EXPIRATION=86400
-
-# 日志级别
-RUST_LOG=info
-"#, 
-    secrets.jwt_secret,
-    repos_dir.display(),
-    assets_dir.display(),
-    ssh_dir.display(),
-    shell_path.display(),
-    secrets.shell_secret,
-    secrets.admin_username,
-    secrets.admin_email,
-    secrets.admin_password
-    )
+# SMTP_USE_SSL=false  # SSL (端口 465)"#.to_string()
+    }
 }
 
-fn generate_workhorse_toml_template(data_dir: &Path) -> String {
+fn generate_gitfox_env_template(data_dir: &Path, secrets: &GeneratedSecrets, user_config: &UserConfig) -> String {
+    // 从嵌入的模板文件加载
+    let template_file = TemplateAssets::get("gitfox.env.template")
+        .expect("gitfox.env.template not found in embedded assets");
+    let mut template = String::from_utf8_lossy(&template_file.data).to_string();
+    
+    // 计算路径
+    let repos_dir = data_dir.join("repos");
+    let assets_dir = data_dir.join("assets");
+    let ssh_dir = data_dir.join("ssh");
+    let shell_path = data_dir.join("bin").join("gitfox-shell");
+    
+    // 替换所有模板变量
+    template = template.replace("{{JWT_SECRET}}", &secrets.jwt_secret);
+    template = template.replace("{{GIT_REPOS_PATH}}", &repos_dir.display().to_string());
+    template = template.replace("{{ASSETS_PATH}}", &assets_dir.display().to_string());
+    template = template.replace("{{SSH_HOST_KEY_PATH}}", &ssh_dir.join("host_key").display().to_string());
+    template = template.replace("{{SSH_PUBLIC_HOST}}", "localhost");  // 用户需要根据实际部署修改
+    template = template.replace("{{GITFOX_BASE_URL}}", &user_config.base_url);
+    template = template.replace("{{GITFOX_SHELL_PATH}}", &shell_path.display().to_string());
+    template = template.replace("{{GITFOX_SHELL_SECRET}}", &secrets.shell_secret);
+    template = template.replace("{{INITIAL_ADMIN_USERNAME}}", &secrets.admin_username);
+    template = template.replace("{{INITIAL_ADMIN_EMAIL}}", &secrets.admin_email);
+    template = template.replace("{{INITIAL_ADMIN_PASSWORD}}", &secrets.admin_password);
+    template = template.replace("{{SMTP_ENABLED}}", if user_config.smtp_config.is_some() { "true" } else { "false" });
+    
+    // SMTP 配置 - 逐字段替换
+    if let Some(smtp) = &user_config.smtp_config {
+        template = template.replace("{{SMTP_HOST}}", &smtp.host);
+        template = template.replace("{{SMTP_PORT}}", &smtp.port.to_string());
+        template = template.replace("{{SMTP_USERNAME}}", &smtp.username);
+        template = template.replace("{{SMTP_PASSWORD}}", &smtp.password);
+        template = template.replace("{{SMTP_FROM_EMAIL}}", &smtp.from_email);
+        template = template.replace("{{SMTP_FROM_NAME}}", &smtp.from_name);
+        template = template.replace("{{SMTP_USE_TLS}}", if smtp.use_tls { "true" } else { "false" });
+        template = template.replace("{{SMTP_USE_SSL}}", if smtp.use_ssl { "true" } else { "false" });
+    } else {
+        // 未配置 SMTP 时使用默认示例值
+        template = template.replace("{{SMTP_HOST}}", "smtp.example.com");
+        template = template.replace("{{SMTP_PORT}}", "587");
+        template = template.replace("{{SMTP_USERNAME}}", "your-email@example.com");
+        template = template.replace("{{SMTP_PASSWORD}}", "your-password");
+        template = template.replace("{{SMTP_FROM_EMAIL}}", "noreply@example.com");
+        template = template.replace("{{SMTP_FROM_NAME}}", "GitFox");
+        template = template.replace("{{SMTP_USE_TLS}}", "true");
+        template = template.replace("{{SMTP_USE_SSL}}", "false");
+    }
+    
+    template = template.replace("{{WEBAUTHN_RP_ID}}", &user_config.webauthn_rp_id);
+    
+    template
+}
+
+fn generate_workhorse_toml_template(data_dir: &Path, http_port: u16) -> String {
+    // 从嵌入的模板文件加载
+    let template_file = TemplateAssets::get("workhorse.toml.template")
+        .expect("workhorse.toml.template not found in embedded assets");
+    let mut template = String::from_utf8_lossy(&template_file.data).to_string();
+    
+    // 计算路径
     let frontend_dir = data_dir.join("frontend");
     let webide_dir = data_dir.join("webide");
     let assets_dir = data_dir.join("assets");
     let repos_dir = data_dir.join("repos");
     
-    format!(r#"# GitFox Workhorse 配置文件
-#
-# 此文件由 'gitfox init' 自动生成
-# Workhorse 是 HTTP 反向代理，负责：
-# - 服务静态文件 (前端、WebIDE)
-# - 代理 API 请求到后端
-# - 处理大文件上传
-# - WebSocket 连接
-
-# ============================================================================
-# 外部访问配置
-# ============================================================================
-
-# HTTP 监听地址（对外服务）
-listen_addr = "0.0.0.0"
-listen_port = 8080
-
-# ============================================================================
-# 内部组件配置 (自动管理，无需修改)
-# ============================================================================
-
-# 后端 API 服务器地址（内部通信，自动协调）
-backend_url = "http://127.0.0.1:8081"
-
-# ============================================================================
-# 静态文件路径
-# ============================================================================
-
-# 前端 Vue SPA 文件
-frontend_dist_path = "{}"
-
-# WebIDE 文件
-webide_dist_path = "{}"
-
-# 用户上传文件
-assets_path = "{}"
-
-# Git 仓库路径
-git_repos_path = "{}"
-
-# ============================================================================
-# 性能配置
-# ============================================================================
-
-# 最大上传文件大小 (字节，默认 100MB)
-max_upload_size = 104857600
-
-# WebSocket 超时时间 (秒，默认 1 小时)
-websocket_timeout = 3600
-
-# 静态文件缓存控制头
-static_cache_control = "public, max-age=31536000, immutable"
-
-# ============================================================================
-# 功能开关
-# ============================================================================
-
-# 启用请求日志
-enable_request_logging = true
-
-# 启用 CORS
-enable_cors = true
-"#,
-    frontend_dir.display(),
-    webide_dir.display(),
-    assets_dir.display(),
-    repos_dir.display()
-    )
+    // 替换所有模板变量
+    template = template.replace("{{LISTEN_PORT}}", &http_port.to_string());
+    template = template.replace("{{FRONTEND_DIST_PATH}}", &frontend_dir.display().to_string());
+    template = template.replace("{{WEBIDE_DIST_PATH}}", &webide_dir.display().to_string());
+    template = template.replace("{{ASSETS_PATH}}", &assets_dir.display().to_string());
+    template = template.replace("{{GIT_REPOS_PATH}}", &repos_dir.display().to_string());
+    
+    template
 }
 
 /// 从 .env 文件读取配置到环境变量
