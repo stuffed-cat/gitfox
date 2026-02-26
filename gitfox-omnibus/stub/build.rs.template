@@ -1,0 +1,12 @@
+//! Build script for GitFox super-binary
+//!
+//! 设置 rust-embed 需要的路径环境变量。
+//! 这些占位符在 omnibus 打包时会被替换。
+
+fn main() {
+    // 这些路径在 omnibus 打包时被替换为实际的绝对路径
+    println!("cargo:rustc-env=EMBED_FRONTEND={{FRONTEND_PATH}}");
+    println!("cargo:rustc-env=EMBED_WEBIDE={{WEBIDE_PATH}}");
+    println!("cargo:rustc-env=EMBED_BINARIES={{BINARIES_PATH}}");
+    println!("cargo:rustc-env=EMBED_MIGRATIONS={{MIGRATIONS_PATH}}");
+}
