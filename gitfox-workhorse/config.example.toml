@@ -1,0 +1,26 @@
+listen_addr = "0.0.0.0"
+listen_port = 8080
+
+# 后端服务器地址
+backend_url = "http://127.0.0.1:8081"
+
+# 静态文件路径（相对于 workhorse 工作目录）
+frontend_dist_path = "../frontend/dist"
+webide_dist_path = "../webide/dist"
+assets_path = "../assets"
+git_repos_path = "../repos"
+
+# 启用请求日志
+enable_request_logging = true
+
+# 启用 CORS
+enable_cors = true
+
+# 最大上传文件大小 (100MB)
+max_upload_size = 104857600
+
+# WebSocket 超时时间 (3600秒 = 1小时)
+websocket_timeout = 3600
+
+# 静态文件缓存控制头
+static_cache_control = "public, max-age=31536000, immutable"

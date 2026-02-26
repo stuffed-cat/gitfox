@@ -128,8 +128,71 @@ devops/
 │   │   └── styles/       # 样式文件
 │   ├── package.json
 │   └── vite.config.ts
+├── webide/                # WebIDE (VS Code Server)
+│   ├── packages/
+│   ├── static/
+│   └── vite.config.ts
+├── gitfox-workhorse/      # 反向代理服务器（生产环境）
+│   ├── src/
+│   │   ├── main.rs       # 入口
+│   │   ├── config.rs     # 配置
+│   │   ├── proxy.rs      # 反向代理
+│   │   └── static_files.rs # 静态文件服务
+│   ├── Cargo.toml
+│   ├── README.md
+│   ├── QUICKSTART.md
+│   └── start.sh          # 启动脚本
+├── gitfox-runner/         # CI/CD Runner
+├── gitfox-shell/          # Git SSH Shell
 ├── Cargo.toml
 └── .env.example
+```
+
+## 生产部署
+
+### 使用 GitFox Workhorse（推荐）
+
+GitFox Workhorse 是一个高性能的反向代理服务器，专为生产环境设计：
+
+```bash
+# 1. 构建前端和 WebIDE
+cd frontend && npm run build && cd ..
+cd webide && npm run build && cd ..
+
+# 2. 启动后端（在另一个终端）
+export SERVER_PORT=8081
+cargo run --release
+
+# 3. 启动 Workhorse
+cd gitfox-workhorse
+./start.sh release
+```
+
+Workhorse 提供：
+- ✅ 静态文件服务（前端 SPA + WebIDE）
+- ✅ API 反向代理到后端
+- ✅ Git HTTP 协议支持
+- ✅ 自动压缩和缓存
+- ✅ CORS 支持
+- ✅ WebSocket 支持
+
+访问 `http://localhost:8080` 即可使用完整的 GitFox 平台。
+
+详细文档：[gitfox-workhorse/README.md](gitfox-workhorse/README.md)
+
+### 部署架构
+
+```
+客户端浏览器
+    ↓
+GitFox Workhorse (端口 8080)
+    ├─→ 静态文件 (/, /-/ide/*)
+    ├─→ Assets (/assets/*)
+    └─→ 后端代理 (/api/*, /oauth/*, Git HTTP)
+        ↓
+   GitFox Backend (端口 8081)
+        ↓
+   PostgreSQL + Redis
 ```
 
 ## API 文档
