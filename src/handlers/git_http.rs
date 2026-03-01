@@ -258,6 +258,7 @@ pub struct InfoRefsQuery {
 }
 
 // Helper function to get project by namespace/project path
+// 支持用户 (user) 和组 (group) 两种命名空间
 async fn get_project_by_path(
     pool: &sqlx::PgPool,
     namespace: &str,
@@ -265,12 +266,12 @@ async fn get_project_by_path(
 ) -> Result<crate::models::project::Project, AppError> {
     info!("Looking for project: namespace='{}', project='{}'", namespace, project_name);
     
-    // 通过 owner username + project name 查找
+    // 通过 namespaces 表查找，支持用户和组
     let project = sqlx::query_as::<_, crate::models::project::Project>(
         r#"
         SELECT p.* FROM projects p
-        JOIN users u ON p.owner_id = u.id
-        WHERE LOWER(u.username) = LOWER($1) AND LOWER(p.name) = LOWER($2)
+        JOIN namespaces n ON p.namespace_id = n.id
+        WHERE LOWER(n.path) = LOWER($1) AND LOWER(p.name) = LOWER($2)
         "#
     )
     .bind(namespace)

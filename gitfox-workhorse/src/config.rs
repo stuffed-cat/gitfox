@@ -98,11 +98,11 @@ fn default_true() -> bool {
 }
 
 fn default_max_upload_size() -> usize {
-    // 默认 100MB
+    // 默认 500MB (Git push 操作可能需要较大的限制)
     env::var("WORKHORSE_MAX_UPLOAD_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(100 * 1024 * 1024)
+        .unwrap_or(500 * 1024 * 1024)
 }
 
 fn default_websocket_timeout() -> u64 {

@@ -7,7 +7,7 @@ use actix_cors::Cors;
 use actix_files::Files;
 use actix_web::{
     middleware::{Compress, Logger},
-    web, App, HttpServer,
+    web, App, HttpRequest, HttpServer,
 };
 use config::Config;
 use http_client::BackendClient;
@@ -69,6 +69,9 @@ async fn main() -> std::io::Result<()> {
 
     let listen_addr = config.listen_addr.clone();
     let listen_port = config.listen_port;
+    let max_upload_size = config.max_upload_size;
+
+    tracing::info!("Max upload size: {} bytes ({:.2} MB)", max_upload_size, max_upload_size as f64 / 1024.0 / 1024.0);
 
     // 启动 HTTP 服务器
     HttpServer::new(move || {
@@ -79,6 +82,8 @@ async fn main() -> std::io::Result<()> {
             .app_data(frontend_dist_data.clone())
             .app_data(webide_dist_data.clone())
             .app_data(assets_path_data.clone())
+            // 配置请求体大小限制
+            .app_data(web::PayloadConfig::new(max_upload_size))
             // CORS 配置
             .wrap(
                 Cors::default()
@@ -106,15 +111,22 @@ async fn main() -> std::io::Result<()> {
             // WebIDE 静态资源 - 路径重写
             // /-/ide/assets/* (web) -> assets_path/webide/main/* (fs)
             .route("/-/ide/assets/{tail:.*}", web::get().to(static_files::serve_webide_main))
+            // /-/ide/extensions/* (web) -> assets_path/webide/extensions/* (fs)
+            // 必须在 /-/ide/vscode/* 之前注册，避免被 vscode 路由捕获
+            .route("/-/ide/extensions/{tail:.*}", web::get().to(static_files::serve_webide_extensions))
             // /-/ide/vscode/* (web) -> assets_path/webide/vscode/* (fs)
             .route("/-/ide/vscode/{tail:.*}", web::get().to(static_files::serve_webide_vscode))
-            // /-/ide/extensions/* (web) -> assets_path/webide/extensions/* (fs)
-            .route("/-/ide/extensions/{tail:.*}", web::get().to(static_files::serve_webide_extensions))
             
             // WebIDE SPA 入口 (/-/ide/* 返回 webide 的 index.html)
             .service(
                 web::scope("/-/ide")
-                    .default_service(web::to(static_files::serve_webide_index))
+                    .default_service({
+                        let webide_dist = webide_dist_data.clone();
+                        web::to(move |req: HttpRequest| {
+                            let dist = webide_dist.clone();
+                            async move { static_files::serve_webide_index(req, dist).await }
+                        })
+                    })
             )
             
             // API 代理到后端
@@ -123,11 +135,12 @@ async fn main() -> std::io::Result<()> {
                     .default_service(web::to(proxy::proxy_to_backend))
             )
             
-            // OAuth 端点代理
-            .service(
-                web::scope("/oauth")
-                    .default_service(web::to(proxy::proxy_to_backend))
-            )
+            // OAuth API 端点代理（只代理实际的API端点，不包括 /oauth/authorize）
+            // /oauth/authorize 由前端 Vue Router 处理（OAuthAuthorizeView.vue）
+            // 使用 web::route() 匹配所有 HTTP 方法，与 vite proxy 行为一致
+            .route("/oauth/token", web::route().to(proxy::proxy_to_backend))
+            .route("/oauth/revoke", web::route().to(proxy::proxy_to_backend))
+            .route("/oauth/userinfo", web::route().to(proxy::proxy_to_backend))
             
             // Git HTTP 协议代理
             // 匹配 /namespace/project.git/* 路径
@@ -145,7 +158,13 @@ async fn main() -> std::io::Result<()> {
                     .use_last_modified(true)
                     .use_etag(true)
                     .prefer_utf8(true)
-                    .default_handler(web::to(static_files::serve_spa_index))
+                    .default_handler({
+                        let frontend_dist = frontend_dist_data.clone();
+                        web::to(move |req: HttpRequest| {
+                            let dist = frontend_dist.clone();
+                            async move { static_files::serve_spa_index(req, dist).await }
+                        })
+                    })
             )
     })
     .bind((listen_addr.as_str(), listen_port))?

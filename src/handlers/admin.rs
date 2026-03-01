@@ -285,6 +285,7 @@ pub async fn get_user(
 /// PUT /api/v1/admin/users/{id} - Update user as admin
 pub async fn update_user(
     pool: web::Data<PgPool>,
+    redis: web::Data<RedisPool>,
     admin: AdminUser,
     path: web::Path<i64>,
     body: web::Json<AdminUpdateUserRequest>,
@@ -329,6 +330,20 @@ pub async fn update_user(
     .fetch_optional(pool.get_ref())
     .await?
     .ok_or_else(|| crate::error::AppError::NotFound("User not found".to_string()))?;
+
+    // If role was changed, set Redis invalidation flag for JWT refresh
+    if body.role.is_some() {
+        let role_changed_key = format!("user:{}:role_changed", user_id);
+        if let Ok(mut conn) = redis.get().await {
+            // Set flag with 24h expiration (longer than max JWT lifetime)
+            let _ = deadpool_redis::redis::cmd("SETEX")
+                .arg(&role_changed_key)
+                .arg(86400) // 24 hours
+                .arg("1")
+                .query_async::<_, ()>(&mut conn)
+                .await;
+        }
+    }
 
     Ok(HttpResponse::Ok().json(UserInfo::from(user)))
 }

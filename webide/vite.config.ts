@@ -25,11 +25,6 @@ export default defineConfig({
         target: 'http://localhost:8081',
         changeOrigin: true,
       },
-      // OAuth endpoints
-      '/oauth': {
-        target: 'http://localhost:8081',
-        changeOrigin: true,
-      },
     },
   },
   plugins: [

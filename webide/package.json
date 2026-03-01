@@ -9,10 +9,11 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:packages && vite build && npm run patch:vscode && cd extensions/gitfox-provider && npm run build && cd ../..",
+    "build": "npm run build:packages && vite build && npm run patch:vscode && npm run copy:extensions && cd extensions/gitfox-provider && npm run build && cd ../..",
     "build:packages": "npm run build --workspace=@gitfox/api-client --workspace=@gitfox/oauth-client --workspace=@gitfox/webide-fs --workspace=@gitfox/webide",
     "preview": "vite preview",
     "build:vscode": "node scripts/build-vscode.js",
+    "copy:extensions": "node -e \"require('fs').cpSync('extensions', 'dist/extensions', {recursive: true})\"",
     "postinstall": "node scripts/postinstall.js",
     "patch:vscode": "node scripts/postinstall.js --patch-only",
     "postbuild": "npm run patch:vscode"

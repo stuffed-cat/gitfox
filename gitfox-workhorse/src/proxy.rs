@@ -139,8 +139,14 @@ async fn proxy_via_unix(
     for (name, value) in req.headers().iter() {
         let name_str = name.as_str();
         if name_str != "host" && name_str != "connection" {
-            if let Ok(value_bytes) = value.to_str() {
-                hyper_req = hyper_req.header(name_str, value_bytes);
+            // 使用原始字节而不是字符串，避免UTF-8转换失败导致header丢失
+            match hyper::header::HeaderValue::from_bytes(value.as_bytes()) {
+                Ok(hyper_value) => {
+                    hyper_req = hyper_req.header(name_str, hyper_value);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to convert header '{}': {}", name_str, e);
+                }
             }
         }
     }

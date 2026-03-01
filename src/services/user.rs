@@ -247,7 +247,11 @@ impl UserService {
     /// 1. No admin user exists in the database
     /// 2. INITIAL_ADMIN_USERNAME, INITIAL_ADMIN_EMAIL, INITIAL_ADMIN_PASSWORD are all set
     /// This is idempotent — once an admin exists, it does nothing.
-    pub async fn seed_initial_admin(pool: &PgPool, config: &crate::config::AppConfig) -> AppResult<()> {
+    pub async fn seed_initial_admin(
+        pool: &PgPool,
+        redis_pool: &deadpool_redis::Pool,
+        config: &crate::config::AppConfig,
+    ) -> AppResult<()> {
         // Check if any admin already exists
         let admin_exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM users WHERE role = 'admin')"
@@ -277,21 +281,32 @@ impl UserService {
         };
 
         // Check if username or email already taken (as non-admin)
-        let existing = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM users WHERE username = $1 OR email = $2"
+        let existing_user = sqlx::query_as::<_, (i64,)>(
+            "SELECT id FROM users WHERE username = $1 OR email = $2"
         )
         .bind(&username)
         .bind(&email)
-        .fetch_one(pool)
+        .fetch_optional(pool)
         .await?;
 
-        if existing > 0 {
+        if let Some((user_id,)) = existing_user {
             // User exists but is not admin — promote them
-            sqlx::query("UPDATE users SET role = 'admin', updated_at = NOW() WHERE username = $1 OR email = $2")
-                .bind(&username)
-                .bind(&email)
+            sqlx::query("UPDATE users SET role = 'admin', updated_at = NOW() WHERE id = $1")
+                .bind(user_id)
                 .execute(pool)
                 .await?;
+            
+            // Set Redis invalidation flag for JWT refresh
+            let role_changed_key = format!("user:{}:role_changed", user_id);
+            if let Ok(mut conn) = redis_pool.get().await {
+                let _ = deadpool_redis::redis::cmd("SETEX")
+                    .arg(&role_changed_key)
+                    .arg(86400) // 24 hours
+                    .arg("1")
+                    .query_async::<_, ()>(&mut conn)
+                    .await;
+            }
+            
             log::info!("Promoted existing user '{}' to admin", username);
             return Ok(());
         }

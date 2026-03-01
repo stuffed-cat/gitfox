@@ -434,6 +434,8 @@ impl FromRequest for AdminUser {
     fn from_request(req: &HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
         let auth_header = req.headers().get("Authorization").cloned();
         let config = req.app_data::<actix_web::web::Data<AppConfig>>().cloned();
+        let redis_pool = req.app_data::<actix_web::web::Data<deadpool_redis::Pool>>().cloned();
+        let pg_pool = req.app_data::<actix_web::web::Data<PgPool>>().cloned();
         
         Box::pin(async move {
             let auth_header_value = auth_header
@@ -458,14 +460,52 @@ impl FromRequest for AdminUser {
             )
             .map_err(|e| ErrorUnauthorized(format!("Invalid token: {}", e)))?;
             
-            // Check admin role
-            if token_data.claims.role != UserRole::Admin {
+            let user_id = token_data.claims.user_id;
+            let username = token_data.claims.sub.clone();
+            let mut role = token_data.claims.role;
+            
+            // Check Redis for role invalidation (performance optimization: only check when role might have changed)
+            if let (Some(redis), Some(pool)) = (redis_pool, pg_pool) {
+                let role_changed_key = format!("user:{}:role_changed", user_id);
+                
+                // Try to get the invalidation flag from Redis
+                if let Ok(mut conn) = redis.get().await {
+                    // Use GET command to check if key exists
+                    let invalidated: Result<Option<String>, _> = deadpool_redis::redis::cmd("GET")
+                        .arg(&role_changed_key)
+                        .query_async(&mut conn)
+                        .await;
+                    
+                    // If role was changed, re-fetch from database
+                    if invalidated.is_ok() && invalidated.unwrap().is_some() {
+                        // Fetch current role from database
+                        if let Ok(current_role) = sqlx::query_scalar::<_, UserRole>(
+                            "SELECT role FROM users WHERE id = $1"
+                        )
+                        .bind(user_id)
+                        .fetch_one(pool.get_ref())
+                        .await 
+                        {
+                            role = current_role;
+                            
+                            // Delete the invalidation flag (one-time check)
+                            let _ = deadpool_redis::redis::cmd("DEL")
+                                .arg(&role_changed_key)
+                                .query_async::<_, ()>(&mut conn)
+                                .await;
+                        }
+                    }
+                }
+            }
+            
+            // Check admin role (use potentially updated role from database)
+            if role != UserRole::Admin {
                 return Err(ErrorForbidden("Admin access required"));
             }
             
             Ok(AdminUser {
-                user_id: token_data.claims.user_id,
-                username: token_data.claims.sub,
+                user_id,
+                username,
             })
         })
     }

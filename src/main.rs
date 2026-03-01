@@ -48,7 +48,7 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to run migrations");
 
     // Seed initial admin user if configured and no admin exists
-    if let Err(e) = services::UserService::seed_initial_admin(&pg_pool, &config).await {
+    if let Err(e) = services::UserService::seed_initial_admin(&pg_pool, &redis_pool, &config).await {
         log::error!("Failed to seed initial admin: {}", e);
     }
 

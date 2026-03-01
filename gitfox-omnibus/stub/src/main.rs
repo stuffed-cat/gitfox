@@ -403,6 +403,7 @@ fn start_workhorse(config: &WorkhorseConfig) -> Result<Child> {
         .env("WORKHORSE_WEBIDE_DIST", &config.webide_dir)
         .env("WORKHORSE_ASSETS_PATH", &config.assets_dir)
         .env("WORKHORSE_GIT_REPOS_PATH", &config.repos_dir)
+        .env("WORKHORSE_MAX_UPLOAD_SIZE", "524288000")  // 500MB
         .env("RUST_LOG", if config.verbose { "debug" } else { "info" })
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -456,6 +457,9 @@ fn start_workhorse_from_config(
     }
     if let Some(git_repos_path) = config.get("git_repos_path").and_then(|v| v.as_str()) {
         cmd.env("WORKHORSE_GIT_REPOS_PATH", git_repos_path);
+    }
+    if let Some(max_upload_size) = config.get("max_upload_size").and_then(|v| v.as_integer()) {
+        cmd.env("WORKHORSE_MAX_UPLOAD_SIZE", max_upload_size.to_string());
     }
     
     let child = cmd.spawn()

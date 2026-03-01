@@ -19,8 +19,9 @@ enable_request_logging = true
 # 启用 CORS
 enable_cors = true
 
-# 最大上传文件大小 (100MB)
-max_upload_size = 104857600
+# 最大上传文件大小 (500MB)
+# Git push 操作可能需要较大的限制，建议至少 500MB
+max_upload_size = 524288000
 
 # WebSocket 超时时间 (3600秒 = 1小时)
 websocket_timeout = 3600
