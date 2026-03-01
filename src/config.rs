@@ -134,6 +134,9 @@ impl OAuthConfig {
 pub struct Config {
     pub server_host: String,
     pub server_port: u16,
+    /// Unix socket path for backend (优先级高于 TCP)
+    pub server_socket_path: Option<String>,
+    pub assets_path: String,
     pub database_url: String,
     pub redis_url: String,
     pub jwt_secret: String,
@@ -196,12 +199,33 @@ impl Config {
             .unwrap_or_else(|| "unknown".to_string());
         let pid = std::process::id();
         let instance_id = format!("{}:{}", hostname, pid);
-        Self {
-            server_host: env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
-            server_port: env::var("SERVER_PORT")
+        
+        // 检查连接类型
+        let connection_type = env::var("SERVER_CONNECTION_TYPE")
+            .unwrap_or_else(|_| "tcp".to_string());
+        let use_unix_socket = connection_type == "unix_socket";
+        
+        // 根据连接类型解析配置
+        let (server_host, server_port, server_socket_path) = if use_unix_socket {
+            // Unix Socket 模式：socket path 必须存在，host/port 使用默认值
+            let socket_path = env::var("SERVER_SOCKET_PATH")
+                .expect("SERVER_SOCKET_PATH must be set when SERVER_CONNECTION_TYPE=unix_socket");
+            ("127.0.0.1".to_string(), 8081, Some(socket_path))
+        } else {
+            // TCP 模式：host/port 必须有效
+            let host = env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+            let port = env::var("SERVER_PORT")
                 .unwrap_or_else(|_| "8080".to_string())
                 .parse()
-                .expect("Invalid SERVER_PORT"),
+                .expect("Invalid SERVER_PORT");
+            (host, port, None)
+        };
+        
+        Self {
+            server_host,
+            server_port,
+            server_socket_path,
+            assets_path: env::var("ASSETS_PATH").unwrap_or_else(|_| "./assets".to_string()),
             database_url: env::var("DATABASE_URL")
                 .expect("DATABASE_URL must be set"),
             redis_url: env::var("REDIS_URL")

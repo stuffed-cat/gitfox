@@ -30,10 +30,12 @@ pub struct BuildConfig {
 
 /// 收集的资源
 pub struct CollectedAssets {
-    /// 前端 dist 目录
+    /// 前端目录 (只有 index.html 等)
     pub frontend_dir: PathBuf,
-    /// WebIDE dist 目录
+    /// WebIDE 目录 (只有 index.html 等)
     pub webide_dir: PathBuf,
+    /// 静态资源目录 (assets/main, assets/webide/*)
+    pub static_dir: PathBuf,
     /// 二进制目录
     pub binaries_dir: PathBuf,
     /// Migrations 目录
@@ -64,25 +66,30 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
     let assets_dir = build_dir.join("assets");
     let frontend_dir = assets_dir.join("frontend");
     let webide_dir = assets_dir.join("webide");
+    let static_dir = assets_dir.join("static");  // 静态资源 (assets/main, assets/webide/*)
     let binaries_dir = assets_dir.join("binaries");
     let migrations_dir = assets_dir.join("migrations");
     let stub_dir = build_dir.join("stub");
 
     fs::create_dir_all(&frontend_dir)?;
     fs::create_dir_all(&webide_dir)?;
+    fs::create_dir_all(&static_dir.join("main"))?;          // assets/main (前端 js/css)
+    fs::create_dir_all(&static_dir.join("webide/main"))?;   // assets/webide/main (WebIDE js/css)
+    fs::create_dir_all(&static_dir.join("webide/vscode"))?; // assets/webide/vscode
+    fs::create_dir_all(&static_dir.join("webide/extensions"))?; // assets/webide/extensions
     fs::create_dir_all(&binaries_dir)?;
     fs::create_dir_all(&migrations_dir)?;
     fs::create_dir_all(&stub_dir)?;
 
     // Step 1: 构建前端 (在原位置编译)
     if !config.skip_frontend {
-        build_frontend(&config.workspace_root, &frontend_dir)?;
+        build_frontend_split(&config.workspace_root, &frontend_dir, &static_dir.join("main"))?;
     } else {
-        // 复制已有的 dist
+        // 复制已有的 dist，分离 assets 目录
         let src = config.workspace_root.join("frontend/dist");
         if src.exists() {
-            copy_dir_recursive(&src, &frontend_dir)?;
-            info!("Copied existing frontend dist");
+            split_frontend_dist(&src, &frontend_dir, &static_dir.join("main"))?;
+            info!("Copied and split existing frontend dist");
         } else {
             warn!("Frontend dist not found, skipping");
         }
@@ -90,12 +97,12 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
 
     // Step 2: 构建 WebIDE
     if !config.skip_webide {
-        build_webide(&config.workspace_root, &webide_dir)?;
+        build_webide_split(&config.workspace_root, &webide_dir, &static_dir.join("webide"))?;
     } else {
         let src = config.workspace_root.join("webide/dist");
         if src.exists() {
-            copy_dir_recursive(&src, &webide_dir)?;
-            info!("Copied existing webide dist");
+            split_webide_dist(&src, &webide_dir, &static_dir.join("webide"))?;
+            info!("Copied and split existing webide dist");
         } else {
             warn!("WebIDE dist not found, skipping");
         }
@@ -120,6 +127,7 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
     let assets = CollectedAssets {
         frontend_dir,
         webide_dir,
+        static_dir,
         binaries_dir,
         migrations_dir,
         templates_dir,
@@ -151,37 +159,68 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
     Ok(())
 }
 
-/// 构建前端
-fn build_frontend(workspace: &Path, output_dir: &Path) -> Result<()> {
-    let frontend_dir = workspace.join("frontend");
+/// 构建前端并分离 assets 目录
+/// - index.html 等放到 frontend_dir
+/// - assets/* 放到 static_assets_dir
+fn build_frontend_split(workspace: &Path, frontend_dir: &Path, static_assets_dir: &Path) -> Result<()> {
+    let frontend_src = workspace.join("frontend");
 
     info!("Building frontend...");
 
     // npm ci
-    run_command("npm", &["ci", "--prefer-offline"], &frontend_dir)
+    run_command("npm", &["ci", "--prefer-offline"], &frontend_src)
         .context("Failed to install frontend dependencies")?;
 
     // npm run build
-    run_command("npm", &["run", "build"], &frontend_dir)
+    run_command("npm", &["run", "build"], &frontend_src)
         .context("Failed to build frontend")?;
 
-    // 复制 dist
-    let dist = frontend_dir.join("dist");
+    // 分离 dist 目录
+    let dist = frontend_src.join("dist");
     if !dist.exists() {
         return Err(anyhow::anyhow!("Frontend build did not produce dist/"));
     }
 
-    copy_dir_recursive(&dist, output_dir)?;
-    info!("Frontend built successfully");
+    split_frontend_dist(&dist, frontend_dir, static_assets_dir)?;
+    info!("Frontend built and split successfully");
 
     Ok(())
 }
 
-/// 构建 WebIDE
-fn build_webide(workspace: &Path, output_dir: &Path) -> Result<()> {
-    let webide_dir = workspace.join("webide");
+/// 分离前端 dist 目录
+/// - dist/assets/* -> static_assets_dir/*
+/// - dist/* (其他) -> frontend_dir/*
+fn split_frontend_dist(dist: &Path, frontend_dir: &Path, static_assets_dir: &Path) -> Result<()> {
+    for entry in fs::read_dir(dist)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        
+        if name == "assets" && path.is_dir() {
+            // assets 目录移到 static_assets_dir
+            copy_dir_recursive(&path, static_assets_dir)?;
+        } else {
+            // 其他文件/目录保留在 frontend_dir
+            let dest = frontend_dir.join(&name);
+            if path.is_dir() {
+                copy_dir_recursive(&path, &dest)?;
+            } else {
+                fs::copy(&path, &dest)?;
+            }
+        }
+    }
+    Ok(())
+}
 
-    if !webide_dir.exists() {
+/// 构建 WebIDE 并分离 assets 目录
+/// - index.html 等放到 webide_dir
+/// - assets/* 放到 static_dir/main/*
+/// - vscode/* 放到 static_dir/vscode/*
+/// - extensions/* 放到 static_dir/extensions/*
+fn build_webide_split(workspace: &Path, webide_dir: &Path, static_dir: &Path) -> Result<()> {
+    let webide_src = workspace.join("webide");
+
+    if !webide_src.exists() {
         warn!("WebIDE directory not found, skipping");
         return Ok(());
     }
@@ -189,22 +228,61 @@ fn build_webide(workspace: &Path, output_dir: &Path) -> Result<()> {
     info!("Building WebIDE...");
 
     // npm ci
-    run_command("npm", &["ci", "--prefer-offline"], &webide_dir)
+    run_command("npm", &["ci", "--prefer-offline"], &webide_src)
         .context("Failed to install WebIDE dependencies")?;
 
     // npm run build
-    run_command("npm", &["run", "build"], &webide_dir)
+    run_command("npm", &["run", "build"], &webide_src)
         .context("Failed to build WebIDE")?;
 
-    // 复制 dist
-    let dist = webide_dir.join("dist");
+    // 分离 dist 目录
+    let dist = webide_src.join("dist");
     if dist.exists() {
-        copy_dir_recursive(&dist, output_dir)?;
-        info!("WebIDE built successfully");
+        split_webide_dist(&dist, webide_dir, static_dir)?;
+        info!("WebIDE built and split successfully");
     } else {
         warn!("WebIDE build did not produce dist/");
     }
 
+    Ok(())
+}
+
+/// 分离 WebIDE dist 目录
+/// - dist/assets/* -> static_dir/main/*
+/// - dist/vscode/* -> static_dir/vscode/*
+/// - dist/extensions/* -> static_dir/extensions/*
+/// - dist/* (其他) -> webide_dir/*
+fn split_webide_dist(dist: &Path, webide_dir: &Path, static_dir: &Path) -> Result<()> {
+    for entry in fs::read_dir(dist)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        
+        if path.is_dir() {
+            match name_str.as_ref() {
+                "assets" => {
+                    // assets 目录移到 static_dir/main/
+                    copy_dir_recursive(&path, &static_dir.join("main"))?;
+                }
+                "vscode" => {
+                    // vscode 目录移到 static_dir/vscode/
+                    copy_dir_recursive(&path, &static_dir.join("vscode"))?;
+                }
+                "extensions" => {
+                    // extensions 目录移到 static_dir/extensions/
+                    copy_dir_recursive(&path, &static_dir.join("extensions"))?;
+                }
+                _ => {
+                    // 其他目录保留在 webide_dir
+                    copy_dir_recursive(&path, &webide_dir.join(&name))?;
+                }
+            }
+        } else {
+            // 文件保留在 webide_dir
+            fs::copy(&path, webide_dir.join(&name))?;
+        }
+    }
     Ok(())
 }
 

@@ -1,8 +1,11 @@
 listen_addr = "0.0.0.0"
 listen_port = {{LISTEN_PORT}}
 
-# 后端服务器地址（内部通信，自动协调）
-backend_url = "http://127.0.0.1:8081"
+# 后端服务器地址（支持两种方式）
+# 1. HTTP URL: backend_url = "http://127.0.0.1:8081"
+# 2. Unix Socket: backend_socket = "/tmp/gitfox-backend.sock" (优先级高于 URL)
+backend_socket = "{{BACKEND_SOCKET}}"
+backend_url = "{{BACKEND_URL}}"
 
 # 静态文件路径
 frontend_dist_path = "{{FRONTEND_DIST_PATH}}"

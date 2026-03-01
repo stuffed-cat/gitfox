@@ -25,6 +25,10 @@ bytes = "1"
 once_cell = "1.19"
 anyhow = "1.0"
 num_cpus = "1.16"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
+hyperlocal = "0.9"
+http-body-util = "0.1"
 
 [profile.release]
 opt-level = 3

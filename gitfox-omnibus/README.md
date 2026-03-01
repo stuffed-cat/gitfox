@@ -151,7 +151,7 @@ vim /var/lib/gitfox/gitfox.env
 #   WEBAUTHN_RP_ID=<你输入的域名>
 #   WEBAUTHN_ORIGIN=<你输入的公开地址>
 #
-# 如果启用了 SMTP，还需配置：
+# 如果未启用SMTP但是后续启用，还需配置：
 #   SMTP_HOST=smtp.gmail.com
 #   SMTP_PORT=587
 #   SMTP_USERNAME=your-email@gmail.com

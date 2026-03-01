@@ -13,6 +13,10 @@ pub struct Config {
     #[serde(default = "default_listen_port")]
     pub listen_port: u16,
 
+    /// 后端 Unix Socket 路径（优先级高于 backend_url）
+    #[serde(default)]
+    pub backend_socket: Option<String>,
+
     /// 后端 API 服务器地址
     #[serde(default = "default_backend_url")]
     pub backend_url: String,
@@ -65,6 +69,10 @@ fn default_listen_port() -> u16 {
         .unwrap_or(8080)
 }
 
+fn default_backend_socket() -> Option<String> {
+    env::var("WORKHORSE_BACKEND_SOCKET").ok()
+}
+
 fn default_backend_url() -> String {
     env::var("WORKHORSE_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string())
 }
@@ -115,6 +123,7 @@ impl Config {
         Self {
             listen_addr: default_listen_addr(),
             listen_port: default_listen_port(),
+            backend_socket: default_backend_socket(),
             backend_url: default_backend_url(),
             frontend_dist_path: default_frontend_dist_path(),
             webide_dist_path: default_webide_dist_path(),
@@ -131,13 +140,28 @@ impl Config {
     /// 从 TOML 文件加载配置
     pub fn from_file(path: &str) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
+        config.normalize();
         Ok(config)
+    }
+    
+    /// 规范化配置（将空字符串转为 None）
+    pub fn normalize(&mut self) {
+        // 空字符串的 backend_socket 视为 None
+        if matches!(&self.backend_socket, Some(s) if s.is_empty()) {
+            self.backend_socket = None;
+        }
     }
 
     /// 验证配置
     pub fn validate(&self) -> anyhow::Result<()> {
-        if !self.backend_url.starts_with("http://") && !self.backend_url.starts_with("https://") {
+        // 至少需要一种后端连接方式
+        if self.backend_socket.is_none() && self.backend_url.is_empty() {
+            anyhow::bail!("Either backend_socket or backend_url must be specified");
+        }
+        
+        // 如果使用 HTTP URL，验证格式
+        if self.backend_socket.is_none() && !self.backend_url.starts_with("http://") && !self.backend_url.starts_with("https://") {
             anyhow::bail!("backend_url must start with http:// or https://");
         }
 

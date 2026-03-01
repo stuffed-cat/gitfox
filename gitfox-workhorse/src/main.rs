@@ -1,4 +1,5 @@
 mod config;
+mod http_client;
 mod proxy;
 mod static_files;
 
@@ -9,7 +10,7 @@ use actix_web::{
     web, App, HttpServer,
 };
 use config::Config;
-use reqwest::Client;
+use http_client::BackendClient;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[actix_web::main]
@@ -43,20 +44,25 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("GitFox Workhorse starting...");
     tracing::info!("Listen address: {}:{}", config.listen_addr, config.listen_port);
-    tracing::info!("Backend URL: {}", config.backend_url);
+    
+    // 根据配置创建后端客户端
+    let backend_client = if let Some(socket_path) = &config.backend_socket {
+        tracing::info!("Backend mode: Unix Socket ({})", socket_path);
+        BackendClient::unix(socket_path)
+    } else {
+        tracing::info!("Backend mode: HTTP ({})", config.backend_url);
+        BackendClient::tcp(std::time::Duration::from_secs(300))
+            .expect("Failed to create HTTP client")
+    };
+    
     tracing::info!("Frontend dist: {:?}", config.frontend_dist_path);
     tracing::info!("WebIDE dist: {:?}", config.webide_dist_path);
     tracing::info!("Assets path: {:?}", config.assets_path);
     tracing::info!("Git repos path: {:?}", config.git_repos_path);
 
-    // 创建 HTTP 客户端（用于代理请求）
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-        .expect("Failed to create HTTP client");
-
-    let client_data = web::Data::new(client);
+    let client_data = web::Data::new(backend_client);
     let backend_url_data = web::Data::new(config.backend_url.clone());
+    let backend_socket_data = web::Data::new(config.backend_socket.clone());
     let frontend_dist_data = web::Data::new(config.frontend_dist_path.clone());
     let webide_dist_data = web::Data::new(config.webide_dist_path.clone());
     let assets_path_data = web::Data::new(config.assets_path.clone());
@@ -69,6 +75,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(client_data.clone())
             .app_data(backend_url_data.clone())
+            .app_data(backend_socket_data.clone())
             .app_data(frontend_dist_data.clone())
             .app_data(webide_dist_data.clone())
             .app_data(assets_path_data.clone())
@@ -89,17 +96,25 @@ async fn main() -> std::io::Result<()> {
             .route("/-/health", web::get().to(proxy::health_check))
             .route("/-/workhorse/health", web::get().to(proxy::health_check))
             
-            // Assets 静态文件（用户上传的头像等）
-            .route("/assets/{tail:.*}", web::get().to(static_files::serve_asset))
+            // 用户上传文件 (/assets/upload/*)
+            // 必须在 /assets/* 之前注册以获得更高优先级
+            .route("/assets/upload/{tail:.*}", web::get().to(static_files::serve_upload))
             
-            // WebIDE 静态文件
+            // 主前端静态资源 (/assets/* -> assets_path/main/*)
+            .route("/assets/{tail:.*}", web::get().to(static_files::serve_main_assets))
+            
+            // WebIDE 静态资源 - 路径重写
+            // /-/ide/assets/* (web) -> assets_path/webide/main/* (fs)
+            .route("/-/ide/assets/{tail:.*}", web::get().to(static_files::serve_webide_main))
+            // /-/ide/vscode/* (web) -> assets_path/webide/vscode/* (fs)
+            .route("/-/ide/vscode/{tail:.*}", web::get().to(static_files::serve_webide_vscode))
+            // /-/ide/extensions/* (web) -> assets_path/webide/extensions/* (fs)
+            .route("/-/ide/extensions/{tail:.*}", web::get().to(static_files::serve_webide_extensions))
+            
+            // WebIDE SPA 入口 (/-/ide/* 返回 webide 的 index.html)
             .service(
-                Files::new("/-/ide", webide_dist_data.get_ref().clone())
-                    .index_file("index.html")
-                    .use_last_modified(true)
-                    .use_etag(true)
-                    .prefer_utf8(true)
-                    .default_handler(web::to(static_files::webide_fallback))
+                web::scope("/-/ide")
+                    .default_service(web::to(static_files::serve_webide_index))
             )
             
             // API 代理到后端
@@ -121,15 +136,16 @@ async fn main() -> std::io::Result<()> {
                 web::route().to(proxy::proxy_git_http)
             )
             
-            // 前端 SPA 静态文件（包括 fallback）
-            // 必须放在最后，作为 catch-all
+            // 前端 SPA 文件服务
+            // 必须放在最后作为 catch-all 路由，匹配所有未被上面路由处理的请求
+            // default_handler 用于处理前端路由（如 /projects）- 返回 index.html 让前端路由接管
             .service(
                 Files::new("/", frontend_dist_data.get_ref().clone())
                     .index_file("index.html")
                     .use_last_modified(true)
                     .use_etag(true)
                     .prefer_utf8(true)
-                    .default_handler(web::to(static_files::spa_fallback))
+                    .default_handler(web::to(static_files::serve_spa_index))
             )
     })
     .bind((listen_addr.as_str(), listen_port))?

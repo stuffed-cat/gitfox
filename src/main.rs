@@ -96,11 +96,12 @@ async fn main() -> std::io::Result<()> {
         ssh::start_ssh_server(ssh_config, ssh_pool);
     }
 
-    log::info!("Starting GitFox HTTP server at {}", server_addr);
-
     let runner_manager_clone = runner_manager.clone();
+    
+    // 提前提取 socket_path 以避免借用问题
+    let socket_path = config.server_socket_path.clone();
 
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin()
             .allow_any_method()
@@ -115,10 +116,24 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(message_queue.clone()))
             .app_data(web::Data::new(config.clone()))
             .app_data(web::Data::new(runner_manager_clone.clone()))
-            .service(fs::Files::new("/assets", "./assets").show_files_listing())
+            .service(fs::Files::new("/assets", config.assets_path.clone()).show_files_listing())
             .configure(handlers::configure_routes)
-    })
-    .bind(&server_addr)?
-    .run()
-    .await
+    });
+
+    // Unix Socket 优先于 TCP
+    let server = if let Some(socket_path) = socket_path {
+        log::info!("Starting GitFox HTTP server on Unix socket: {}", socket_path);
+        
+        // 删除旧的 socket 文件（如果存在）
+        if std::path::Path::new(&socket_path).exists() {
+            std::fs::remove_file(&socket_path)?;
+        }
+        
+        server.bind_uds(socket_path)?
+    } else {
+        log::info!("Starting GitFox HTTP server at {}", server_addr);
+        server.bind(&server_addr)?
+    };
+
+    server.run().await
 }

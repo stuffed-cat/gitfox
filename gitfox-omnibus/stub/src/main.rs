@@ -29,17 +29,28 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 // 嵌入的资源
 // ============================================================================
 
-/// 前端静态文件 (Vue SPA)
+/// 前端静态文件 (Vue SPA) - 只有 index.html 等
 #[derive(RustEmbed)]
 #[folder = "embedded/frontend"]
 #[prefix = ""]
 struct FrontendAssets;
 
-/// WebIDE 静态文件 (VS Code Web)
+/// WebIDE 静态文件 (VS Code Web) - 只有 index.html 等
 #[derive(RustEmbed)]
 #[folder = "embedded/webide"]
 #[prefix = ""]
 struct WebideAssets;
+
+/// 静态资源文件 (js/css 等)
+/// 目录结构:
+/// - main/         <- 主前端 js/css
+/// - webide/main/  <- WebIDE js/css
+/// - webide/vscode/ <- vscode 静态资源
+/// - webide/extensions/ <- 扩展资源
+#[derive(RustEmbed)]
+#[folder = "embedded/static"]
+#[prefix = ""]
+struct StaticAssets;
 
 /// 编译好的二进制文件 (devops, workhorse, shell)
 #[derive(RustEmbed)]
@@ -265,7 +276,7 @@ struct ServicePaths {
     frontend_dir: PathBuf,
     webide_dir: PathBuf,
     migrations_dir: PathBuf,
-    assets_dir: PathBuf,
+    assets_dir: PathBuf,   // 静态资源根目录 (包含 main/, webide/, upload/)
     repos_dir: PathBuf,
 }
 
@@ -276,13 +287,14 @@ impl ServicePaths {
             frontend_dir: data_dir.join("frontend"),
             webide_dir: data_dir.join("webide"),
             migrations_dir: data_dir.join("migrations"),
-            assets_dir: data_dir.join("assets"),
+            assets_dir: data_dir.join("assets"),  // 静态资源根目录
             repos_dir: data_dir.join("repos"),
         }
     }
 
     fn ensure_dirs(&self) -> Result<()> {
-        fs::create_dir_all(&self.assets_dir)?;
+        // 创建用户上传目录 (main/ 和 webide/* 由 extract_assets 创建)
+        fs::create_dir_all(self.assets_dir.join("upload"))?;
         fs::create_dir_all(&self.repos_dir)?;
         Ok(())
     }
@@ -318,7 +330,8 @@ fn start_backend(config: &BackendConfig) -> Result<Child> {
         .env("HTTP_PORT", config.port.to_string())
         .env("SSH_PORT", config.ssh_port.to_string())
         .env("GIT_REPOS_PATH", &config.repos_dir)
-        .env("ASSETS_PATH", &config.assets_dir)
+        // 后端的 ASSETS_PATH 指向用户上传目录 (assets/upload)
+        .env("ASSETS_PATH", config.assets_dir.join("upload"))
         .env("MIGRATIONS_PATH", &config.migrations_dir)
         .env("RUST_LOG", if config.verbose { "debug" } else { "info" })
         .stdout(Stdio::inherit())
@@ -407,14 +420,45 @@ fn start_workhorse_from_config(
 ) -> Result<Child> {
     let binary = paths.bin_dir.join("gitfox-workhorse");
     
-    // gitfox-workhorse 支持 --config 参数直接读取配置文件
-    let child = Command::new(&binary)
-        .arg("--config")
-        .arg(config_path)
-        .env("RUST_LOG", if verbose { "debug" } else { "info" })
+    // 读取 TOML 配置文件
+    let config_content = fs::read_to_string(config_path)
+        .context("Failed to read workhorse.toml")?;
+    let config: toml::Value = toml::from_str(&config_content)
+        .context("Failed to parse workhorse.toml")?;
+    
+    // 准备环境变量，使 TOML 配置优先于默认值
+    let mut cmd = Command::new(&binary);
+    cmd.env("RUST_LOG", if verbose { "debug" } else { "info" })
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
+        .stderr(Stdio::inherit());
+    
+    // 读取并设置配置项
+    if let Some(listen_addr) = config.get("listen_addr").and_then(|v| v.as_str()) {
+        cmd.env("WORKHORSE_LISTEN_ADDR", listen_addr);
+    }
+    if let Some(listen_port) = config.get("listen_port").and_then(|v| v.as_integer()) {
+        cmd.env("WORKHORSE_LISTEN_PORT", listen_port.to_string());
+    }
+    if let Some(backend_url) = config.get("backend_url").and_then(|v| v.as_str()) {
+        cmd.env("WORKHORSE_BACKEND_URL", backend_url);
+    }
+    if let Some(backend_socket) = config.get("backend_socket").and_then(|v| v.as_str()) {
+        cmd.env("WORKHORSE_BACKEND_SOCKET", backend_socket);
+    }
+    if let Some(frontend_dist) = config.get("frontend_dist_path").and_then(|v| v.as_str()) {
+        cmd.env("WORKHORSE_FRONTEND_DIST", frontend_dist);
+    }
+    if let Some(webide_dist) = config.get("webide_dist_path").and_then(|v| v.as_str()) {
+        cmd.env("WORKHORSE_WEBIDE_DIST", webide_dist);
+    }
+    if let Some(assets_path) = config.get("assets_path").and_then(|v| v.as_str()) {
+        cmd.env("WORKHORSE_ASSETS_PATH", assets_path);
+    }
+    if let Some(git_repos_path) = config.get("git_repos_path").and_then(|v| v.as_str()) {
+        cmd.env("WORKHORSE_GIT_REPOS_PATH", git_repos_path);
+    }
+    
+    let child = cmd.spawn()
         .context("Failed to start workhorse")?;
 
     Ok(child)
@@ -472,6 +516,7 @@ fn extract_assets(data_dir: &Path) -> Result<()> {
     extract_embedded::<BinaryAssets>(&data_dir.join("bin"), true)?;
     extract_embedded::<FrontendAssets>(&data_dir.join("frontend"), false)?;
     extract_embedded::<WebideAssets>(&data_dir.join("webide"), false)?;
+    extract_embedded::<StaticAssets>(&data_dir.join("assets"), false)?;  // 静态资源 -> assets/
     extract_embedded::<MigrationAssets>(&data_dir.join("migrations"), false)?;
 
     info!("Assets extracted successfully");
@@ -559,6 +604,9 @@ fn list_assets() {
 
     println!("\nWebIDE: {} files", WebideAssets::iter().count());
     list_first_n::<WebideAssets>(5);
+    
+    println!("\nStatic Assets: {} files", StaticAssets::iter().count());
+    list_first_n::<StaticAssets>(10);
 
     println!("\nMigrations:");
     let mut migrations: Vec<_> = MigrationAssets::iter().collect();
@@ -604,6 +652,67 @@ fn init_config(data_dir: &Path) -> Result<()> {
         .unwrap_or_else(|_| "8080".to_string())
         .parse()
         .unwrap_or(8080);
+    
+    println!("\n⚙️  后端服务配置\n");
+    
+    let use_unix_socket = Confirm::new("使用自动配置后端连接 (Unix Socket)?")
+        .with_default(true)
+        .with_help_message("推荐：组件间通过 Unix Socket 通信，性能更好更安全")
+        .prompt()
+        .unwrap_or(true);
+    
+    let (server_socket_path, server_host, server_port) = if use_unix_socket {
+        let socket_path = "/tmp/gitfox-backend.sock".to_string();
+        println!("   → Backend Socket: {}", socket_path);
+        (socket_path, "127.0.0.1".to_string(), 8081)
+    } else {
+        println!("\n   手动配置后端连接 (TCP):\n");
+        let host = Text::new("后端服务监听地址:")
+            .with_default("127.0.0.1")
+            .with_help_message("内部通信地址，通常使用 127.0.0.1")
+            .prompt()
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        
+        let port: u16 = Text::new("后端服务监听端口:")
+            .with_default("8081")
+            .with_help_message("后端 API 服务端口")
+            .prompt()
+            .unwrap_or_else(|_| "8081".to_string())
+            .parse()
+            .unwrap_or(8081);
+        
+        ("".to_string(), host, port)
+    };
+    
+    println!("\n🔐 SSH 配置\n");
+    
+    let ssh_host = Text::new("SSH 监听地址:")
+        .with_default("0.0.0.0")
+        .with_help_message("通常使用 0.0.0.0 监听所有网卡")
+        .prompt()
+        .unwrap_or_else(|_| "0.0.0.0".to_string());
+    
+    let ssh_port: u16 = Text::new("SSH 监听端口:")
+        .with_default("2222")
+        .with_help_message("默认 2222，避免与系统 SSH (22) 冲突")
+        .prompt()
+        .unwrap_or_else(|_| "2222".to_string())
+        .parse()
+        .unwrap_or(2222);
+    
+    let ssh_public_host = Text::new("SSH 公开访问地址:")
+        .with_default("localhost")
+        .with_help_message("用户通过此地址访问 Git SSH，例如：git.example.com 或 IP 地址")
+        .prompt()
+        .unwrap_or_else(|_| "localhost".to_string());
+    
+    let ssh_public_port: u16 = Text::new("SSH 公开访问端口:")
+        .with_default(&ssh_port.to_string())
+        .with_help_message("如果使用端口转发，这里填写外部端口")
+        .prompt()
+        .unwrap_or_else(|_| ssh_port.to_string())
+        .parse()
+        .unwrap_or(ssh_port);
     
     let enable_smtp = Confirm::new("启用 SMTP 邮件服务?")
         .with_default(false)
@@ -685,6 +794,14 @@ fn init_config(data_dir: &Path) -> Result<()> {
     let user_config = UserConfig {
         base_url,
         http_port,
+        use_unix_socket,
+        server_socket_path,
+        server_host,
+        server_port,
+        ssh_host,
+        ssh_port,
+        ssh_public_host,
+        ssh_public_port,
         smtp_config,
         webauthn_rp_id: webauthn_rp_id.clone(),
     };
@@ -710,7 +827,7 @@ fn init_config(data_dir: &Path) -> Result<()> {
     if workhorse_toml.exists() {
         warn!("{} already exists, skipping", workhorse_toml.display());
     } else {
-        let toml_template = generate_workhorse_toml_template(data_dir, http_port);
+        let toml_template = generate_workhorse_toml_template(data_dir, &user_config);
         fs::write(&workhorse_toml, toml_template)?;
         info!("Created: {}", workhorse_toml.display());
     }
@@ -728,6 +845,14 @@ fn init_config(data_dir: &Path) -> Result<()> {
     println!("\n📝 Configuration Summary:");
     println!("   Public URL: {}", user_config.base_url);
     println!("   HTTP Port:  {}", user_config.http_port);
+    if user_config.use_unix_socket {
+        println!("   Backend:    Unix Socket ({})", user_config.server_socket_path);
+    } else {
+        println!("   Backend:    TCP ({}:{})", user_config.server_host, user_config.server_port);
+    }
+    println!("   SSH:        {}:{} (public: {}:{})", 
+        user_config.ssh_host, user_config.ssh_port,
+        user_config.ssh_public_host, user_config.ssh_public_port);
     if let Some(ref smtp) = user_config.smtp_config {
         println!("   SMTP:       Enabled");
         println!("     Server:   {}:{}", smtp.host, smtp.port);
@@ -759,6 +884,16 @@ struct GeneratedSecrets {
 struct UserConfig {
     base_url: String,
     http_port: u16,
+    // Server 配置
+    use_unix_socket: bool,
+    server_socket_path: String,
+    server_host: String,
+    server_port: u16,
+    // SSH 配置
+    ssh_host: String,
+    ssh_port: u16,
+    ssh_public_host: String,
+    ssh_public_port: u16,
     smtp_config: Option<SmtpConfig>,
     webauthn_rp_id: String,
 }
@@ -859,8 +994,26 @@ fn generate_gitfox_env_template(data_dir: &Path, secrets: &GeneratedSecrets, use
     template = template.replace("{{JWT_SECRET}}", &secrets.jwt_secret);
     template = template.replace("{{GIT_REPOS_PATH}}", &repos_dir.display().to_string());
     template = template.replace("{{ASSETS_PATH}}", &assets_dir.display().to_string());
+    
+    // Server 配置
+    if user_config.use_unix_socket {
+        template = template.replace("{{SERVER_CONNECTION_TYPE}}", "unix_socket");
+        template = template.replace("{{SERVER_SOCKET_PATH}}", &user_config.server_socket_path);
+        template = template.replace("{{SERVER_HOST}}", "127.0.0.1");
+        template = template.replace("{{SERVER_PORT}}", "8081");
+    } else {
+        template = template.replace("{{SERVER_CONNECTION_TYPE}}", "tcp");
+        template = template.replace("{{SERVER_SOCKET_PATH}}", "");
+        template = template.replace("{{SERVER_HOST}}", &user_config.server_host);
+        template = template.replace("{{SERVER_PORT}}", &user_config.server_port.to_string());
+    }
+    
+    // SSH 配置
+    template = template.replace("{{SSH_HOST}}", &user_config.ssh_host);
+    template = template.replace("{{SSH_PORT}}", &user_config.ssh_port.to_string());
     template = template.replace("{{SSH_HOST_KEY_PATH}}", &ssh_dir.join("host_key").display().to_string());
-    template = template.replace("{{SSH_PUBLIC_HOST}}", "localhost");  // 用户需要根据实际部署修改
+    template = template.replace("{{SSH_PUBLIC_HOST}}", &user_config.ssh_public_host);
+    template = template.replace("{{SSH_PUBLIC_PORT}}", &user_config.ssh_public_port.to_string());
     template = template.replace("{{GITFOX_BASE_URL}}", &user_config.base_url);
     template = template.replace("{{GITFOX_SHELL_PATH}}", &shell_path.display().to_string());
     template = template.replace("{{GITFOX_SHELL_SECRET}}", &secrets.shell_secret);
@@ -896,7 +1049,7 @@ fn generate_gitfox_env_template(data_dir: &Path, secrets: &GeneratedSecrets, use
     template
 }
 
-fn generate_workhorse_toml_template(data_dir: &Path, http_port: u16) -> String {
+fn generate_workhorse_toml_template(data_dir: &Path, user_config: &UserConfig) -> String {
     // 从嵌入的模板文件加载
     let template_file = TemplateAssets::get("workhorse.toml.template")
         .expect("workhorse.toml.template not found in embedded assets");
@@ -909,7 +1062,17 @@ fn generate_workhorse_toml_template(data_dir: &Path, http_port: u16) -> String {
     let repos_dir = data_dir.join("repos");
     
     // 替换所有模板变量
-    template = template.replace("{{LISTEN_PORT}}", &http_port.to_string());
+    template = template.replace("{{LISTEN_PORT}}", &user_config.http_port.to_string());
+    
+    // 后端连接配置
+    if user_config.use_unix_socket {
+        template = template.replace("{{BACKEND_SOCKET}}", &user_config.server_socket_path);
+        template = template.replace("{{BACKEND_URL}}", "");
+    } else {
+        template = template.replace("{{BACKEND_SOCKET}}", "");
+        template = template.replace("{{BACKEND_URL}}", &format!("http://{}:{}", user_config.server_host, user_config.server_port));
+    }
+    
     template = template.replace("{{FRONTEND_DIST_PATH}}", &frontend_dir.display().to_string());
     template = template.replace("{{WEBIDE_DIST_PATH}}", &webide_dir.display().to_string());
     template = template.replace("{{ASSETS_PATH}}", &assets_dir.display().to_string());

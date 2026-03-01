@@ -33,6 +33,7 @@ pub fn generate_stub_project(
     // 复制资源到 embedded/ 子目录（相对路径）
     copy_dir_all(&assets.frontend_dir, &embedded_dir.join("frontend"))?;
     copy_dir_all(&assets.webide_dir, &embedded_dir.join("webide"))?;
+    copy_dir_all(&assets.static_dir, &embedded_dir.join("static"))?;  // 静态资源 (assets/)
     copy_dir_all(&assets.binaries_dir, &embedded_dir.join("bin"))?;
     copy_dir_all(&assets.migrations_dir, &embedded_dir.join("migrations"))?;
     copy_dir_all(&assets.templates_dir, &embedded_dir.join("templates"))?;
