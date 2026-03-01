@@ -150,6 +150,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // Server config route (public)
             .route("/config", web::get().to(get_server_config))
             
+            // Path resolve route (public) - determine if path is project/group/user
+            .route("/resolve/{path:.*}", web::get().to(namespace::resolve_path))
+            
             // Global search route (public)
             .route("/search", web::get().to(search::search))
             

@@ -91,6 +91,12 @@ class ApiClient {
     return `/projects/${path.namespace}/${path.project}`
   }
 
+  // Resolve a path to determine its type (project/group/user)
+  resolvePath = async (path: string): Promise<{ type: 'project' | 'group' | 'user' | 'not_found' }> => {
+    const response = await this.client.get(`/resolve/${path}`)
+    return response.data
+  }
+
   // Auth
   auth = {
     login: async (data: LoginRequest): Promise<LoginResponse | TwoFactorRequiredResponse> => {

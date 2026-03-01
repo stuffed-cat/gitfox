@@ -9,6 +9,71 @@ use crate::models::namespace::{
     Group, GroupMember, NamespaceVisibility, NamespaceInfo,
 };
 
+/// Path resolve response - returns what type of entity a path refers to
+#[derive(Debug, serde::Serialize)]
+pub struct PathResolveResponse {
+    /// Type of the entity: "project", "group", "user", or "not_found"
+    #[serde(rename = "type")]
+    pub entity_type: String,
+}
+
+/// Resolve a path to determine if it's a project or namespace (group/user)
+/// GET /api/v1/resolve/{path:.*}
+pub async fn resolve_path(
+    pool: web::Data<PgPool>,
+    path: web::Path<String>,
+) -> Result<HttpResponse, AppError> {
+    let full_path = path.into_inner();
+    
+    // 检查是否是项目（namespace/project 格式）
+    if let Some(slash_pos) = full_path.rfind('/') {
+        let namespace = &full_path[..slash_pos];
+        let project_name = &full_path[slash_pos + 1..];
+        
+        // 先查项目
+        let is_project = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM projects p
+                JOIN namespaces n ON n.id = p.namespace_id
+                WHERE n.path = $1 AND p.name = $2
+            )
+            "#
+        )
+        .bind(namespace)
+        .bind(project_name)
+        .fetch_one(pool.get_ref())
+        .await
+        .map_err(AppError::from)?;
+        
+        if is_project {
+            return Ok(HttpResponse::Ok().json(PathResolveResponse {
+                entity_type: "project".to_string(),
+            }));
+        }
+    }
+    
+    // 检查是否是命名空间（group 或 user）
+    let namespace_type = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT namespace_type::text FROM namespaces WHERE path = $1
+        "#
+    )
+    .bind(&full_path)
+    .fetch_optional(pool.get_ref())
+    .await
+    .map_err(AppError::from)?;
+    
+    match namespace_type {
+        Some(ns_type) => Ok(HttpResponse::Ok().json(PathResolveResponse {
+            entity_type: ns_type,
+        })),
+        None => Ok(HttpResponse::Ok().json(PathResolveResponse {
+            entity_type: "not_found".to_string(),
+        })),
+    }
+}
+
 /// Namespace option for project creation
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
 pub struct NamespaceOption {

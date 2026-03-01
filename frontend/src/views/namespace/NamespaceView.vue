@@ -18,12 +18,12 @@
         </div>
         <div class="info">
           <div class="name-row">
-            <h1>{{ namespace?.name || route.params.namespace }}</h1>
+            <h1>{{ namespace?.name || namespacePath }}</h1>
             <span v-if="namespace?.visibility" class="visibility-badge" :class="namespace.visibility">
               {{ namespace.visibility === 'public' ? '公开' : namespace.visibility === 'internal' ? '内部' : '私有' }}
             </span>
           </div>
-          <p class="username">{{ namespace?.path || route.params.namespace }}</p>
+          <p class="username">{{ namespace?.path || namespacePath }}</p>
           <p v-if="namespace?.description" class="description">{{ namespace.description }}</p>
         </div>
         <div class="header-actions">
@@ -68,7 +68,7 @@
           <router-link
             v-for="project in projects"
             :key="'p-' + project.id"
-            :to="`/${route.params.namespace}/${project.name}`"
+            :to="`/${namespacePath}/${project.name}`"
             class="project-item"
           >
             <div class="project-avatar">{{ project.name.charAt(0).toUpperCase() }}</div>
@@ -98,8 +98,8 @@
           <span v-else>{{ namespace?.name?.charAt(0).toUpperCase() || '?' }}</span>
         </div>
         <div class="info">
-          <h1>{{ namespace?.name || namespace?.display_name || route.params.namespace }}</h1>
-          <p class="username">@{{ route.params.namespace }}</p>
+          <h1>{{ namespace?.name || namespace?.display_name || namespacePath }}</h1>
+          <p class="username">@{{ namespacePath }}</p>
           <div v-if="namespace?.status_emoji || namespace?.status_message" class="user-status">
             <span v-if="namespace?.status_emoji" class="status-emoji">{{ namespace.status_emoji }}</span>
             <span v-if="namespace?.status_message" class="status-message">{{ namespace.status_message }}</span>
@@ -125,7 +125,7 @@
           <router-link
             v-for="project in projects"
             :key="project.id"
-            :to="`/${route.params.namespace}/${project.name}`"
+            :to="`/${namespacePath}/${project.name}`"
             class="project-item"
           >
             <div class="project-avatar">{{ project.name.charAt(0).toUpperCase() }}</div>
@@ -147,14 +147,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, onUnmounted } from 'vue'
+import { ref, onMounted, watch, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/api'
 import { useNamespaceStore } from '@/stores/namespace'
 import type { Group } from '@/types'
 
+const props = defineProps<{
+  path?: string
+}>()
+
 const route = useRoute()
 const namespaceStore = useNamespaceStore()
+
+// 优先使用 prop 传入的 path，否则使用 route.params.namespace
+const namespacePath = computed(() => props.path || route.params.namespace as string)
 
 const loading = ref(true)
 const notFound = ref(false)
@@ -171,23 +178,24 @@ async function loadNamespace() {
   subgroups.value = []
   namespaceStore.clearNamespaceContext()
   
-  const namespacePath = route.params.namespace as string
+  const currentPath = namespacePath.value
+  if (!currentPath) return
   
   try {
     // 先尝试获取群组
     try {
-      const groupData = await api.groups.get(namespacePath)
+      const groupData = await api.groups.get(currentPath)
       namespace.value = groupData
       namespaceType.value = 'group'
       activeTab.value = 'subgroups'
       
       // 设置群组上下文到 store
-      namespaceStore.setNamespaceContext('group', namespacePath, groupData)
+      namespaceStore.setNamespaceContext('group', currentPath, groupData)
       
       // 获取子群组和项目
       const [sg, proj] = await Promise.all([
-        api.groups.listSubgroups(namespacePath).catch(() => []),
-        api.groups.listProjects(namespacePath).catch(() => [])
+        api.groups.listSubgroups(currentPath).catch(() => []),
+        api.groups.listProjects(currentPath).catch(() => [])
       ])
       subgroups.value = sg
       projects.value = proj
@@ -197,14 +205,14 @@ async function loadNamespace() {
     }
     
     // 尝试获取用户
-    const response = await api.users.get(namespacePath)
+    const response = await api.users.get(currentPath)
     namespace.value = response
     namespaceType.value = 'user'
     activeTab.value = 'projects'
-    namespaceStore.setNamespaceContext('user', namespacePath)
+    namespaceStore.setNamespaceContext('user', currentPath)
     
     const projectsRes = await api.projects.list()
-    projects.value = projectsRes.filter((p: any) => p.owner_name === namespacePath)
+    projects.value = projectsRes.filter((p: any) => p.owner_name === currentPath)
   } catch (error: any) {
     if (error.response?.status === 404) {
       notFound.value = true
@@ -215,7 +223,7 @@ async function loadNamespace() {
 }
 
 onMounted(loadNamespace)
-watch(() => route.params.namespace, loadNamespace)
+watch(namespacePath, loadNamespace)
 
 onUnmounted(() => {
   namespaceStore.clearNamespaceContext()

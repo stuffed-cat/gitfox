@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteLocationNormalized, type NavigationGuardNext } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const routes = [
@@ -238,8 +238,20 @@ const routes = [
   {
     path: '/:owner/:repo',
     name: 'Project',
-    component: () => import('@/views/projects/ProjectView.vue'),
+    component: () => import('@/views/DynamicPathView.vue'),
     meta: { requiresAuth: false },
+    beforeEnter: async (to: RouteLocationNormalized, _from: RouteLocationNormalized, next: NavigationGuardNext) => {
+      const owner = to.params.owner as string
+      const repo = to.params.repo as string
+      const fullPath = `${owner}/${repo}`
+      
+      // 调用 resolve API 判断路径类型，存入 meta
+      const { api } = await import('@/api')
+      const result = await api.resolvePath(fullPath)
+      to.meta.entityType = result.type
+      to.meta.fullPath = fullPath
+      next()
+    },
     children: [
       {
         path: '',
