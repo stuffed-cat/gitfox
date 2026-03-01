@@ -88,7 +88,7 @@ class ApiClient {
 
   // Helper to build project path
   private projectPath(path: ProjectPath): string {
-    return `/projects/${path.namespace}/${path.project}`
+    return `/projects/${encodeURIComponent(path.namespace)}/${encodeURIComponent(path.project)}`
   }
 
   // Resolve a path to determine its type (project/group/user)

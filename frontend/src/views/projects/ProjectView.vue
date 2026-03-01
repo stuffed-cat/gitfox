@@ -31,12 +31,12 @@ const project = computed(() => projectStore.currentProject)
 const stats = computed(() => projectStore.projectStats)
 const loading = computed(() => projectStore.loading)
 
-// 监听路由参数变化，通过 owner/repo 获取项目
+// 从 route.meta 获取 namespace 和 projectName（由 beforeEnter 设置）
 watch(
-  () => [route.params.owner, route.params.repo],
-  ([owner, repo]) => {
-    if (owner && repo && typeof owner === 'string' && typeof repo === 'string') {
-      projectStore.fetchProject(owner, repo)
+  () => [route.meta.namespace, route.meta.projectName],
+  ([namespace, projectName]) => {
+    if (namespace && projectName && typeof namespace === 'string' && typeof projectName === 'string') {
+      projectStore.fetchProject(namespace, projectName)
     }
   },
   { immediate: true }

@@ -135,7 +135,10 @@ const inviteForm = ref({
   accessLevel: 30
 })
 
-const groupPath = computed(() => route.params.namespace as string)
+const groupPath = computed(() => {
+  const ns = route.params.namespace
+  return Array.isArray(ns) ? ns.join('/') : ns as string
+})
 
 const filteredMembers = computed(() => {
   if (!searchQuery.value) return members.value

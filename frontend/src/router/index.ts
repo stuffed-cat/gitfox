@@ -213,43 +213,44 @@ const routes = [
   },
   
   // User/Group profile (single segment path - handles both users and groups)
-  {
-    path: '/:namespace',
-    name: 'Namespace',
-    component: () => import('@/views/namespace/NamespaceView.vue'),
-    meta: { requiresAuth: false }
-  },
+  // 注意：这个路由被 /:pathSegments+ 替代，单段路径也由它处理
 
-  // Group sub-pages (single level group with sub-routes)
+  // Group sub-pages (supports multi-segment namespace like gitfox/mirror)
   {
-    path: '/:namespace/-/members',
+    path: '/:namespace+/-/members',
     name: 'GroupMembers',
     component: () => import('@/views/groups/GroupMembersView.vue'),
     meta: { requiresAuth: true, contextType: 'group' }
   },
   {
-    path: '/:namespace/-/settings',
+    path: '/:namespace+/-/settings',
     name: 'GroupSettings',
     component: () => import('@/views/groups/GroupSettingsView.vue'),
     meta: { requiresAuth: true, contextType: 'group' }
   },
   
-  // Project routes (must be LAST - catches /:owner/:repo)
+  // Project routes (must be LAST - catches any path with 2+ segments)
+  // 支持多段路径，如 gitfox/mirror/project（子组群下的项目）
   {
-    path: '/:owner/:repo',
+    path: '/:pathSegments+',
     name: 'Project',
     component: () => import('@/views/DynamicPathView.vue'),
     meta: { requiresAuth: false },
     beforeEnter: async (to: RouteLocationNormalized, _from: RouteLocationNormalized, next: NavigationGuardNext) => {
-      const owner = to.params.owner as string
-      const repo = to.params.repo as string
-      const fullPath = `${owner}/${repo}`
+      const segments = to.params.pathSegments as string[]
+      const fullPath = segments.join('/')
       
       // 调用 resolve API 判断路径类型，存入 meta
       const { api } = await import('@/api')
       const result = await api.resolvePath(fullPath)
       to.meta.entityType = result.type
       to.meta.fullPath = fullPath
+      
+      // 解析 namespace 和 projectName（最后一段是 project，前面是 namespace）
+      if (segments.length >= 2) {
+        to.meta.namespace = segments.slice(0, -1).join('/')
+        to.meta.projectName = segments[segments.length - 1]
+      }
       next()
     },
     children: [

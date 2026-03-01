@@ -175,7 +175,10 @@ const namespaceStore = useNamespaceStore()
 const loading = ref(true)
 const group = ref<Group | null>(null)
 
-const groupPath = computed(() => route.params.namespace as string)
+const groupPath = computed(() => {
+  const ns = route.params.namespace
+  return Array.isArray(ns) ? ns.join('/') : ns as string
+})
 
 const expandedSections = reactive({
   naming: true,
