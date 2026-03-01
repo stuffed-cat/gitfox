@@ -80,37 +80,9 @@ pub async fn create_group(
     auth: AuthenticatedUser,
     body: web::Json<CreateGroupRequest>,
 ) -> Result<HttpResponse, AppError> {
-    // Check if path is already taken
-    let existing = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM groups WHERE path = $1"
-    )
-    .bind(&body.path)
-    .fetch_one(pool.get_ref())
-    .await
-    .map_err(AppError::from)?;
-    
-    if existing > 0 {
-        return Err(AppError::conflict("Group path already exists"));
-    }
-    
-    // For top-level groups, check if path conflicts with username
-    // Subgroups (with parent_id) can have paths like "parent/subgroup" which won't conflict
-    if body.parent_id.is_none() {
-        let user_exists = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM users WHERE username = $1"
-        )
-        .bind(&body.path)
-        .fetch_one(pool.get_ref())
-        .await
-        .map_err(AppError::from)?;
-        
-        if user_exists > 0 {
-            return Err(AppError::conflict("Path conflicts with existing username"));
-        }
-    }
-    
     // If parent_id is provided, verify that the user has permission to create subgroups
-    let parent_namespace_id: Option<i64> = if let Some(parent_id) = body.parent_id {
+    // and construct full path (parent_path/new_path)
+    let (parent_namespace_id, full_path): (Option<i64>, String) = if let Some(parent_id) = body.parent_id {
         let parent_group = sqlx::query_as::<_, Group>(
             "SELECT * FROM groups WHERE id = $1"
         )
@@ -126,14 +98,45 @@ pub async fn create_group(
             return Err(AppError::forbidden("You don't have permission to create subgroups in this group"));
         }
         
-        Some(parent_group.namespace_id)
+        // Construct full path: parent_path/new_path
+        let full_path = format!("{}/{}", parent_group.path, body.path);
+        (Some(parent_group.namespace_id), full_path)
     } else {
-        None
+        // Top-level group, use path as-is
+        (None, body.path.clone())
     };
+    
+    // Check if full path is already taken
+    let existing = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM namespaces WHERE path = $1"
+    )
+    .bind(&full_path)
+    .fetch_one(pool.get_ref())
+    .await
+    .map_err(AppError::from)?;
+    
+    if existing > 0 {
+        return Err(AppError::conflict("This path already exists"));
+    }
+    
+    // For top-level groups, check if path conflicts with username
+    if body.parent_id.is_none() {
+        let user_exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM users WHERE username = $1"
+        )
+        .bind(&full_path)
+        .fetch_one(pool.get_ref())
+        .await
+        .map_err(AppError::from)?;
+        
+        if user_exists > 0 {
+            return Err(AppError::conflict("Path conflicts with existing username"));
+        }
+    }
     
     let visibility = body.visibility.clone().unwrap_or(NamespaceVisibility::Private);
     
-    // Create namespace first
+    // Create namespace first with full_path
     let namespace_id: i64 = sqlx::query_scalar(
         r#"
         INSERT INTO namespaces (name, path, namespace_type, visibility, owner_id, parent_id)
@@ -142,7 +145,7 @@ pub async fn create_group(
         "#
     )
     .bind(&body.name)
-    .bind(&body.path)
+    .bind(&full_path)  // Store full path
     .bind(&visibility)
     .bind(auth.user_id)
     .bind(parent_namespace_id)  // Link to parent's namespace_id
@@ -150,7 +153,7 @@ pub async fn create_group(
     .await
     .map_err(AppError::from)?;
     
-    // Create group
+    // Create group with full path
     let group = sqlx::query_as::<_, Group>(
         r#"
         INSERT INTO groups (namespace_id, name, path, description, visibility, parent_id)
@@ -160,7 +163,7 @@ pub async fn create_group(
     )
     .bind(namespace_id)
     .bind(&body.name)
-    .bind(&body.path)
+    .bind(&full_path)  // Store full path
     .bind(&body.description)
     .bind(&visibility)
     .bind(&body.parent_id)  // Link to parent group's id

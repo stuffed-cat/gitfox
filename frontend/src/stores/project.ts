@@ -27,10 +27,12 @@ export const useProjectStore = defineStore('project', () => {
       if (currentProject.value) {
         projectStats.value = await api.projects.getStats(path)
       }
-    } catch (error) {
+    } catch (error: any) {
       currentProject.value = null
       projectStats.value = null
       console.error('Failed to fetch project:', error)
+      // Re-throw error so component can handle it (e.g., redirect to namespace)
+      throw error
     } finally {
       loading.value = false
     }

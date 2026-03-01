@@ -65,12 +65,41 @@ pub async fn get_project(
     path: web::Path<ProjectPath>,
 ) -> AppResult<HttpResponse> {
     let path = path.into_inner();
-    let project = ProjectService::get_project_by_owner_and_name(
+    
+    // Try to get project first
+    match ProjectService::get_project_by_owner_and_name(
         pool.get_ref(), 
         &path.namespace, 
         &path.project
-    ).await?;
-    Ok(HttpResponse::Ok().json(project))
+    ).await {
+        Ok(project) => Ok(HttpResponse::Ok().json(project)),
+        Err(AppError::NotFound(_)) => {
+            // Project not found, check if the full path is actually a namespace (subgroup)
+            let full_path = format!("{}/{}", path.namespace, path.project);
+            let is_namespace = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM namespaces WHERE path = $1)"
+            )
+            .bind(&full_path)
+            .fetch_one(pool.get_ref())
+            .await?;
+            
+            if is_namespace {
+                // This is a namespace, not a project
+                Err(AppError::BadRequest(format!(
+                    "'{}' is a group/namespace, not a project", 
+                    full_path
+                )))
+            } else {
+                // Neither project nor namespace exists
+                Err(AppError::NotFound(format!(
+                    "Project '{}/{}' not found", 
+                    path.namespace, 
+                    path.project
+                )))
+            }
+        },
+        Err(e) => Err(e)
+    }
 }
 
 ///  PUT /projects/:namespace/:project

@@ -260,14 +260,10 @@ async function createGroup() {
   error.value = ''
   
   try {
-    // 子群组的路径需要包含父路径
-    const fullPath = parentPath.value 
-      ? `${parentPath.value}/${form.value.path}` 
-      : form.value.path
-    
+    // 只发送相对路径，后端会根据 parent_id 自动构建完整路径
     const group = await api.groups.create({
       name: form.value.name,
-      path: fullPath,
+      path: form.value.path,  // 只发送相对路径，不需要前端拼接
       description: form.value.description || undefined,
       visibility: form.value.visibility,
       parent_id: selectedParentId.value || undefined
