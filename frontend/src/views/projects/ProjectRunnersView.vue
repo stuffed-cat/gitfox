@@ -596,8 +596,8 @@ const route = useRoute()
 const props = defineProps<{ project?: Project }>()
 
 const projectPath = computed(() => ({
-  namespace: (props.project?.owner_name || route.params.owner || route.params.namespace) as string,
-  project: (props.project?.name || route.params.repo || route.params.project) as string
+  namespace: (props.project?.owner_name || route.meta.namespace) as string,
+  project: (props.project?.name || route.meta.projectName) as string
 }))
 
 // State

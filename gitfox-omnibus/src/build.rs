@@ -386,13 +386,22 @@ fn copy_binary(manifest_dir: &Path, bin_name: &str, target: &str, profile: &str,
 fn copy_templates(workspace: &Path, output_dir: &Path) -> Result<()> {
     info!("Copying configuration templates...");
     
-    // 复制 .env.example
+    // 复制 .env.example (旧格式，向后兼容)
     let env_example = workspace.join(".env.example");
     if env_example.exists() {
         fs::copy(&env_example, output_dir.join("gitfox.env.template"))?;
         info!("Copied .env.example → gitfox.env.template");
     } else {
         warn!(".env.example not found");
+    }
+    
+    // 复制 gitfox.toml.example (新统一配置格式)
+    let toml_example = workspace.join("gitfox.toml.example");
+    if toml_example.exists() {
+        fs::copy(&toml_example, output_dir.join("gitfox.toml.template"))?;
+        info!("Copied gitfox.toml.example → gitfox.toml.template");
+    } else {
+        warn!("gitfox.toml.example not found");
     }
     
     // 复制 config.example.toml

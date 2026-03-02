@@ -154,7 +154,7 @@
   
   <div v-else class="error-state">
     <h2>议题未找到</h2>
-    <router-link :to="`/${$route.params.owner}/${$route.params.repo}/-/issues`" class="btn btn-primary">
+    <router-link :to="`/${$route.meta.namespace}/${$route.meta.projectName}/-/issues`" class="btn btn-primary">
       返回议题列表
     </router-link>
   </div>
@@ -211,8 +211,16 @@ const loading = ref(true)
 const submitting = ref(false)
 const newComment = ref('')
 
-const owner = computed(() => route.params.owner as string)
-const repo = computed(() => route.params.repo as string)
+const owner = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments.slice(0, -1).join('/')
+})
+const repo = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments[segments.length - 1]
+})
 const iid = computed(() => route.params.iid as string)
 
 async function loadIssue() {

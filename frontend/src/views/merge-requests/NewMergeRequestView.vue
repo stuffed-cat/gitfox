@@ -156,8 +156,16 @@ import type { Project, BranchInfo } from '@/types';
 const route = useRoute();
 const router = useRouter();
 
-const namespace = route.params.owner as string;
-const projectName = route.params.repo as string;
+const namespace = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments.slice(0, -1).join('/')
+})
+const projectName = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments[segments.length - 1]
+})
 
 const project = ref<Project | null>(null);
 const relatedProjects = ref<Project[]>([]);

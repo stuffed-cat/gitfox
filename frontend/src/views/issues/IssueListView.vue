@@ -3,7 +3,7 @@
     <div class="page-header">
       <div class="header-content">
         <h1>议题</h1>
-        <router-link :to="`/${$route.params.owner}/${$route.params.repo}/-/issues/new`" class="btn btn-primary">
+        <router-link :to="`/${$route.meta.namespace}/${$route.meta.projectName}/-/issues/new`" class="btn btn-primary">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
@@ -63,7 +63,7 @@
       <h3>没有议题</h3>
       <p v-if="filter === 'open'">当前没有开放的议题</p>
       <p v-else>当前没有已关闭的议题</p>
-      <router-link :to="`/${$route.params.owner}/${$route.params.repo}/-/issues/new`" class="btn btn-primary">
+      <router-link :to="`/${$route.meta.namespace}/${$route.meta.projectName}/-/issues/new`" class="btn btn-primary">
         创建第一个议题
       </router-link>
     </div>
@@ -86,7 +86,7 @@
         <div class="issue-content">
           <div class="issue-title-row">
             <router-link 
-              :to="`/${$route.params.owner}/${$route.params.repo}/-/issues/${issue.iid}`"
+              :to="`/${$route.meta.namespace}/${$route.meta.projectName}/-/issues/${issue.iid}`"
               class="issue-title"
             >
               {{ issue.title }}
@@ -186,8 +186,16 @@ const page = ref(1)
 const perPage = 20
 const totalCount = ref(0)
 
-const owner = computed(() => route.params.owner as string)
-const repo = computed(() => route.params.repo as string)
+const owner = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments.slice(0, -1).join('/')
+})
+const repo = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments[segments.length - 1]
+})
 
 const openCount = computed(() => issues.value.filter(i => i.state === 'open').length)
 const closedCount = computed(() => issues.value.filter(i => i.state === 'closed').length)

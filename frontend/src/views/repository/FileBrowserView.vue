@@ -284,9 +284,17 @@ const props = defineProps<{
 
 const route = useRoute()
 
-// Route params
-const owner = computed(() => route.params.owner as string)
-const repo = computed(() => route.params.repo as string)
+// Route params - 从 route.params 直接解析
+const owner = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments.slice(0, -1).join('/')
+})
+const repo = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments[segments.length - 1]
+})
 
 // State
 const loading = ref(false)

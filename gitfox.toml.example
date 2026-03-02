@@ -1,0 +1,186 @@
+# ════════════════════════════════════════════════════════════════════════════
+# GitFox 配置文件 (TOML 格式)
+# ════════════════════════════════════════════════════════════════════════════
+# 由 `gitfox init` 生成，`gitfox start` 读取
+# 业务配置（站点名称、注册设置等）请在 Admin -> Settings 中修改
+#
+# 文档: https://docs.gitfox.studio/configuration
+# ════════════════════════════════════════════════════════════════════════════
+
+version = "1.0"
+
+# ════════════════════════════════════════════════════════════════════════════
+# 数据库和缓存（必填）
+# ════════════════════════════════════════════════════════════════════════════
+
+[database]
+# PostgreSQL 连接字符串
+# 格式: postgres://user:password@host:port/database
+# 生产环境建议：
+# - 使用强密码
+# - 启用 SSL 连接：?sslmode=require
+# - 配置连接池大小：?max_connections=20
+url = "{{DATABASE_URL}}"
+
+[redis]
+# Redis 连接字符串
+# 格式: redis://[password@]host:port[/db]
+# 示例：
+# - 本地无密码：redis://127.0.0.1:6379
+# - 有密码：redis://:mypassword@127.0.0.1:6379
+# - 指定数据库：redis://127.0.0.1:6379/1
+url = "{{REDIS_URL}}"
+
+# ════════════════════════════════════════════════════════════════════════════
+# 安全密钥（首次运行时自动生成，请妥善保管）
+# ════════════════════════════════════════════════════════════════════════════
+
+[secrets]
+# JWT 签名密钥（用于用户认证 Token）
+# 生成方法：openssl rand -base64 32
+jwt = "{{JWT_SECRET}}"
+
+# 组件间通信密钥（gitfox-shell 等内部服务认证）
+# 生成方法：openssl rand -base64 32
+internal = "{{GITFOX_SHELL_SECRET}}"
+
+# ════════════════════════════════════════════════════════════════════════════
+# 对外服务（用户直接访问的地址）
+# ════════════════════════════════════════════════════════════════════════════
+
+[server]
+# 公开访问的 URL（用于 OAuth 回调、邮件链接、克隆 URL 等）
+# 示例: https://git.example.com 或 http://192.168.1.100:8080
+base_url = "{{GITFOX_BASE_URL}}"
+
+# HTTP 端口（workhorse 对外监听）
+http_port = {{HTTP_PORT}}
+
+# 最大上传文件大小 (字节)
+# 推荐值：
+# - 小型团队：524288000 (500MB)
+# - 中型团队：1073741824 (1GB)
+# - 大型团队/企业：2147483648 (2GB)
+max_upload_size = {{MAX_UPLOAD_SIZE}}
+
+[server.ssh]
+# 是否启用 SSH 服务
+enabled = {{SSH_ENABLED}}
+
+# SSH 监听地址和端口
+host = "{{SSH_HOST}}"
+port = {{SSH_PORT}}
+
+# 公开显示的 SSH 地址（前端克隆 URL 中显示）
+# 如果使用端口映射，这里填写外部地址
+public_host = "{{SSH_PUBLIC_HOST}}"
+public_port = {{SSH_PUBLIC_PORT}}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 内部服务（组件间通信，通常不需要修改）
+# ════════════════════════════════════════════════════════════════════════════
+
+[internal]
+# 后端 API 连接方式
+# 方式一：Unix Socket（推荐，性能更好更安全）
+# 取消下行注释并注释掉 backend_port 即可启用
+# backend_socket = "{{SERVER_SOCKET_PATH}}"
+
+# 方式二：TCP（默认）
+backend_host = "{{SERVER_HOST}}"
+backend_port = {{SERVER_PORT}}
+
+# GitLayer gRPC（Git 操作服务）
+gitlayer_port = 50052
+
+# Auth gRPC（认证服务）
+auth_grpc_port = 50051
+
+# ════════════════════════════════════════════════════════════════════════════
+# 数据目录
+# ════════════════════════════════════════════════════════════════════════════
+
+[paths]
+# Git 仓库存储目录
+# 所有 Git 仓库将存储在此目录下，按 namespace/project.git 结构组织
+# 确保此目录：
+# - 有足够的磁盘空间（建议至少 100GB）
+# - 使用高性能存储（SSD 推荐）
+# - 有适当的权限（运行用户可读写）
+# - 定期备份
+repos = "{{GIT_REPOS_PATH}}"
+
+# 用户上传文件目录（头像、附件等）
+assets = "{{ASSETS_PATH}}"
+
+# 静态文件目录
+frontend = "{{FRONTEND_PATH}}"
+webide = "{{WEBIDE_PATH}}"
+
+# SSH Host Key（不存在时自动生成）
+ssh_host_key = "{{SSH_HOST_KEY_PATH}}"
+
+# gitfox-shell 路径
+shell_path = "{{GITFOX_SHELL_PATH}}"
+
+# ════════════════════════════════════════════════════════════════════════════
+# 初始管理员（仅首次启动时创建，之后可删除此段）
+# ════════════════════════════════════════════════════════════════════════════
+
+[admin]
+username = "{{INITIAL_ADMIN_USERNAME}}"
+email = "{{INITIAL_ADMIN_EMAIL}}"
+password = "{{INITIAL_ADMIN_PASSWORD}}"
+
+# ════════════════════════════════════════════════════════════════════════════
+# 邮件服务（可选）
+# 邮件模板和发送行为可在 Admin -> Settings 中配置
+# ════════════════════════════════════════════════════════════════════════════
+
+[smtp]
+enabled = {{SMTP_ENABLED}}
+host = "{{SMTP_HOST}}"
+port = {{SMTP_PORT}}
+username = "{{SMTP_USERNAME}}"
+password = "{{SMTP_PASSWORD}}"
+from_email = "{{SMTP_FROM_EMAIL}}"
+from_name = "{{SMTP_FROM_NAME}}"
+use_tls = {{SMTP_USE_TLS}}
+use_ssl = {{SMTP_USE_SSL}}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 第三方登录（可选）
+# 在对应服务的开发者控制台创建 OAuth 应用后填写
+# ════════════════════════════════════════════════════════════════════════════
+
+[oauth.github]
+client_id = "{{OAUTH_GITHUB_CLIENT_ID}}"
+client_secret = "{{OAUTH_GITHUB_CLIENT_SECRET}}"
+
+[oauth.gitlab]
+client_id = "{{OAUTH_GITLAB_CLIENT_ID}}"
+client_secret = "{{OAUTH_GITLAB_CLIENT_SECRET}}"
+# 自建 GitLab 实例的 URL（使用官方 gitlab.com 时留空）
+# url = "{{OAUTH_GITLAB_URL}}"
+
+[oauth.google]
+client_id = "{{OAUTH_GOOGLE_CLIENT_ID}}"
+client_secret = "{{OAUTH_GOOGLE_CLIENT_SECRET}}"
+
+# ════════════════════════════════════════════════════════════════════════════
+# WebAuthn（可选）
+# ════════════════════════════════════════════════════════════════════════════
+
+[webauthn]
+# Relying Party ID（通常是域名，如 example.com）
+rp_id = "{{WEBAUTHN_RP_ID}}"
+# Relying Party Origin（如 https://example.com）
+rp_origin = "{{WEBAUTHN_RP_ORIGIN}}"
+
+# ════════════════════════════════════════════════════════════════════════════
+# 日志
+# ════════════════════════════════════════════════════════════════════════════
+
+[logging]
+# 日志级别: trace, debug, info, warn, error
+level = "{{RUST_LOG}}"

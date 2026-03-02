@@ -87,7 +87,7 @@
 
       <div class="form-actions">
         <router-link 
-          :to="`/${$route.params.owner}/${$route.params.repo}/-/issues`" 
+          :to="`/${$route.meta.namespace}/${$route.meta.projectName}/-/issues`" 
           class="btn btn-secondary"
         >
           取消
@@ -144,8 +144,16 @@ const submitting = ref(false)
 const error = ref('')
 const descriptionRef = ref<HTMLTextAreaElement | null>(null)
 
-const owner = computed(() => route.params.owner as string)
-const repo = computed(() => route.params.repo as string)
+const owner = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments.slice(0, -1).join('/')
+})
+const repo = computed(() => {
+  const segments = route.params.pathSegments as string[]
+  if (!segments || segments.length < 2) return ''
+  return segments[segments.length - 1]
+})
 
 async function loadMetadata() {
   try {

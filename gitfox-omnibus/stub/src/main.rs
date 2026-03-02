@@ -70,6 +70,10 @@ struct MigrationAssets;
 #[prefix = ""]
 struct TemplateAssets;
 
+mod unified_config;
+
+use unified_config::{ConfigVars, GitFoxConfig, generate_config_template, migrate_from_env, migrate_from_legacy};
+
 // ============================================================================
 // CLI
 // ============================================================================
@@ -133,6 +137,24 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// 验证和查看配置
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Clone, Subcommand)]
+enum ConfigAction {
+    /// 验证配置文件
+    Check,
+    /// 显示当前配置（隐藏敏感信息）
+    Show,
+    /// 生成各组件的配置文件
+    Generate,
+    /// 从 gitfox.env 迁移到 gitfox.toml
+    Migrate,
 }
 
 // ============================================================================
@@ -174,6 +196,9 @@ async fn main() -> Result<()> {
         }
         Commands::SetupSsh { git_user, git_home, ssh_port, dry_run } => {
             setup_ssh_server(&cli.data_dir, &git_user, &git_home, ssh_port, dry_run)?;
+        }
+        Commands::Config { action } => {
+            handle_config_command(&cli.data_dir, action)?;
         }
     }
 
@@ -966,6 +991,255 @@ fn init_config(data_dir: &Path) -> Result<()> {
         println!("3. Run: gitfox start");
     } else {
         println!("2. Run: gitfox start");
+    }
+    
+    // 同时生成新的 gitfox.toml（统一配置格式）
+    let gitfox_toml = data_dir.join("gitfox.toml");
+    if !gitfox_toml.exists() {
+        // 计算各目录路径
+        let repos_dir = data_dir.join("repos");
+        let assets_dir = data_dir.join("assets");
+        let ssh_dir = data_dir.join("ssh");
+        let shell_path = data_dir.join("bin").join("gitfox-shell");
+        
+        // 从模板生成配置
+        let template = TemplateAssets::get("gitfox.toml.template")
+            .map(|f| String::from_utf8_lossy(&f.data).to_string())
+            .unwrap_or_else(|| {
+                // 如果模板不存在，使用简化格式
+                warn!("gitfox.toml.template not found, using minimal config");
+                include_str!("../../../gitfox.toml.example").to_string()
+            });
+        
+        // 构建配置变量
+        let vars = ConfigVars {
+            database_url: "postgres://gitfox:password@localhost/gitfox".to_string(),
+            redis_url: "redis://127.0.0.1:6379".to_string(),
+            jwt_secret: secrets.jwt_secret.clone(),
+            gitfox_shell_secret: secrets.shell_secret.clone(),
+            gitfox_base_url: user_config.base_url.clone(),
+            http_port: user_config.http_port,
+            max_upload_size: 1073741824, // 1GB
+            ssh_enabled: true,
+            ssh_host: user_config.ssh_host.clone(),
+            ssh_port: user_config.ssh_port,
+            ssh_public_host: user_config.ssh_public_host.clone(),
+            ssh_public_port: user_config.ssh_public_port,
+            server_connection_type: if user_config.use_unix_socket { "unix_socket".to_string() } else { "tcp".to_string() },
+            server_socket_path: user_config.server_socket_path.clone(),
+            server_host: user_config.server_host.clone(),
+            server_port: user_config.server_port,
+            git_repos_path: repos_dir.display().to_string(),
+            assets_path: assets_dir.display().to_string(),
+            frontend_path: data_dir.join("frontend").display().to_string(),
+            webide_path: data_dir.join("webide").display().to_string(),
+            ssh_host_key_path: ssh_dir.join("host_key").display().to_string(),
+            gitfox_shell_path: shell_path.display().to_string(),
+            initial_admin_username: secrets.admin_username.clone(),
+            initial_admin_email: secrets.admin_email.clone(),
+            initial_admin_password: secrets.admin_password.clone(),
+            smtp_enabled: user_config.smtp_config.is_some(),
+            smtp_host: user_config.smtp_config.as_ref().map(|c| c.host.clone()).unwrap_or_default(),
+            smtp_port: user_config.smtp_config.as_ref().map(|c| c.port).unwrap_or(587),
+            smtp_username: user_config.smtp_config.as_ref().map(|c| c.username.clone()).unwrap_or_default(),
+            smtp_password: user_config.smtp_config.as_ref().map(|c| c.password.clone()).unwrap_or_default(),
+            smtp_from_email: user_config.smtp_config.as_ref().map(|c| c.from_email.clone()).unwrap_or_default(),
+            smtp_from_name: user_config.smtp_config.as_ref().map(|c| c.from_name.clone()).unwrap_or_default(),
+            smtp_use_tls: user_config.smtp_config.as_ref().map(|c| c.use_tls).unwrap_or(true),
+            smtp_use_ssl: user_config.smtp_config.as_ref().map(|c| c.use_ssl).unwrap_or(false),
+            webauthn_rp_id: user_config.webauthn_rp_id.clone(),
+            webauthn_rp_origin: user_config.base_url.clone(),
+            rust_log: "info".to_string(),
+            ..Default::default()
+        };
+        
+        let toml_content = generate_config_template(&template, &vars);
+        fs::write(&gitfox_toml, toml_content)?;
+        info!("Created: {} (新统一配置格式)", gitfox_toml.display());
+        println!("\n📋 NEW: gitfox.toml created (unified config format)");
+        println!("   Future versions will use gitfox.toml as primary config.");
+    }
+    
+    Ok(())
+}
+
+// ============================================================================
+// 配置命令处理
+// ============================================================================
+
+fn handle_config_command(data_dir: &Path, action: ConfigAction) -> Result<()> {
+    let gitfox_toml = data_dir.join("gitfox.toml");
+    
+    match action {
+        ConfigAction::Check => {
+            println!("🔍 Checking configuration...\n");
+            
+            if !gitfox_toml.exists() {
+                println!("❌ gitfox.toml not found at: {}", gitfox_toml.display());
+                println!("\n   Run 'gitfox init' to create configuration files.");
+                return Ok(());
+            }
+            
+            match GitFoxConfig::load(&gitfox_toml) {
+                Ok(config) => {
+                    match config.validate() {
+                        Ok(warnings) => {
+                            println!("✅ Configuration is valid!");
+                            if !warnings.is_empty() {
+                                println!("\n⚠️  Warnings:");
+                                for warning in warnings {
+                                    println!("   - {}", warning);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            println!("❌ Configuration error: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("❌ Failed to load config: {}", e);
+                }
+            }
+        }
+        
+        ConfigAction::Show => {
+            if !gitfox_toml.exists() {
+                println!("❌ gitfox.toml not found at: {}", gitfox_toml.display());
+                return Ok(());
+            }
+            
+            let config = GitFoxConfig::load(&gitfox_toml)?;
+            
+            println!("📋 GitFox Configuration\n");
+            println!("Version: {}", config.version);
+            println!("\n[database]");
+            println!("  url = \"postgres://***:***@***/***\" (hidden)");
+            println!("\n[redis]");
+            println!("  url = \"{}\"", config.redis.url);
+            println!("\n[secrets]");
+            println!("  jwt = \"***\" (hidden)");
+            println!("  internal = \"***\" (hidden)");
+            println!("\n[server]");
+            println!("  base_url = \"{}\"", config.server.base_url);
+            println!("  http_port = {}", config.server.http_port);
+            println!("\n[server.ssh]");
+            println!("  enabled = {}", config.server.ssh.enabled);
+            println!("  host = \"{}\"", config.server.ssh.host);
+            println!("  port = {}", config.server.ssh.port);
+            println!("  public_host = \"{}\"", config.server.ssh.public_host);
+            println!("  public_port = {}", config.server.ssh.public_port);
+            println!("\n[internal]");
+            if let Some(ref socket) = config.internal.backend_socket {
+                println!("  backend_socket = \"{}\"", socket);
+            } else {
+                println!("  backend_port = {}", config.internal.backend_port);
+            }
+            println!("  gitlayer_port = {}", config.internal.gitlayer_port);
+            println!("  auth_grpc_port = {}", config.internal.auth_grpc_port);
+            println!("\n[paths]");
+            println!("  repos = \"{}\"", config.paths.repos);
+            println!("  frontend = \"{}\"", config.paths.frontend);
+            println!("  webide = \"{}\"", config.paths.webide);
+            println!("\n[smtp]");
+            println!("  enabled = {}", config.smtp.enabled);
+            if config.smtp.enabled {
+                println!("  host = \"{}\"", config.smtp.host);
+                println!("  port = {}", config.smtp.port);
+            }
+            println!("\n[logging]");
+            println!("  level = \"{}\"", config.logging.level);
+        }
+        
+        ConfigAction::Generate => {
+            if !gitfox_toml.exists() {
+                println!("❌ gitfox.toml not found at: {}", gitfox_toml.display());
+                println!("   Run 'gitfox init' first.");
+                return Ok(());
+            }
+            
+            let config = GitFoxConfig::load(&gitfox_toml)?;
+            
+            // 生成 workhorse.toml
+            let workhorse_toml_path = data_dir.join("workhorse.toml");
+            let workhorse_content = config.to_workhorse_toml();
+            fs::write(&workhorse_toml_path, &workhorse_content)?;
+            println!("✅ Generated: {}", workhorse_toml_path.display());
+            
+            // 显示各组件的环境变量
+            println!("\n📋 Backend environment variables:");
+            let backend_env = config.to_backend_env();
+            for (key, _) in backend_env.iter().take(5) {
+                println!("   {} = ...", key);
+            }
+            println!("   ... and {} more", backend_env.len().saturating_sub(5));
+            
+            println!("\n📋 GitLayer environment variables:");
+            for (key, value) in config.to_gitlayer_env() {
+                println!("   {} = {}", key, value);
+            }
+            
+            println!("\n📋 Shell environment variables:");
+            for (key, value) in config.to_shell_env() {
+                if key.contains("SECRET") {
+                    println!("   {} = ***", key);
+                } else {
+                    println!("   {} = {}", key, value);
+                }
+            }
+        }
+        
+        ConfigAction::Migrate => {
+            let gitfox_env = data_dir.join("gitfox.env");
+            let workhorse_toml = data_dir.join("workhorse.toml");
+            
+            if !gitfox_env.exists() && !workhorse_toml.exists() {
+                println!("❌ No configuration files found to migrate");
+                println!("   Expected: gitfox.env and/or workhorse.toml in {}", data_dir.display());
+                return Ok(());
+            }
+            
+            if gitfox_toml.exists() {
+                println!("⚠️  gitfox.toml already exists at: {}", gitfox_toml.display());
+                println!("   To re-migrate, please remove or rename the existing file first.");
+                return Ok(());
+            }
+            
+            println!("🔄 Migrating to gitfox.toml...\n");
+            
+            match migrate_from_legacy(data_dir) {
+                Ok(result) => {
+                    // 显示来源
+                    println!("📂 Source files:");
+                    for source in &result.sources {
+                        println!("   - {}", source);
+                    }
+                    
+                    // 保存新配置
+                    result.config.save(&gitfox_toml)?;
+                    
+                    println!("\n✅ Migration completed!");
+                    println!("   Migrated {} fields", result.migrated_fields);
+                    println!("   Output: {}", gitfox_toml.display());
+                    
+                    if !result.warnings.is_empty() {
+                        println!("\n⚠️  Warnings:");
+                        for warning in &result.warnings {
+                            println!("   - {}", warning);
+                        }
+                    }
+                    
+                    println!("\n📋 Next steps:");
+                    println!("1. Review the generated gitfox.toml");
+                    println!("2. Update DATABASE_URL and secrets if needed");
+                    println!("3. Keep old config files as backup or remove them");
+                    println!("4. Run 'gitfox config check' to validate");
+                }
+                Err(e) => {
+                    println!("❌ Migration failed: {}", e);
+                }
+            }
+        }
     }
     
     Ok(())
