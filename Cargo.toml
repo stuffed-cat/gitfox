@@ -27,16 +27,14 @@ deadpool-redis = "0.14"
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 
 # Git Operations
+# 注意：Git 读取操作（仓库浏览 API）仍使用 git2
+# Git 写入操作（HTTP push/pull）已移至 GitLayer/Workhorse
+# TODO: 将所有 Git 操作迁移到 GitLayer gRPC 调用
 git2 = { version = "0.18", features = ["vendored-libgit2", "vendored-openssl"] }
 
 # Authentication
 jsonwebtoken = "9"
 bcrypt = "0.15"
-
-# SSH Server
-russh = "0.45"
-russh-keys = "0.45"
-ring = "0.17"
 
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -76,3 +74,10 @@ reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-feature
 
 # Email
 lettre = { version = "0.11", features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder"], default-features = false }
+
+# gRPC (用于内部服务间通信)
+tonic = "0.12"
+prost = "0.13"
+
+[build-dependencies]
+tonic-build = "0.12"

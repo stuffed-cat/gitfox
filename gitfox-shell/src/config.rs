@@ -7,7 +7,7 @@ use crate::error::ShellError;
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Base URL for the GitFox API
+    /// Base URL for the GitFox API (HTTP fallback)
     pub api_url: String,
 
     /// Secret token for internal API authentication
@@ -27,6 +27,18 @@ pub struct Config {
 
     /// Enable debug logging
     pub debug: bool,
+
+    /// GitLayer gRPC server address (if using GitLayer instead of direct git)
+    pub gitlayer_address: Option<String>,
+
+    /// Whether to use GitLayer for Git operations (fallback to direct git if unavailable)
+    pub use_gitlayer: bool,
+
+    /// Auth gRPC server address (主应用的 gRPC 地址，用于权限认证)
+    pub auth_grpc_address: Option<String>,
+
+    /// Whether to use gRPC for auth (instead of HTTP API)
+    pub use_grpc_auth: bool,
 }
 
 impl Config {
@@ -61,6 +73,20 @@ impl Config {
             .map(|v| v == "1" || v.to_lowercase() == "true")
             .unwrap_or(false);
 
+        let gitlayer_address = env::var("GITLAYER_ADDRESS").ok();
+
+        let use_gitlayer = env::var("GITFOX_USE_GITLAYER")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(gitlayer_address.is_some());
+
+        let auth_grpc_address = env::var("AUTH_GRPC_ADDRESS")
+            .or_else(|_| env::var("GITFOX_AUTH_GRPC_ADDRESS"))
+            .ok();
+
+        let use_grpc_auth = env::var("GITFOX_USE_GRPC_AUTH")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(auth_grpc_address.is_some());
+
         Ok(Config {
             api_url,
             api_secret,
@@ -69,6 +95,10 @@ impl Config {
             git_receive_pack_path,
             api_timeout_secs,
             debug,
+            gitlayer_address,
+            use_gitlayer,
+            auth_grpc_address,
+            use_grpc_auth,
         })
     }
 

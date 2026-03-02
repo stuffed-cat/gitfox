@@ -7,6 +7,21 @@ listen_port = {{LISTEN_PORT}}
 backend_socket = "{{BACKEND_SOCKET}}"
 backend_url = "{{BACKEND_URL}}"
 
+# ============================================
+# gRPC 服务配置
+# ============================================
+# Auth gRPC 服务地址（主应用提供的认证服务）
+# auth_grpc_address = "http://[::1]:50051"
+
+# GitLayer gRPC 服务地址（Git 操作服务）
+# gitlayer_address = "http://[::1]:50052"
+
+# 是否使用 gRPC 进行权限认证（推荐启用）
+# use_grpc_auth = true
+
+# 是否使用 GitLayer 处理 Git HTTP 请求
+# use_gitlayer = true
+
 # 静态文件路径
 frontend_dist_path = "{{FRONTEND_DIST_PATH}}"
 webide_dist_path = "{{WEBIDE_DIST_PATH}}"

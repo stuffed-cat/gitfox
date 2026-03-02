@@ -177,3 +177,96 @@ pub struct CheckRefUpdateResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
+
+/// HTTP access check request for Workhorse
+/// Workhorse 发送此请求来验证用户是否有权限访问仓库
+#[derive(Debug, Deserialize)]
+pub struct HttpAccessCheckRequest {
+    /// Repository path (e.g., "namespace/project" or "user/project")
+    pub repo_path: String,
+    /// Git action: "git-upload-pack" (pull/clone) or "git-receive-pack" (push)
+    pub action: String,
+    /// Optional: user ID (if JWT token auth)
+    pub user_id: Option<i64>,
+    /// Optional: username for basic auth
+    pub username: Option<String>,
+    /// Optional: password/token for basic auth
+    pub password: Option<String>,
+}
+
+/// HTTP access check response for Workhorse
+#[derive(Debug, Serialize)]
+pub struct HttpAccessCheckResponse {
+    /// Whether access is allowed
+    pub status: bool,
+    /// Error message if denied
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// User ID if authenticated
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<i64>,
+    /// Username if authenticated
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// Whether user has write permission
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_write: Option<bool>,
+    /// Project ID if found
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<i64>,
+    /// Repository path on disk (e.g., "/repos/namespace/project.git")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_path: Option<String>,
+    /// GitLayer address for RPC calls
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gitlayer_address: Option<String>,
+}
+
+impl HttpAccessCheckResponse {
+    pub fn allowed(
+        user_id: i64,
+        username: String,
+        can_write: bool,
+        project_id: i64,
+        repository_path: String,
+        gitlayer_address: Option<String>,
+    ) -> Self {
+        Self {
+            status: true,
+            message: None,
+            user_id: Some(user_id),
+            username: Some(username),
+            can_write: Some(can_write),
+            project_id: Some(project_id),
+            repository_path: Some(repository_path),
+            gitlayer_address,
+        }
+    }
+
+    pub fn denied(message: &str) -> Self {
+        Self {
+            status: false,
+            message: Some(message.to_string()),
+            user_id: None,
+            username: None,
+            can_write: None,
+            project_id: None,
+            repository_path: None,
+            gitlayer_address: None,
+        }
+    }
+
+    /// Anonymous read access (for public repos)
+    pub fn anonymous_read(project_id: i64, repository_path: String, gitlayer_address: Option<String>) -> Self {
+        Self {
+            status: true,
+            message: None,
+            user_id: None,
+            username: None,
+            can_write: Some(false),
+            project_id: Some(project_id),
+            repository_path: Some(repository_path),
+            gitlayer_address,
+        }
+    }
+}

@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package gitlayer;
+
+import "repository.proto";
+
+// Blob service handles file content operations
+service BlobService {
+    // Get blob content
+    rpc GetBlob(GetBlobRequest) returns (GetBlobResponse);
+    
+    // Stream large blob content
+    rpc StreamBlob(StreamBlobRequest) returns (stream BlobChunk);
+    
+    // Get blob size without content
+    rpc GetBlobSize(GetBlobSizeRequest) returns (GetBlobSizeResponse);
+    
+    // Get file content at a specific revision
+    rpc GetFileContent(GetFileContentRequest) returns (GetFileContentResponse);
+    
+    // Stream file content
+    rpc StreamFileContent(StreamFileContentRequest) returns (stream BlobChunk);
+    
+    // Check if path exists
+    rpc PathExists(PathExistsRequest) returns (PathExistsResponse);
+    
+    // Get file blame (line-by-line authorship)
+    rpc Blame(BlameRequest) returns (BlameResponse);
+    
+    // Get raw refs for LFS pointers
+    rpc GetLfsPointers(GetLfsPointersRequest) returns (GetLfsPointersResponse);
+}
+
+message Blob {
+    string id = 1;
+    int64 size = 2;
+    bytes data = 3;
+    bool is_binary = 4;
+}
+
+message BlobChunk {
+    bytes data = 1;
+    bool is_eof = 2;
+}
+
+message GetBlobRequest {
+    Repository repository = 1;
+    string blob_id = 2;
+}
+
+message GetBlobResponse {
+    Blob blob = 1;
+    bool found = 2;
+}
+
+message StreamBlobRequest {
+    Repository repository = 1;
+    string blob_id = 2;
+    // Chunk size in bytes (default: 64KB)
+    int32 chunk_size = 3;
+}
+
+message GetBlobSizeRequest {
+    Repository repository = 1;
+    string blob_id = 2;
+}
+
+message GetBlobSizeResponse {
+    int64 size = 1;
+    bool found = 2;
+}
+
+message GetFileContentRequest {
+    Repository repository = 1;
+    string revision = 2;
+    string path = 3;
+}
+
+message GetFileContentResponse {
+    bytes data = 1;
+    int64 size = 2;
+    bool is_binary = 3;
+    bool found = 4;
+    string blob_id = 5;
+}
+
+message StreamFileContentRequest {
+    Repository repository = 1;
+    string revision = 2;
+    string path = 3;
+    int32 chunk_size = 4;
+}
+
+message PathExistsRequest {
+    Repository repository = 1;
+    string revision = 2;
+    string path = 3;
+}
+
+message PathExistsResponse {
+    bool exists = 1;
+    // "blob", "tree", or "commit" (for submodules)
+    string object_type = 2;
+}
+
+message BlameLine {
+    int32 line_number = 1;
+    string commit_id = 2;
+    string author_name = 3;
+    string author_email = 4;
+    int64 author_date = 5;
+    string content = 6;
+    string original_path = 7;
+    int32 original_line = 8;
+}
+
+message BlameRequest {
+    Repository repository = 1;
+    string revision = 2;
+    string path = 3;
+    // Optional: range of lines
+    int32 start_line = 4;
+    int32 end_line = 5;
+}
+
+message BlameResponse {
+    repeated BlameLine lines = 1;
+}
+
+message LfsPointer {
+    string oid = 1;
+    int64 size = 2;
+    string path = 3;
+}
+
+message GetLfsPointersRequest {
+    Repository repository = 1;
+    string revision = 2;
+    repeated string paths = 3;
+}
+
+message GetLfsPointersResponse {
+    repeated LfsPointer pointers = 1;
+}

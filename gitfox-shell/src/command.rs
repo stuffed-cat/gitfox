@@ -8,7 +8,9 @@ use tokio::process::Command;
 use tracing::{debug, error, info};
 
 use crate::api::AccessInfo;
+use crate::config::Config;
 use crate::error::ShellError;
+use crate::gitlayer_client::{GitLayerClient, GitLayerConfig};
 
 /// Supported Git actions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,18 +152,20 @@ impl GitCommand {
     }
 
     /// Execute the git command
-    pub async fn execute(&self, repo_path: &str, access_info: &AccessInfo) -> Result<(), ShellError> {
+    pub async fn execute(&self, repo_path: &str, access_info: &AccessInfo, config: &Config) -> Result<(), ShellError> {
         info!("Executing {:?} on {}", self.action, repo_path);
 
-        // Check if the repository exists
-        let repo_metadata = std::fs::metadata(repo_path);
-        if repo_metadata.is_err() || !repo_metadata.unwrap().is_dir() {
-            return Err(ShellError::RepoNotFound(self.repo_path.clone()));
+        // Check if the repository exists (only for direct execution mode)
+        if !config.use_gitlayer {
+            let repo_metadata = std::fs::metadata(repo_path);
+            if repo_metadata.is_err() || !repo_metadata.unwrap().is_dir() {
+                return Err(ShellError::RepoNotFound(self.repo_path.clone()));
+            }
         }
 
         match self.action {
             GitAction::UploadPack | GitAction::ReceivePack | GitAction::UploadArchive => {
-                self.execute_git_command(repo_path, access_info).await
+                self.execute_git_command(repo_path, access_info, config).await
             }
             GitAction::LfsAuthenticate => {
                 self.execute_lfs_authenticate(repo_path, access_info).await
@@ -171,6 +175,122 @@ impl GitCommand {
 
     /// Execute a standard git command
     async fn execute_git_command(
+        &self,
+        repo_path: &str,
+        access_info: &AccessInfo,
+        config: &Config,
+    ) -> Result<(), ShellError> {
+        // Try GitLayer RPC if configured
+        if config.use_gitlayer {
+            if let Some(ref gitlayer_addr) = config.gitlayer_address {
+                debug!("Using GitLayer RPC at {}", gitlayer_addr);
+                match self.execute_via_gitlayer(repo_path, access_info, gitlayer_addr).await {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        error!("GitLayer execution failed, falling back to direct: {}", e);
+                        // Fall through to direct execution
+                    }
+                }
+            }
+        }
+        
+        // Direct execution
+        self.execute_git_command_direct(repo_path, access_info).await
+    }
+    
+    /// Execute git command via GitLayer RPC
+    async fn execute_via_gitlayer(
+        &self,
+        repo_path: &str,
+        access_info: &AccessInfo,
+        gitlayer_addr: &str,
+    ) -> Result<(), ShellError> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio_stream::StreamExt;
+        
+        let gitlayer_config = GitLayerConfig {
+            address: gitlayer_addr.to_string(),
+            connect_timeout: 5,
+        };
+        
+        let client = GitLayerClient::connect(gitlayer_config).await?;
+        
+        // Build environment variables
+        let mut env_vars = HashMap::new();
+        env_vars.insert("GL_ID".to_string(), format!("user-{}", access_info.user_id));
+        env_vars.insert("GL_USERNAME".to_string(), access_info.username.clone());
+        env_vars.insert("GL_REPOSITORY".to_string(), self.repo_path.clone());
+        env_vars.insert("GL_PROTOCOL".to_string(), "ssh".to_string());
+        env_vars.insert("GITFOX_USER_ID".to_string(), access_info.user_id.to_string());
+        env_vars.insert("GITFOX_USERNAME".to_string(), access_info.username.clone());
+        
+        if let Some(project_id) = access_info.project_id {
+            env_vars.insert("GL_PROJECT_PATH".to_string(), self.repo_path.clone());
+            env_vars.insert("GITFOX_PROJECT_ID".to_string(), project_id.to_string());
+        }
+        
+        // Create stdin stream
+        let stdin_stream = crate::gitlayer_client::stdin_stream();
+        
+        let mut stdout = tokio::io::stdout();
+        let mut stderr = tokio::io::stderr();
+        
+        match self.action {
+            GitAction::UploadPack => {
+                let mut output_stream = client.ssh_upload_pack(&self.repo_path, env_vars, stdin_stream).await?;
+                
+                while let Some(result) = output_stream.next().await {
+                    let output = result?;
+                    if !output.stdout.is_empty() {
+                        stdout.write_all(&output.stdout).await
+                            .map_err(|e| ShellError::GitExecution(format!("Failed to write stdout: {}", e)))?;
+                        stdout.flush().await.ok();
+                    }
+                    if !output.stderr.is_empty() {
+                        stderr.write_all(&output.stderr).await
+                            .map_err(|e| ShellError::GitExecution(format!("Failed to write stderr: {}", e)))?;
+                        stderr.flush().await.ok();
+                    }
+                    if output.exit_code != 0 {
+                        return Err(ShellError::GitExecution(format!("Git command exited with code {}", output.exit_code)));
+                    }
+                }
+            }
+            GitAction::ReceivePack => {
+                let mut output_stream = client.ssh_receive_pack(&self.repo_path, env_vars, stdin_stream).await?;
+                
+                while let Some(result) = output_stream.next().await {
+                    let output = result?;
+                    if !output.stdout.is_empty() {
+                        stdout.write_all(&output.stdout).await
+                            .map_err(|e| ShellError::GitExecution(format!("Failed to write stdout: {}", e)))?;
+                        stdout.flush().await.ok();
+                    }
+                    if !output.stderr.is_empty() {
+                        stderr.write_all(&output.stderr).await
+                            .map_err(|e| ShellError::GitExecution(format!("Failed to write stderr: {}", e)))?;
+                        stderr.flush().await.ok();
+                    }
+                    if output.exit_code != 0 {
+                        return Err(ShellError::GitExecution(format!("Git command exited with code {}", output.exit_code)));
+                    }
+                }
+            }
+            GitAction::UploadArchive => {
+                // TODO: Implement via GitLayer
+                return Err(ShellError::GitExecution("upload-archive via GitLayer not implemented".to_string()));
+            }
+            GitAction::LfsAuthenticate => {
+                unreachable!("LFS authenticate handled separately")
+            }
+        }
+        
+        info!("GitLayer execution completed successfully");
+        Ok(())
+    }
+    
+    /// Execute git command directly
+    async fn execute_git_command_direct(
         &self,
         repo_path: &str,
         access_info: &AccessInfo,

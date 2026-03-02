@@ -1,0 +1,169 @@
+syntax = "proto3";
+
+package gitlayer;
+
+import "repository.proto";
+
+// Reference service handles branches, tags, and refs
+service RefService {
+    // List all branches
+    rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse);
+    
+    // Create a branch
+    rpc CreateBranch(CreateBranchRequest) returns (CreateBranchResponse);
+    
+    // Delete a branch
+    rpc DeleteBranch(DeleteBranchRequest) returns (DeleteBranchResponse);
+    
+    // List all tags
+    rpc ListTags(ListTagsRequest) returns (ListTagsResponse);
+    
+    // Create a tag
+    rpc CreateTag(CreateTagRequest) returns (CreateTagResponse);
+    
+    // Delete a tag
+    rpc DeleteTag(DeleteTagRequest) returns (DeleteTagResponse);
+    
+    // Find a specific ref
+    rpc FindRef(FindRefRequest) returns (FindRefResponse);
+    
+    // Update a ref (for push operations)
+    rpc UpdateRef(UpdateRefRequest) returns (UpdateRefResponse);
+    
+    // List all refs
+    rpc ListRefs(ListRefsRequest) returns (ListRefsResponse);
+}
+
+message Branch {
+    string name = 1;
+    string commit_id = 2;
+    bool is_default = 3;
+    bool is_protected = 4;
+}
+
+message Tag {
+    string name = 1;
+    // commit_id for lightweight tags, or tag object id for annotated tags
+    string target_id = 2;
+    // For annotated tags
+    string message = 3;
+    string tagger_name = 4;
+    string tagger_email = 5;
+    int64 tagger_date = 6;
+    bool is_annotated = 7;
+}
+
+message ListBranchesRequest {
+    Repository repository = 1;
+    // Optional: filter by pattern
+    string pattern = 2;
+    // Pagination
+    int32 limit = 3;
+    int32 offset = 4;
+}
+
+message ListBranchesResponse {
+    repeated Branch branches = 1;
+    int32 total_count = 2;
+}
+
+message CreateBranchRequest {
+    Repository repository = 1;
+    string name = 2;
+    // Start point: commit SHA or branch/tag name
+    string start_point = 3;
+}
+
+message CreateBranchResponse {
+    bool success = 1;
+    Branch branch = 2;
+    string message = 3;
+}
+
+message DeleteBranchRequest {
+    Repository repository = 1;
+    string name = 2;
+    bool force = 3;
+}
+
+message DeleteBranchResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message ListTagsRequest {
+    Repository repository = 1;
+    string pattern = 2;
+    int32 limit = 3;
+    int32 offset = 4;
+}
+
+message ListTagsResponse {
+    repeated Tag tags = 1;
+    int32 total_count = 2;
+}
+
+message CreateTagRequest {
+    Repository repository = 1;
+    string name = 2;
+    string target = 3;
+    // For annotated tags
+    string message = 4;
+    string tagger_name = 5;
+    string tagger_email = 6;
+}
+
+message CreateTagResponse {
+    bool success = 1;
+    Tag tag = 2;
+    string message = 3;
+}
+
+message DeleteTagRequest {
+    Repository repository = 1;
+    string name = 2;
+}
+
+message DeleteTagResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message Ref {
+    string name = 1;
+    string target = 2;
+    string symbolic_target = 3;
+    bool is_symbolic = 4;
+}
+
+message FindRefRequest {
+    Repository repository = 1;
+    string ref_name = 2;
+}
+
+message FindRefResponse {
+    Ref ref = 1;
+    bool found = 2;
+}
+
+message UpdateRefRequest {
+    Repository repository = 1;
+    string ref_name = 2;
+    string old_value = 3;
+    string new_value = 4;
+}
+
+message UpdateRefResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message ListRefsRequest {
+    Repository repository = 1;
+    // Pattern to match (e.g., "refs/heads/*", "refs/tags/*")
+    string pattern = 2;
+}
+
+message ListRefsResponse {
+    repeated Ref refs = 1;
+}

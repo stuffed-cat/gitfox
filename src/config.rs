@@ -148,18 +148,12 @@ pub struct Config {
     pub base_url: String,
     /// Internal API URL for gitfox-shell (defaults to http://127.0.0.1:<port>)
     pub internal_api_url: String,
-    /// SSH server enabled
+    /// Whether to show SSH clone URLs in frontend (SSH via system sshd + gitfox-shell)
     pub ssh_enabled: bool,
-    /// SSH server bind host (what the server listens on)
-    pub ssh_host: String,
-    /// SSH server bind port (what the server listens on)
-    pub ssh_port: u16,
-    /// SSH public host (for external access, e.g., git@gitfox.example.com)
+    /// SSH public host for clone URLs (e.g., git@gitfox.example.com)
     pub ssh_public_host: String,
-    /// SSH public port (for external access, e.g., 22 or 2222)
+    /// SSH public port for clone URLs (e.g., 22 or 2222)
     pub ssh_public_port: u16,
-    /// SSH host key path (without extension)
-    pub ssh_host_key_path: String,
     /// Path to gitfox-shell binary
     pub gitfox_shell_path: String,
     /// Initial admin username (only used on first startup when no admin exists)
@@ -190,6 +184,12 @@ pub struct Config {
     pub webide_redirect_uri_path: String,
     /// Maximum upload size in bytes (default: 1GB for Git operations)
     pub max_upload_size: usize,
+    /// gRPC server enabled (for internal service communication)
+    pub grpc_enabled: bool,
+    /// gRPC server address
+    pub grpc_address: String,
+    /// GitLayer gRPC address (for passing to clients)
+    pub gitlayer_address: Option<String>,
 }
 
 impl Config {
@@ -253,22 +253,12 @@ impl Config {
             ssh_enabled: env::var("SSH_ENABLED")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(true),
-            ssh_host: env::var("SSH_HOST")
-                .unwrap_or_else(|_| "0.0.0.0".to_string()),
-            ssh_port: env::var("SSH_PORT")
-                .unwrap_or_else(|_| "2222".to_string())
-                .parse()
-                .expect("Invalid SSH_PORT"),
             ssh_public_host: env::var("SSH_PUBLIC_HOST")
-                .unwrap_or_else(|_| env::var("SSH_HOST")
-                    .unwrap_or_else(|_| "localhost".to_string())),
+                .unwrap_or_else(|_| "localhost".to_string()),
             ssh_public_port: env::var("SSH_PUBLIC_PORT")
-                .unwrap_or_else(|_| env::var("SSH_PORT")
-                    .unwrap_or_else(|_| "2222".to_string()))
+                .unwrap_or_else(|_| "22".to_string())
                 .parse()
                 .expect("Invalid SSH_PUBLIC_PORT"),
-            ssh_host_key_path: env::var("SSH_HOST_KEY_PATH")
-                .unwrap_or_else(|_| "./data/ssh/host_key".to_string()),
             gitfox_shell_path: env::var("GITFOX_SHELL_PATH")
                 .unwrap_or_else(|_| "./gitfox-shell/target/debug/gitfox-shell".to_string()),
             initial_admin_username: env::var("INITIAL_ADMIN_USERNAME").ok(),
@@ -309,6 +299,12 @@ impl Config {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1024 * 1024 * 1024), // Default: 1GB
+            grpc_enabled: env::var("GRPC_ENABLED")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true),
+            grpc_address: env::var("GRPC_ADDRESS")
+                .unwrap_or_else(|_| "[::1]:50051".to_string()),
+            gitlayer_address: env::var("GITLAYER_ADDRESS").ok(),
         }
     }
 }

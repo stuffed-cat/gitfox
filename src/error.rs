@@ -69,6 +69,8 @@ impl From<std::io::Error> for AppError {
     }
 }
 
+// Git 读取操作仍使用 git2（仓库浏览 API）
+// TODO: 将所有 Git 操作迁移到 GitLayer gRPC 调用
 impl From<git2::Error> for AppError {
     fn from(err: git2::Error) -> Self {
         AppError::GitError(err.message().to_string())

@@ -13,6 +13,7 @@
 //!   %t - key type (ssh-rsa, ssh-ed25519, etc.)
 
 mod api;
+mod auth_client;
 mod config;
 mod error;
 
@@ -23,6 +24,7 @@ use tracing::{debug, error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::api::ApiClient;
+use crate::auth_client::AuthClient;
 use crate::config::Config;
 use crate::error::ShellError;
 
@@ -79,8 +81,7 @@ async fn main() -> ExitCode {
 
 async fn lookup_key(key_type: &str, key_base64: &str) -> Result<Option<String>, ShellError> {
     let config = Config::load()?;
-    let api_client = ApiClient::new(&config)?;
-
+    
     // Construct the full public key
     let full_key = format!("{} {}", key_type, key_base64);
 
@@ -89,14 +90,16 @@ async fn lookup_key(key_type: &str, key_base64: &str) -> Result<Option<String>, 
 
     debug!("Looking up key with fingerprint: {}", fingerprint);
 
-    // Look up the key in GitFox
-    let key_info = match api_client.find_key_by_fingerprint(&fingerprint).await {
-        Ok(info) => info,
-        Err(ShellError::AccessDenied(_)) => {
-            // Key not found
-            return Ok(None);
-        }
-        Err(e) => return Err(e),
+    // Look up the key via gRPC or HTTP
+    let key_info = if config.use_grpc_auth {
+        lookup_key_via_grpc(&config, &fingerprint).await?
+    } else {
+        lookup_key_via_http(&config, &fingerprint).await?
+    };
+    
+    let key_info = match key_info {
+        Some(info) => info,
+        None => return Ok(None),
     };
 
     info!("Found key {} for user {}", key_info.id, key_info.username);
@@ -109,6 +112,46 @@ async fn lookup_key(key_type: &str, key_base64: &str) -> Result<Option<String>, 
     );
 
     Ok(Some(authorized_key))
+}
+
+/// Key info returned from lookup
+struct KeyInfo {
+    id: i64,
+    username: String,
+}
+
+/// Look up key via gRPC Auth service
+async fn lookup_key_via_grpc(config: &Config, fingerprint: &str) -> Result<Option<KeyInfo>, ShellError> {
+    let auth_addr = config.auth_grpc_address.as_ref()
+        .ok_or_else(|| ShellError::Config("AUTH_GRPC_ADDRESS not configured".to_string()))?;
+    
+    let mut auth_client = AuthClient::connect(auth_addr, config.api_secret.clone())
+        .await
+        .map_err(|e| ShellError::Auth(format!("Failed to connect to Auth service: {}", e)))?;
+    
+    match auth_client.find_ssh_key(fingerprint).await {
+        Ok(Some(info)) => Ok(Some(KeyInfo {
+            id: info.id,
+            username: info.username,
+        })),
+        Ok(None) => Ok(None),
+        Err(e) => Err(ShellError::Auth(format!("Key lookup failed: {}", e))),
+    }
+}
+
+/// Look up key via HTTP API (legacy mode)
+async fn lookup_key_via_http(config: &Config, fingerprint: &str) -> Result<Option<KeyInfo>, ShellError> {
+    let api_client = ApiClient::new(config)?;
+
+    // Look up the key in GitFox
+    match api_client.find_key_by_fingerprint(fingerprint).await {
+        Ok(info) => Ok(Some(KeyInfo {
+            id: info.id,
+            username: info.username,
+        })),
+        Err(ShellError::AccessDenied(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// Compute SSH key fingerprint

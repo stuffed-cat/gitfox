@@ -1,0 +1,183 @@
+syntax = "proto3";
+
+package gitlayer;
+
+import "repository.proto";
+import "commit.proto";
+
+// Operation service handles write operations (create commit, merge, etc.)
+service OperationService {
+    // Create a new commit with files
+    rpc CreateCommit(CreateCommitRequest) returns (CreateCommitResponse);
+    
+    // Merge branches
+    rpc Merge(MergeRequest) returns (MergeResponse);
+    
+    // Revert a commit
+    rpc Revert(RevertRequest) returns (RevertResponse);
+    
+    // Cherry-pick a commit
+    rpc CherryPick(CherryPickRequest) returns (CherryPickResponse);
+    
+    // Squash commits
+    rpc Squash(SquashRequest) returns (SquashResponse);
+    
+    // Create or update a file
+    rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
+    
+    // Delete a file
+    rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
+    
+    // Move/rename a file
+    rpc MoveFile(MoveFileRequest) returns (MoveFileResponse);
+}
+
+message FileAction {
+    // "create", "update", "delete", "move"
+    string action = 1;
+    string path = 2;
+    bytes content = 3;
+    // For move/rename
+    string previous_path = 4;
+    // File mode (default: 100644)
+    int32 mode = 5;
+    // For updates: expected blob ID (for conflict detection)
+    string expected_blob_id = 6;
+}
+
+message CreateCommitRequest {
+    Repository repository = 1;
+    string branch = 2;
+    Signature author = 3;
+    Signature committer = 4;
+    string message = 5;
+    repeated FileAction actions = 6;
+    // Create branch if it doesn't exist
+    bool create_branch = 7;
+    // Parent commit (for conflict detection)
+    string expected_parent = 8;
+}
+
+message CreateCommitResponse {
+    bool success = 1;
+    string commit_id = 2;
+    string message = 3;
+}
+
+enum MergeStrategy {
+    MERGE_STRATEGY_UNSPECIFIED = 0;
+    MERGE_STRATEGY_MERGE = 1;
+    MERGE_STRATEGY_SQUASH = 2;
+    MERGE_STRATEGY_FAST_FORWARD = 3;
+    MERGE_STRATEGY_REBASE = 4;
+}
+
+message MergeRequest {
+    Repository repository = 1;
+    string source_branch = 2;
+    string target_branch = 3;
+    Signature author = 4;
+    string message = 5;
+    MergeStrategy strategy = 6;
+    // Allow non-fast-forward
+    bool allow_conflicts = 7;
+}
+
+message MergeResponse {
+    bool success = 1;
+    string commit_id = 2;
+    string message = 3;
+    bool has_conflicts = 4;
+    repeated string conflict_files = 5;
+}
+
+message RevertRequest {
+    Repository repository = 1;
+    string branch = 2;
+    string commit_id = 3;
+    Signature author = 4;
+    string message = 5;
+}
+
+message RevertResponse {
+    bool success = 1;
+    string commit_id = 2;
+    string message = 3;
+}
+
+message CherryPickRequest {
+    Repository repository = 1;
+    string branch = 2;
+    repeated string commit_ids = 3;
+    Signature author = 4;
+}
+
+message CherryPickResponse {
+    bool success = 1;
+    repeated string new_commit_ids = 2;
+    string message = 3;
+}
+
+message SquashRequest {
+    Repository repository = 1;
+    string branch = 2;
+    string start_commit = 3;
+    string end_commit = 4;
+    Signature author = 5;
+    string message = 6;
+}
+
+message SquashResponse {
+    bool success = 1;
+    string commit_id = 2;
+    string message = 3;
+}
+
+message WriteFileRequest {
+    Repository repository = 1;
+    string branch = 2;
+    string path = 3;
+    bytes content = 4;
+    Signature author = 5;
+    Signature committer = 6;
+    string message = 7;
+    bool create_branch = 8;
+}
+
+message WriteFileResponse {
+    bool success = 1;
+    string commit_id = 2;
+    string blob_id = 3;
+    string message = 4;
+}
+
+message DeleteFileRequest {
+    Repository repository = 1;
+    string branch = 2;
+    string path = 3;
+    Signature author = 4;
+    Signature committer = 5;
+    string message = 6;
+}
+
+message DeleteFileResponse {
+    bool success = 1;
+    string commit_id = 2;
+    string message = 3;
+}
+
+message MoveFileRequest {
+    Repository repository = 1;
+    string branch = 2;
+    string old_path = 3;
+    string new_path = 4;
+    Signature author = 5;
+    Signature committer = 6;
+    string message = 7;
+}
+
+message MoveFileResponse {
+    bool success = 1;
+    string commit_id = 2;
+    string message = 3;
+}

@@ -1,4 +1,6 @@
+mod auth_client;
 mod config;
+mod gitlayer_client;
 mod http_client;
 mod proxy;
 mod static_files;

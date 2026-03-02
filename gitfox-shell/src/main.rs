@@ -9,10 +9,12 @@
 //! The SSH_ORIGINAL_COMMAND environment variable contains the git command.
 
 mod api;
+mod auth_client;
 mod command;
 mod config;
 mod error;
 mod git;
+mod gitlayer_client;
 
 use std::env;
 use std::process::ExitCode;
@@ -21,7 +23,8 @@ use clap::Parser;
 use tracing::{debug, error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use crate::api::ApiClient;
+use crate::api::{AccessInfo, ApiClient};
+use crate::auth_client::AuthClient;
 use crate::command::GitCommand;
 use crate::config::Config;
 use crate::error::ShellError;
@@ -105,25 +108,95 @@ async fn run_shell(key_id: &str) -> Result<(), ShellError> {
         git_command.action, git_command.repo_path
     );
 
-    // Create API client
-    let api_client = ApiClient::new(&config)?;
-
-    // Verify access
-    let access_info = api_client
-        .check_access(key_id, &git_command.repo_path, git_command.action.requires_write())
-        .await?;
+    // Verify access via gRPC or HTTP
+    let (access_info, gitlayer_addr) = if config.use_grpc_auth {
+        check_access_via_grpc(&config, key_id, &git_command).await?
+    } else {
+        check_access_via_http(&config, key_id, &git_command).await?
+    };
 
     info!(
         "Access granted for user {} on repo {} (write: {})",
         access_info.user_id, git_command.repo_path, access_info.can_write
     );
 
+    // Update config with GitLayer address from auth response if available
+    let mut config = config;
+    if let Some(addr) = gitlayer_addr {
+        config.gitlayer_address = Some(addr);
+        config.use_gitlayer = true;
+    }
+
     // Build the full repository path
     let full_repo_path = config.repo_path(&git_command.repo_path);
     debug!("Full repository path: {}", full_repo_path);
 
     // Execute the git command
-    git_command.execute(&full_repo_path, &access_info).await?;
+    git_command.execute(&full_repo_path, &access_info, &config).await?;
 
     Ok(())
+}
+
+/// Check access via gRPC Auth service (GitLab-style architecture)
+async fn check_access_via_grpc(
+    config: &Config,
+    key_id: &str,
+    git_command: &GitCommand,
+) -> Result<(AccessInfo, Option<String>), ShellError> {
+    let auth_addr = config.auth_grpc_address.as_ref()
+        .ok_or_else(|| ShellError::Config("AUTH_GRPC_ADDRESS not configured".to_string()))?;
+    
+    debug!("Using gRPC auth at {}", auth_addr);
+    
+    let mut auth_client = AuthClient::connect(auth_addr, config.api_secret.clone())
+        .await
+        .map_err(|e| ShellError::Auth(format!("Failed to connect to Auth service: {}", e)))?;
+    
+    let action = if git_command.action.requires_write() {
+        "git-receive-pack"
+    } else {
+        "git-upload-pack"
+    };
+    
+    let response = auth_client
+        .check_ssh_access(key_id, &git_command.repo_path, action)
+        .await
+        .map_err(|e| ShellError::Auth(format!("Auth check failed: {}", e)))?;
+    
+    if !response.status {
+        return Err(ShellError::AccessDenied(response.message));
+    }
+    
+    let access_info = AccessInfo {
+        user_id: response.user_id,
+        username: response.username,
+        can_write: response.can_write,
+        project_id: if response.project_id > 0 { Some(response.project_id) } else { None },
+        repository_id: None,
+        lfs_token: None,
+        base_url: None,
+        repository_status: if response.repository_status.is_empty() { None } else { Some(response.repository_status) },
+    };
+    
+    let gitlayer_addr = if response.gitlayer_address.is_empty() {
+        None
+    } else {
+        Some(response.gitlayer_address)
+    };
+    
+    Ok((access_info, gitlayer_addr))
+}
+
+/// Check access via HTTP API (legacy mode)
+async fn check_access_via_http(
+    config: &Config,
+    key_id: &str,
+    git_command: &GitCommand,
+) -> Result<(AccessInfo, Option<String>), ShellError> {
+    let api_client = ApiClient::new(config)?;
+    let access_info = api_client
+        .check_access(key_id, &git_command.repo_path, git_command.action.requires_write())
+        .await?;
+    
+    Ok((access_info, None))
 }

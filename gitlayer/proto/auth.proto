@@ -1,0 +1,181 @@
+syntax = "proto3";
+
+package gitfox.auth;
+
+option go_package = "gitfox/auth;auth";
+
+// AuthService - 权限认证服务
+// 由主应用(devops)实现，Workhorse和Shell作为客户端调用
+service AuthService {
+    // CheckSSHAccess - 检查SSH访问权限 (用于gitfox-shell)
+    rpc CheckSSHAccess(SSHAccessRequest) returns (SSHAccessResponse);
+    
+    // CheckHTTPAccess - 检查HTTP访问权限 (用于workhorse)
+    rpc CheckHTTPAccess(HTTPAccessRequest) returns (HTTPAccessResponse);
+    
+    // FindSSHKey - 通过指纹查找SSH密钥
+    rpc FindSSHKey(FindSSHKeyRequest) returns (FindSSHKeyResponse);
+    
+    // GetSSHKey - 通过ID获取SSH密钥
+    rpc GetSSHKey(GetSSHKeyRequest) returns (GetSSHKeyResponse);
+    
+    // NotifyPostReceive - 通知push完成 (触发CI/CD等)
+    rpc NotifyPostReceive(PostReceiveRequest) returns (PostReceiveResponse);
+    
+    // CheckRefUpdate - 检查ref更新权限 (pre-receive hook)
+    rpc CheckRefUpdate(RefUpdateRequest) returns (RefUpdateResponse);
+}
+
+// SSH访问检查请求
+message SSHAccessRequest {
+    // SSH密钥ID (格式: "key-123")
+    string key_id = 1;
+    // 仓库路径 (格式: "namespace/project")
+    string repo_path = 2;
+    // Git操作: "git-upload-pack" 或 "git-receive-pack"
+    string action = 3;
+    // 协议: "ssh"
+    string protocol = 4;
+}
+
+// SSH访问检查响应
+message SSHAccessResponse {
+    // 是否允许访问
+    bool status = 1;
+    // 拒绝原因
+    string message = 2;
+    // 用户ID
+    int64 user_id = 3;
+    // 用户名
+    string username = 4;
+    // 是否有写权限
+    bool can_write = 5;
+    // 项目ID
+    int64 project_id = 6;
+    // 仓库在磁盘上的路径
+    string repository_path = 7;
+    // GitLayer gRPC地址
+    string gitlayer_address = 8;
+    // 仓库状态
+    string repository_status = 9;
+}
+
+// HTTP访问检查请求
+message HTTPAccessRequest {
+    // 仓库路径 (格式: "namespace/project")
+    string repo_path = 1;
+    // Git操作: "git-upload-pack" 或 "git-receive-pack"
+    string action = 2;
+    // 认证方式
+    oneof auth {
+        // JWT token认证
+        JWTAuth jwt_auth = 3;
+        // Basic认证 (用户名+密码/PAT)
+        BasicAuth basic_auth = 4;
+    }
+}
+
+message JWTAuth {
+    // JWT Bearer Token
+    string token = 1;
+}
+
+message BasicAuth {
+    string username = 1;
+    string password = 2;
+}
+
+// HTTP访问检查响应
+message HTTPAccessResponse {
+    // 是否允许访问
+    bool status = 1;
+    // 拒绝原因
+    string message = 2;
+    // 用户ID (匿名访问时为0)
+    int64 user_id = 3;
+    // 用户名
+    string username = 4;
+    // 是否有写权限
+    bool can_write = 5;
+    // 项目ID
+    int64 project_id = 6;
+    // 仓库在磁盘上的路径
+    string repository_path = 7;
+    // GitLayer gRPC地址
+    string gitlayer_address = 8;
+}
+
+// 查找SSH密钥请求
+message FindSSHKeyRequest {
+    // SSH密钥指纹
+    string fingerprint = 1;
+}
+
+// 查找SSH密钥响应
+message FindSSHKeyResponse {
+    bool found = 1;
+    int64 id = 2;
+    int64 user_id = 3;
+    string username = 4;
+    string key_type = 5;
+    string public_key = 6;
+}
+
+// 获取SSH密钥请求
+message GetSSHKeyRequest {
+    int64 id = 1;
+}
+
+// 获取SSH密钥响应
+message GetSSHKeyResponse {
+    bool found = 1;
+    int64 id = 2;
+    int64 user_id = 3;
+    string username = 4;
+    string key_type = 5;
+    string public_key = 6;
+}
+
+// Post-receive通知请求
+message PostReceiveRequest {
+    // 用户ID
+    int64 user_id = 1;
+    // 仓库路径
+    string repository = 2;
+    // 项目ID
+    int64 project_id = 3;
+    // Ref变更列表
+    repeated RefChange changes = 4;
+}
+
+message RefChange {
+    string old_sha = 1;
+    string new_sha = 2;
+    string ref_name = 3;
+}
+
+// Post-receive通知响应
+message PostReceiveResponse {
+    bool success = 1;
+    string message = 2;
+    // 触发的pipeline ID列表
+    repeated int64 pipeline_ids = 3;
+}
+
+// Ref更新检查请求 (pre-receive hook)
+message RefUpdateRequest {
+    int64 user_id = 1;
+    string repository = 2;
+    int64 project_id = 3;
+    string ref_name = 4;
+    string old_sha = 5;
+    string new_sha = 6;
+    // 变更类型: "create", "update", "delete"
+    string change_type = 7;
+}
+
+// Ref更新检查响应
+message RefUpdateResponse {
+    bool allowed = 1;
+    string message = 2;
+}

@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package gitlayer;
+
+import "repository.proto";
+import "commit.proto";
+
+// Diff service handles diff and comparison operations
+service DiffService {
+    // Get diff between two commits
+    rpc CommitDiff(CommitDiffRequest) returns (CommitDiffResponse);
+    
+    // Stream diff for large changes
+    rpc StreamCommitDiff(StreamCommitDiffRequest) returns (stream DiffFile);
+    
+    // Get diff stats only (additions/deletions)
+    rpc DiffStats(DiffStatsRequest) returns (DiffStatsResponse);
+    
+    // Compare two branches/refs
+    rpc Compare(CompareRequest) returns (CompareResponse);
+    
+    // Get raw diff patch
+    rpc RawDiff(RawDiffRequest) returns (RawDiffResponse);
+    
+    // Find merge conflicts
+    rpc FindConflicts(FindConflictsRequest) returns (FindConflictsResponse);
+}
+
+message DiffLine {
+    // "+", "-", or " "
+    string prefix = 1;
+    int32 old_line_number = 2;
+    int32 new_line_number = 3;
+    string content = 4;
+}
+
+message DiffHunk {
+    int32 old_start = 1;
+    int32 old_lines = 2;
+    int32 new_start = 3;
+    int32 new_lines = 4;
+    string header = 5;
+    repeated DiffLine lines = 6;
+}
+
+message DiffFile {
+    string old_path = 1;
+    string new_path = 2;
+    string old_id = 3;
+    string new_id = 4;
+    // "added", "deleted", "modified", "renamed", "copied"
+    string status = 5;
+    int32 additions = 6;
+    int32 deletions = 7;
+    bool is_binary = 8;
+    repeated DiffHunk hunks = 9;
+    // For renamed/copied files
+    int32 similarity = 10;
+}
+
+message CommitDiffRequest {
+    Repository repository = 1;
+    // If empty, diff with parent
+    string old_revision = 2;
+    string new_revision = 3;
+    // Optional: filter by paths
+    repeated string paths = 4;
+    // Context lines (default: 3)
+    int32 context_lines = 5;
+}
+
+message CommitDiffResponse {
+    repeated DiffFile files = 1;
+    int32 total_additions = 2;
+    int32 total_deletions = 3;
+    int32 files_changed = 4;
+}
+
+message StreamCommitDiffRequest {
+    Repository repository = 1;
+    string old_revision = 2;
+    string new_revision = 3;
+    repeated string paths = 4;
+    int32 context_lines = 5;
+}
+
+message DiffStatsRequest {
+    Repository repository = 1;
+    string old_revision = 2;
+    string new_revision = 3;
+}
+
+message DiffStatsResponse {
+    int32 additions = 1;
+    int32 deletions = 2;
+    int32 files_changed = 3;
+    repeated FileStats file_stats = 4;
+}
+
+message FileStats {
+    string path = 1;
+    int32 additions = 2;
+    int32 deletions = 3;
+}
+
+message CompareRequest {
+    Repository repository = 1;
+    string from = 2;
+    string to = 3;
+    bool straight = 4;  // false = three-dot (merge-base), true = two-dot
+    int32 limit = 5;
+}
+
+message CompareResponse {
+    repeated Commit commits = 1;
+    repeated DiffFile diffs = 2;
+    string merge_base = 3;
+    int32 ahead_count = 4;
+    int32 behind_count = 5;
+}
+
+message RawDiffRequest {
+    Repository repository = 1;
+    string old_revision = 2;
+    string new_revision = 3;
+}
+
+message RawDiffResponse {
+    bytes data = 1;
+}
+
+message ConflictFile {
+    string path = 1;
+    bytes ancestor_content = 2;
+    bytes our_content = 3;
+    bytes their_content = 4;
+}
+
+message FindConflictsRequest {
+    Repository repository = 1;
+    string our_revision = 2;
+    string their_revision = 3;
+}
+
+message FindConflictsResponse {
+    repeated ConflictFile conflicts = 1;
+    bool has_conflicts = 2;
+}

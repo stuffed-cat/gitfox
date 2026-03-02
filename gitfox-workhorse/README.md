@@ -15,17 +15,55 @@ GitFox Workhorse 是一个智能反向代理服务器，类似于 GitLab Workhor
 
 ## 架构
 
+Workhorse 是所有 HTTP 请求的统一入口点（类似 GitLab Workhorse）：
+
 ```
-客户端
-   ↓
-GitFox Workhorse (端口 8080)
-   ↓
-   ├─→ 静态文件 (/, /-/ide/*)
-   ├─→ Assets (/assets/*)
-   └─→ 后端代理 (/api/*, /oauth/*, Git HTTP)
-       ↓
-   GitFox Backend (端口 8081)
+                          客户端
+                             │
+                    ┌────────┴────────┐
+                    │                 │
+              HTTP 请求            SSH 请求
+                    │                 │
+                    ▼                 ▼
+┌─────────────────────────┐   ┌─────────────────┐
+│   GitFox Workhorse      │   │     sshd        │
+│       :8080             │   │      :22        │
+└───────────┬─────────────┘   └────────┬────────┘
+            │                          │
+   ┌────────┼────────┐                 ▼
+   │        │        │        ┌─────────────────┐
+   ▼        ▼        ▼        │  gitfox-shell   │
+Static   API/*    Git HTTP    └────────┬────────┘
+Files   OAuth/*   *.git/*              │
+   │        │        │         gRPC    │
+   │        ▼        │      ┌──────────┤
+   │   ┌─────────┐   │      │          │
+   │   │Main App │   │      ▼          ▼
+   │   │ :8081   │◄──┼── gRPC Auth  GitLayer
+   │   └────┬────┘   │   (认证)     :50052
+   │        │        │              (Git操作)
+   │        │        └──────────────────┤
+   │        │                           │
+   └────────┼───────────────────────────┘
+            ▼
+    ┌─────────────────┐
+    │   GitLayer      │
+    │    :50052       │
+    │  (Git 操作)     │
+    └────────┬────────┘
+             │
+             ▼
+    ┌─────────────────┐
+    │ Git Repositories│
+    │    ./repos/     │
+    └─────────────────┘
 ```
+
+**请求流：**
+- **HTTP Git**: Workhorse → GitLayer (直接处理 Git 操作)
+- **HTTP API**: Workhorse → Main App (业务逻辑)
+- **SSH Git**: Shell → GitLayer (直接处理 Git 操作)
+- **认证**: 所有请求通过 Main App 的 gRPC Auth 服务验证权限
 
 ## 路由规则
 

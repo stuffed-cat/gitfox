@@ -20,8 +20,14 @@ pub enum ShellError {
     #[error("API error: {0}")]
     Api(String),
 
+    #[error("Authentication error: {0}")]
+    Auth(String),
+
     #[error("Git command failed: {0}")]
     GitExecution(String),
+
+    #[error("GitLayer connection error: {0}")]
+    GitLayerConnection(String),
 
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
@@ -51,10 +57,12 @@ impl ShellError {
             ShellError::Api(_) => {
                 "Unable to verify access. Please try again later.".to_string()
             }
+            ShellError::Auth(msg) => format!("Authentication failed: {}", msg),
             ShellError::GitExecution(msg) => format!("Git operation failed: {}", msg),
             ShellError::Io(_) => "An I/O error occurred.".to_string(),
             ShellError::Http(_) => "Network error. Please try again later.".to_string(),
             ShellError::Json(_) => "Internal error processing response.".to_string(),
+            ShellError::GitLayerConnection(msg) => format!("GitLayer connection error: {}", msg),
         }
     }
 

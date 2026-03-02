@@ -696,6 +696,7 @@ pub fn configure_internal_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/internal")
             .route("/allowed", web::post().to(check_allowed))
+            // HTTP 认证通过 gRPC Auth 服务完成，不再需要 HTTP 端点
             .route("/keys/{id}", web::get().to(get_key))
             .route("/keys/find", web::post().to(find_key_by_fingerprint))
             .route("/post-receive", web::post().to(post_receive))

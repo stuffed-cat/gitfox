@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package gitlayer;
+
+// Repository service handles repository-level operations
+service RepositoryService {
+    // Initialize a new repository
+    rpc CreateRepository(CreateRepositoryRequest) returns (CreateRepositoryResponse);
+    
+    // Delete a repository
+    rpc DeleteRepository(DeleteRepositoryRequest) returns (DeleteRepositoryResponse);
+    
+    // Check if repository exists
+    rpc RepositoryExists(RepositoryExistsRequest) returns (RepositoryExistsResponse);
+    
+    // Get repository info (size, object count, etc.)
+    rpc GetRepositoryInfo(GetRepositoryInfoRequest) returns (GetRepositoryInfoResponse);
+    
+    // Clone/Fork a repository
+    rpc ForkRepository(ForkRepositoryRequest) returns (ForkRepositoryResponse);
+    
+    // Get repository size
+    rpc RepositorySize(RepositorySizeRequest) returns (RepositorySizeResponse);
+    
+    // Set repository HEAD
+    rpc SetHead(SetHeadRequest) returns (SetHeadResponse);
+    
+    // Get default branch
+    rpc GetDefaultBranch(GetDefaultBranchRequest) returns (GetDefaultBranchResponse);
+    
+    // Garbage collect repository
+    rpc GarbageCollect(GarbageCollectRequest) returns (GarbageCollectResponse);
+    
+    // Apply Git config to repository
+    rpc SetConfig(SetConfigRequest) returns (SetConfigResponse);
+    
+    // Get Git config from repository
+    rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+}
+
+message Repository {
+    // Full storage path (e.g., /data/repos/namespace/project.git)
+    string storage_path = 1;
+    // Relative path within storage (e.g., namespace/project.git)
+    string relative_path = 2;
+}
+
+message CreateRepositoryRequest {
+    Repository repository = 1;
+    // Initial branch name (default: main)
+    string default_branch = 2;
+    // Optional: initialize with empty commit
+    bool initialize = 3;
+}
+
+message CreateRepositoryResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message DeleteRepositoryRequest {
+    Repository repository = 1;
+}
+
+message DeleteRepositoryResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message RepositoryExistsRequest {
+    Repository repository = 1;
+}
+
+message RepositoryExistsResponse {
+    bool exists = 1;
+}
+
+message GetRepositoryInfoRequest {
+    Repository repository = 1;
+}
+
+message GetRepositoryInfoResponse {
+    bool is_empty = 1;
+    string default_branch = 2;
+    uint64 size_bytes = 3;
+    uint64 object_count = 4;
+    uint64 commit_count = 5;
+    bool is_bare = 6;
+}
+
+message ForkRepositoryRequest {
+    Repository source = 1;
+    Repository destination = 2;
+}
+
+message ForkRepositoryResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message RepositorySizeRequest {
+    Repository repository = 1;
+}
+
+message RepositorySizeResponse {
+    uint64 size_bytes = 1;
+}
+
+message SetHeadRequest {
+    Repository repository = 1;
+    string branch = 2;
+}
+
+message SetHeadResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message GetDefaultBranchRequest {
+    Repository repository = 1;
+}
+
+message GetDefaultBranchResponse {
+    string branch = 1;
+}
+
+message GarbageCollectRequest {
+    Repository repository = 1;
+    bool prune = 2;
+}
+
+message GarbageCollectResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message SetConfigRequest {
+    Repository repository = 1;
+    string key = 2;
+    string value = 3;
+}
+
+message SetConfigResponse {
+    bool success = 1;
+}
+
+message GetConfigRequest {
+    Repository repository = 1;
+    string key = 2;
+}
+
+message GetConfigResponse {
+    string value = 1;
+    bool found = 2;
+}

@@ -1,0 +1,102 @@
+syntax = "proto3";
+
+package gitlayer;
+
+import "repository.proto";
+import "commit.proto";
+
+// Tree service handles directory listing and tree operations
+service TreeService {
+    // List tree entries (directory listing)
+    rpc GetTree(GetTreeRequest) returns (GetTreeResponse);
+    
+    // Get tree entries recursively
+    rpc GetTreeRecursive(GetTreeRecursiveRequest) returns (GetTreeRecursiveResponse);
+    
+    // Find files matching pattern
+    rpc FindFiles(FindFilesRequest) returns (FindFilesResponse);
+    
+    // Get last commit for each tree entry
+    rpc GetTreeWithCommits(GetTreeWithCommitsRequest) returns (GetTreeWithCommitsResponse);
+    
+    // Get directory size
+    rpc GetTreeSize(GetTreeSizeRequest) returns (GetTreeSizeResponse);
+}
+
+message TreeEntry {
+    string name = 1;
+    string path = 2;
+    // "blob", "tree", or "commit" (for submodules)
+    string type = 3;
+    string id = 4;
+    // Unix file mode (e.g., 100644 for regular file)
+    int32 mode = 5;
+    // Size in bytes (only for blobs)
+    int64 size = 6;
+    // Submodule URL (only for commits)
+    string submodule_url = 7;
+}
+
+message TreeEntryWithCommit {
+    TreeEntry entry = 1;
+    Commit last_commit = 2;
+}
+
+message GetTreeRequest {
+    Repository repository = 1;
+    string revision = 2;
+    string path = 3;
+    // Include file sizes
+    bool include_sizes = 4;
+}
+
+message GetTreeResponse {
+    repeated TreeEntry entries = 1;
+    bool found = 2;
+}
+
+message GetTreeRecursiveRequest {
+    Repository repository = 1;
+    string revision = 2;
+    string path = 3;
+    // Max depth (-1 for unlimited)
+    int32 max_depth = 4;
+}
+
+message GetTreeRecursiveResponse {
+    repeated TreeEntry entries = 1;
+}
+
+message FindFilesRequest {
+    Repository repository = 1;
+    string revision = 2;
+    // Glob pattern (e.g., "*.rs", "src/**/*.ts")
+    string pattern = 3;
+    int32 limit = 4;
+}
+
+message FindFilesResponse {
+    repeated string paths = 1;
+}
+
+message GetTreeWithCommitsRequest {
+    Repository repository = 1;
+    string revision = 2;
+    string path = 3;
+}
+
+message GetTreeWithCommitsResponse {
+    repeated TreeEntryWithCommit entries = 1;
+}
+
+message GetTreeSizeRequest {
+    Repository repository = 1;
+    string revision = 2;
+    string path = 3;
+}
+
+message GetTreeSizeResponse {
+    int64 total_size = 1;
+    int32 file_count = 2;
+    int32 dir_count = 3;
+}

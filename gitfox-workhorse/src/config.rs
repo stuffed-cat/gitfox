@@ -56,6 +56,26 @@ pub struct Config {
     /// 静态文件缓存控制头
     #[serde(default = "default_static_cache_control")]
     pub static_cache_control: String,
+
+    /// GitLayer gRPC 服务地址（用于直接处理 Git 操作）
+    #[serde(default)]
+    pub gitlayer_address: Option<String>,
+
+    /// 是否使用 GitLayer 处理 Git HTTP 请求
+    #[serde(default)]
+    pub use_gitlayer: bool,
+
+    /// Auth gRPC 服务地址（主应用的 gRPC 地址，用于权限认证）
+    #[serde(default)]
+    pub auth_grpc_address: Option<String>,
+
+    /// 是否使用 gRPC 进行权限认证（而不是 HTTP API）
+    #[serde(default)]
+    pub use_grpc_auth: bool,
+
+    /// 内部 API 认证密钥
+    #[serde(default = "default_shell_secret")]
+    pub shell_secret: String,
 }
 
 fn default_listen_addr() -> String {
@@ -117,9 +137,42 @@ fn default_static_cache_control() -> String {
         .unwrap_or_else(|_| "public, max-age=31536000, immutable".to_string())
 }
 
+fn default_gitlayer_address() -> Option<String> {
+    env::var("GITLAYER_ADDRESS").ok()
+}
+
+fn default_use_gitlayer() -> bool {
+    env::var("WORKHORSE_USE_GITLAYER")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+}
+
+fn default_auth_grpc_address() -> Option<String> {
+    env::var("AUTH_GRPC_ADDRESS")
+        .or_else(|_| env::var("GITFOX_AUTH_GRPC_ADDRESS"))
+        .ok()
+}
+
+fn default_use_grpc_auth() -> bool {
+    env::var("WORKHORSE_USE_GRPC_AUTH")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+}
+
+fn default_shell_secret() -> String {
+    env::var("GITFOX_SHELL_SECRET")
+        .or_else(|_| env::var("GITFOX_API_SECRET"))
+        .unwrap_or_else(|_| "change-me-in-production".to_string())
+}
+
 impl Config {
     /// 从环境变量加载配置
     pub fn from_env() -> Self {
+        let gitlayer_address = default_gitlayer_address();
+        let use_gitlayer = default_use_gitlayer() || gitlayer_address.is_some();
+        let auth_grpc_address = default_auth_grpc_address();
+        let use_grpc_auth = default_use_grpc_auth() || auth_grpc_address.is_some();
+        
         Self {
             listen_addr: default_listen_addr(),
             listen_port: default_listen_port(),
@@ -134,6 +187,11 @@ impl Config {
             max_upload_size: default_max_upload_size(),
             websocket_timeout: default_websocket_timeout(),
             static_cache_control: default_static_cache_control(),
+            gitlayer_address,
+            use_gitlayer,
+            auth_grpc_address,
+            use_grpc_auth,
+            shell_secret: default_shell_secret(),
         }
     }
 

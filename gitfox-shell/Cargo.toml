@@ -46,3 +46,12 @@ home = "0.5"
 
 # Process management
 nix = { version = "0.27", features = ["process", "signal"] }
+
+# gRPC client for GitLayer
+tonic = "0.12"
+prost = "0.13"
+tokio-stream = "0.1"
+async-stream = "0.3"
+
+[build-dependencies]
+tonic-build = "0.12"

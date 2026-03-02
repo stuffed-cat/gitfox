@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package gitlayer;
+
+import "repository.proto";
+import "commit.proto";
+
+// SmartHttp service handles Git HTTP Smart Protocol
+// This is used by workhorse to proxy Git HTTP requests
+service SmartHttpService {
+    // Handle info/refs request (upload-pack or receive-pack)
+    rpc InfoRefs(InfoRefsRequest) returns (InfoRefsResponse);
+    
+    // Handle upload-pack (fetch/clone)
+    rpc UploadPack(stream UploadPackRequest) returns (stream UploadPackResponse);
+    
+    // Handle receive-pack (push)
+    rpc ReceivePack(stream ReceivePackRequest) returns (stream ReceivePackResponse);
+}
+
+// SSH service handles Git SSH protocol
+service SshService {
+    // Upload pack for SSH (fetch/clone)
+    rpc SshUploadPack(stream SshPackRequest) returns (stream SshPackResponse);
+    
+    // Receive pack for SSH (push)
+    rpc SshReceivePack(stream SshPackRequest) returns (stream SshPackResponse);
+    
+    // Upload archive for SSH
+    rpc SshUploadArchive(stream SshPackRequest) returns (stream SshPackResponse);
+}
+
+message InfoRefsRequest {
+    Repository repository = 1;
+    // "git-upload-pack" or "git-receive-pack"
+    string service = 2;
+}
+
+message InfoRefsResponse {
+    bytes data = 1;
+}
+
+message UploadPackRequest {
+    Repository repository = 1;
+    bytes data = 2;
+}
+
+message UploadPackResponse {
+    bytes data = 1;
+}
+
+message ReceivePackRequest {
+    Repository repository = 1;
+    bytes data = 2;
+    // Git push options
+    repeated string push_options = 3;
+    // User info for hooks
+    int64 user_id = 4;
+    string username = 5;
+}
+
+message ReceivePackResponse {
+    bytes data = 1;
+}
+
+message SshPackRequest {
+    Repository repository = 1;
+    bytes stdin = 2;
+    // Environment variables for hooks
+    map<string, string> env_vars = 3;
+}
+
+message SshPackResponse {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    int32 exit_code = 3;
+}

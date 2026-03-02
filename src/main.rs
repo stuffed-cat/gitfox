@@ -8,12 +8,12 @@ use tokio::sync::RwLock;
 mod config;
 mod db;
 mod error;
+mod grpc;
 mod handlers;
 mod middleware;
 mod models;
 mod queue;
 mod services;
-mod ssh;
 
 use config::AppConfig;
 use db::{init_pg_pool, init_redis_pool};
@@ -82,18 +82,26 @@ async fn main() -> std::io::Result<()> {
     });
     log::info!("Redis job timeout listener started (primary)");
 
-    // Start SSH server if enabled
-    if config.ssh_enabled {
-        let ssh_config = Arc::new(config.clone());
-        let ssh_pool = Arc::new(pg_pool.clone());
+    // Start gRPC Auth server if enabled
+    if config.grpc_enabled {
+        let grpc_config = Arc::new(config.clone());
+        let grpc_pool = pg_pool.clone();
+        let grpc_addr = config.grpc_address.clone();
         
-        log::info!(
-            "Starting GitFox SSH server on {}:{}",
-            config.ssh_host,
-            config.ssh_port
-        );
+        log::info!("Starting GitFox gRPC Auth server on {}", grpc_addr);
         
-        ssh::start_ssh_server(ssh_config, ssh_pool);
+        tokio::spawn(async move {
+            use tonic::transport::Server;
+            let auth_service = grpc::AuthServiceImpl::new(grpc_pool, grpc_config);
+            
+            if let Err(e) = Server::builder()
+                .add_service(auth_service.into_service())
+                .serve(grpc_addr.parse().expect("Invalid gRPC address"))
+                .await
+            {
+                log::error!("gRPC server error: {}", e);
+            }
+        });
     }
 
     let runner_manager_clone = runner_manager.clone();
