@@ -68,18 +68,38 @@ async fn verify_git_basic_auth(
     }
 }
 
-/// GET /{namespace}/{project}.git/info/refs?service=git-upload-pack
-/// GET /{namespace}/{project}.git/info/refs?service=git-receive-pack
+/// 从完整路径中解析出 namespace 和 project
+/// 例如：gitfox/mirror/redis -> (gitfox/mirror, redis)
+///      user/project -> (user, project)
+fn parse_git_path(full_path: &str) -> Result<(String, String), AppError> {
+    let full_path = full_path.trim_end_matches(".git");
+    
+    match full_path.rfind('/') {
+        Some(pos) => {
+            let namespace = &full_path[..pos];
+            let project = &full_path[pos + 1..];
+            if namespace.is_empty() || project.is_empty() {
+                Err(AppError::bad_request("Invalid git path"))
+            } else {
+                Ok((namespace.to_string(), project.to_string()))
+            }
+        }
+        None => Err(AppError::bad_request("Invalid git path: missing namespace")),
+    }
+}
+
+/// GET /{path:.*}.git/info/refs?service=git-upload-pack
+/// GET /{path:.*}.git/info/refs?service=git-receive-pack
 pub async fn get_info_refs(
     req: HttpRequest,
-    path: web::Path<(String, String)>,
+    path: web::Path<String>,
     query: web::Query<InfoRefsQuery>,
     pool: web::Data<sqlx::PgPool>,
     config: web::Data<AppConfig>,
     auth: OptionalAuth,
 ) -> Result<HttpResponse, AppError> {
-    let (namespace, project_name) = path.into_inner();
-    let project_name = project_name.trim_end_matches(".git");
+    let full_path = path.into_inner();
+    let (namespace, project_name) = parse_git_path(&full_path)?;
     
     info!("Git info/refs request: namespace={}, project={}, path={}", namespace, project_name, req.path());
     
@@ -91,7 +111,7 @@ pub async fn get_info_refs(
     };
     
     // Check project access
-    let project = get_project_by_path(&pool, &namespace, project_name).await?;
+    let project = get_project_by_path(&pool, &namespace, &project_name).await?;
     
     // For git-receive-pack (push), require authentication and write permission
     if service == "git-receive-pack" {
@@ -146,18 +166,18 @@ pub async fn get_info_refs(
         .body(body))
 }
 
-/// POST /{namespace}/{project}.git/git-upload-pack
+/// POST /{path:.*}.git/git-upload-pack
 pub async fn git_upload_pack(
-    path: web::Path<(String, String)>,
+    path: web::Path<String>,
     body: web::Bytes,
     pool: web::Data<sqlx::PgPool>,
     config: web::Data<AppConfig>,
     _auth: OptionalAuth,
 ) -> Result<HttpResponse, AppError> {
-    let (namespace, project_name) = path.into_inner();
-    let project_name = project_name.trim_end_matches(".git");
+    let full_path = path.into_inner();
+    let (namespace, project_name) = parse_git_path(&full_path)?;
     
-    let project = get_project_by_path(&pool, &namespace, project_name).await?;
+    let project = get_project_by_path(&pool, &namespace, &project_name).await?;
     
     let repo_path = format!("{}/{}/{}.git", config.git_repos_path, namespace, project.name);
     
@@ -186,10 +206,10 @@ pub async fn git_upload_pack(
         .body(output.stdout))
 }
 
-/// POST /{namespace}/{project}.git/git-receive-pack
+/// POST /{path:.*}.git/git-receive-pack
 pub async fn git_receive_pack(
     req: HttpRequest,
-    path: web::Path<(String, String)>,
+    path: web::Path<String>,
     body: web::Bytes,
     pool: web::Data<sqlx::PgPool>,
     config: web::Data<AppConfig>,
@@ -212,10 +232,10 @@ pub async fn git_receive_pack(
         }
     };
     
-    let (namespace, project_name) = path.into_inner();
-    let project_name = project_name.trim_end_matches(".git");
+    let full_path = path.into_inner();
+    let (namespace, project_name) = parse_git_path(&full_path)?;
     
-    let project = get_project_by_path(&pool, &namespace, project_name).await?;
+    let project = get_project_by_path(&pool, &namespace, &project_name).await?;
     
     // 检查用户是否有写权限
     if !check_write_permission(&pool, _user_id, project.id, project.owner_id).await? {
@@ -330,29 +350,30 @@ async fn check_write_permission(
 pub fn configure_git_routes(cfg: &mut web::ServiceConfig) {
     cfg
         // Git Smart HTTP Protocol routes
+        // 使用 {path:.*} 来匹配多段 namespace，如 gitfox/mirror/redis
         .route(
-            "/git/{namespace}/{project}.git/info/refs",
+            "/git/{path:.*}.git/info/refs",
             web::get().to(get_info_refs)
         )
         .route(
-            "/git/{namespace}/{project}.git/git-upload-pack",
+            "/git/{path:.*}.git/git-upload-pack",
             web::post().to(git_upload_pack)
         )
         .route(
-            "/git/{namespace}/{project}.git/git-receive-pack",
+            "/git/{path:.*}.git/git-receive-pack",
             web::post().to(git_receive_pack)
         )
         // Alternative paths without /git prefix
         .route(
-            "/{namespace}/{project}.git/info/refs",
+            "/{path:.*}.git/info/refs",
             web::get().to(get_info_refs)
         )
         .route(
-            "/{namespace}/{project}.git/git-upload-pack",
+            "/{path:.*}.git/git-upload-pack",
             web::post().to(git_upload_pack)
         )
         .route(
-            "/{namespace}/{project}.git/git-receive-pack",
+            "/{path:.*}.git/git-receive-pack",
             web::post().to(git_receive_pack)
         );
 }
