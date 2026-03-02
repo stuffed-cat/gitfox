@@ -1,12 +1,14 @@
-//! GitFox Shell - SSH access and repository management
+//! GitFox Shell - SSH Server and Git access management
 //!
-//! This is the main entry point for SSH Git operations.
-//! It handles authentication, authorization, and executes git commands.
+//! This is the SSH server component of GitFox, similar to gitlab-shell.
+//! It provides:
+//! - Built-in SSH server (no system sshd required)
+//! - Git over SSH protocol support
+//! - Integration with GitLayer for Git operations
 //!
 //! Usage:
-//!   gitfox-shell <key-id>
-//!
-//! The SSH_ORIGINAL_COMMAND environment variable contains the git command.
+//!   gitfox-shell server              # Start SSH server (main mode)
+//!   gitfox-shell <key-id>            # Legacy mode (called by sshd)
 
 mod api;
 mod auth_client;
@@ -15,11 +17,14 @@ mod config;
 mod error;
 mod git;
 mod gitlayer_client;
+mod ssh_server;
 
 use std::env;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tracing::{debug, error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -28,45 +33,91 @@ use crate::auth_client::AuthClient;
 use crate::command::GitCommand;
 use crate::config::Config;
 use crate::error::ShellError;
+use crate::ssh_server::{SshServer, SshServerConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "gitfox-shell")]
 #[command(author = "GitFox Team")]
 #[command(version = "0.1.0")]
-#[command(about = "GitFox Shell - SSH access for Git repositories")]
+#[command(about = "GitFox Shell - SSH server for Git repositories")]
 struct Args {
-    /// The key ID used for authentication
-    #[arg(required = true)]
-    key_id: String,
+    #[command(subcommand)]
+    command: Option<Commands>,
 
     /// Enable debug logging
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     debug: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Start the SSH server (main mode)
+    Server {
+        /// SSH listen address
+        #[arg(long, env = "SSH_LISTEN_ADDR", default_value = "0.0.0.0:2222")]
+        listen: SocketAddr,
+
+        /// SSH host key path
+        #[arg(long, env = "SSH_HOST_KEY_PATH", default_value = "/var/lib/gitfox/ssh_host_key")]
+        host_key: PathBuf,
+    },
+
+    /// Legacy mode: handle single SSH session (called by sshd)
+    #[command(hide = true)]
+    Session {
+        /// The key ID used for authentication
+        key_id: String,
+    },
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Parse arguments
+    // Load .env file FIRST, before parsing args
+    // This allows clap to read from environment variables
+    dotenv::dotenv().ok();
+
     let args = Args::parse();
 
-    // Setup logging - only show errors in normal mode, debug shows all
-    let log_level = if args.debug {
-        Level::DEBUG
-    } else {
-        Level::ERROR
-    };
+    // Setup logging
+    let log_level = if args.debug { Level::DEBUG } else { Level::INFO };
 
-    let subscriber = FmtSubscriber::builder()
+    FmtSubscriber::builder()
         .with_max_level(log_level)
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .compact()
         .init();
 
-    debug!("GitFox Shell starting with key_id: {}", args.key_id);
+    // Determine mode based on command or arguments
+    let result = match args.command {
+        Some(Commands::Server { listen, host_key }) => {
+            run_server(listen, host_key).await
+        }
+        Some(Commands::Session { key_id }) => {
+            run_session(&key_id).await
+        }
+        None => {
+            // Check if we have a key_id as first arg (legacy sshd mode)
+            // This maintains compatibility with existing sshd configurations
+            let legacy_args: Vec<String> = env::args().collect();
+            if legacy_args.len() >= 2 && !legacy_args[1].starts_with('-') {
+                let key_id = &legacy_args[1];
+                run_session(key_id).await
+            } else {
+                // Default to server mode
+                let listen: SocketAddr = env::var("SSH_LISTEN_ADDR")
+                    .unwrap_or_else(|_| "0.0.0.0:2222".to_string())
+                    .parse()
+                    .expect("Invalid SSH_LISTEN_ADDR");
+                let host_key: PathBuf = env::var("SSH_HOST_KEY_PATH")
+                    .unwrap_or_else(|_| "/var/lib/gitfox/ssh_host_key".to_string())
+                    .into();
+                run_server(listen, host_key).await
+            }
+        }
+    };
 
-    // Run the shell
-    match run_shell(&args.key_id).await {
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             error!("GitFox Shell error: {}", e);
@@ -76,7 +127,26 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_shell(key_id: &str) -> Result<(), ShellError> {
+/// Run the SSH server
+async fn run_server(listen: SocketAddr, host_key: PathBuf) -> Result<(), ShellError> {
+    info!("GitFox Shell starting in server mode");
+    info!("Listening on {}", listen);
+
+    let config = Config::load()?;
+    debug!("Configuration loaded: {:?}", config);
+
+    let server_config = SshServerConfig {
+        listen_addr: listen,
+        host_key_path: host_key,
+        app_config: config,
+    };
+
+    let server = SshServer::new(server_config);
+    server.run().await
+}
+
+/// Run a single SSH session (legacy sshd mode)
+async fn run_session(key_id: &str) -> Result<(), ShellError> {
     // Load configuration
     let config = Config::load()?;
     debug!("Configuration loaded: {:?}", config);

@@ -37,7 +37,7 @@ thiserror = "1"
 anyhow = "1"
 
 # CLI parsing
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Utilities
 regex = "1"
@@ -46,6 +46,11 @@ home = "0.5"
 
 # Process management
 nix = { version = "0.27", features = ["process", "signal"] }
+
+# SSH Server (内置 SSH 服务器，类似 gitlab-shell)
+russh = "0.45"
+russh-keys = "0.45"
+async-trait = "0.1"
 
 # gRPC client for GitLayer
 tonic = "0.12"

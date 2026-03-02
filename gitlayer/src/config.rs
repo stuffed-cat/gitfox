@@ -1,6 +1,7 @@
 //! GitLayer configuration
 
 use std::env;
+use std::path::PathBuf;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -38,8 +39,42 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Load .env file from standard locations
+    fn load_env_file() {
+        // Try to load .env from current directory
+        if let Ok(current_dir) = env::current_dir() {
+            let env_path = current_dir.join(".env");
+            if env_path.exists() {
+                let _ = dotenv::from_path(&env_path);
+                return;
+            }
+        }
+
+        // Try /etc/gitfox/gitlayer.env
+        let etc_path = PathBuf::from("/etc/gitfox/gitlayer.env");
+        if etc_path.exists() {
+            let _ = dotenv::from_path(&etc_path);
+            return;
+        }
+
+        // Try ~/.config/gitfox/gitlayer.env
+        if let Some(home) = env::var("HOME").ok() {
+            let home_path = PathBuf::from(home).join(".config/gitfox/gitlayer.env");
+            if home_path.exists() {
+                let _ = dotenv::from_path(&home_path);
+                return;
+            }
+        }
+
+        // Try default dotenv behavior
+        let _ = dotenv::dotenv();
+    }
+
     /// Load configuration from environment variables
     pub fn load() -> Self {
+        // Load .env file first
+        Self::load_env_file();
+
         let mut config = Self::default();
         
         if let Ok(addr) = env::var("GITLAYER_LISTEN_ADDR") {

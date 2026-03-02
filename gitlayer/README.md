@@ -54,7 +54,15 @@ GitLayer 提供以下 gRPC 服务：
 
 ## 配置
 
-参见 [config.example.env](config.example.env)
+GitLayer 会自动从以下位置加载 `.env` 文件（按优先级）：
+
+1. 当前目录的 `.env`
+2. `/etc/gitfox/gitlayer.env`
+3. `~/.config/gitfox/gitlayer.env`
+
+配置示例参见 [.env.example](.env.example)
+
+### 环境变量
 
 | 环境变量 | 默认值 | 描述 |
 |---------|--------|------|

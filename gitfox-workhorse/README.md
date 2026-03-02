@@ -102,7 +102,6 @@ WORKHORSE_BACKEND_URL=http://127.0.0.1:8081
 WORKHORSE_FRONTEND_DIST=./frontend/dist
 WORKHORSE_WEBIDE_DIST=./webide/dist
 WORKHORSE_ASSETS_PATH=./assets
-WORKHORSE_GIT_REPOS_PATH=./repos
 
 # 上传限制 (字节)
 WORKHORSE_MAX_UPLOAD_SIZE=104857600  # 100MB
@@ -123,7 +122,6 @@ backend_url = "http://127.0.0.1:8081"
 frontend_dist_path = "./frontend/dist"
 webide_dist_path = "./webide/dist"
 assets_path = "./assets"
-git_repos_path = "./repos"
 enable_request_logging = true
 enable_cors = true
 max_upload_size = 104857600
@@ -131,12 +129,28 @@ websocket_timeout = 3600
 static_cache_control = "public, max-age=31536000, immutable"
 ```
 
-使用配置文件：
+## 配置加载优先级
 
-```bash
-export WORKHORSE_CONFIG=config.toml
-./gitfox-workhorse
-```
+GitFox Workhorse 按以下优先级加载配置：
+
+1. **WORKHORSE_CONFIG 环境变量**：指定配置文件路径
+   ```bash
+   export WORKHORSE_CONFIG=/etc/gitfox/workhorse.toml
+   ./gitfox-workhorse
+   ```
+
+2. **当前目录的 config.toml**：如果文件存在，自动加载
+   ```bash
+   # 创建 config.toml 文件，然后直接运行
+   ./gitfox-workhorse
+   ```
+
+3. **环境变量**：作为后退选项
+   ```bash
+   export WORKHORSE_LISTEN_PORT=8080
+   export WORKHORSE_BACKEND_URL=http://127.0.0.1:8081
+   ./gitfox-workhorse
+   ```
 
 ## 构建
 
@@ -190,8 +204,7 @@ export WORKHORSE_WEBIDE_DIST=../webide/dist
 export WORKHORSE_ASSETS_PATH=../assets
 cargo run --release
 
-# 或使用配置文件
-export WORKHORSE_CONFIG=config.toml
+# 或在当前目录创建 config.toml，直接运行
 cargo run --release
 ```
 

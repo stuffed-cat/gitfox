@@ -26,7 +26,6 @@ backend_url = "{{BACKEND_URL}}"
 frontend_dist_path = "{{FRONTEND_DIST_PATH}}"
 webide_dist_path = "{{WEBIDE_DIST_PATH}}"
 assets_path = "{{ASSETS_PATH}}"
-git_repos_path = "{{GIT_REPOS_PATH}}"
 
 # 启用请求日志
 enable_request_logging = true

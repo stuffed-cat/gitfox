@@ -1,78 +1,60 @@
 # GitFox Shell
 
-GitFox Shell 是 GitFox DevOps 平台的 SSH 访问组件，负责处理 Git over SSH 协议的认证和授权。
+GitFox Shell 是 GitFox 的 **内置 SSH 服务器**，类似于 GitLab Shell。它直接提供 Git over SSH 协议支持，无需依赖系统 sshd。
 
 ## 架构
 
 ```
-用户 SSH 请求                        用户 HTTP 请求
-      │                                    │
-      ▼                                    ▼
-┌─────────────┐                   ┌─────────────────┐
-│    sshd     │                   │    Workhorse    │
-│    :22      │                   │     :8080       │
-└──────┬──────┘                   └────────┬────────┘
-       │                                   │
-       ▼                          ┌────────┴────────┐
-┌─────────────┐                   │                 │
-│gitfox-shell │                  API/*          Git HTTP
-└──────┬──────┘                   │             *.git/*
-       │                          ▼                 │
-       │ gRPC               ┌──────────┐            │
-       ├───────────────────►│ Main App │◄───────────┤
-       │ (认证)             │  :8081   │  (认证)    │
-       │                    └──────────┘            │
-       │                                            │
-       │ gRPC                                gRPC   │
-       │ (Git操作)                        (Git操作) │
-       │                                            │
-       └────────────────┬───────────────────────────┘
-                        ▼
-               ┌─────────────────┐
-               │    GitLayer     │
-               │     :50052      │
-               │   (Git 操作)    │
-               └────────┬────────┘
-                        │
-                        ▼
-               ┌─────────────────┐
-               │ Git Repositories│
-               │    ./repos/     │
-               └─────────────────┘
+           HTTP :8080                        SSH :22
+               │                                │
+               ▼                                ▼
+    ┌─────────────────┐               ┌─────────────────┐
+    │   Workhorse     │               │  gitfox-shell   │
+    │  (HTTP 代理)    │               │  (SSH 服务器)   │
+    └────────┬────────┘               └────────┬────────┘
+             │                                 │
+    ┌────────┴────────┐                       │
+    │                 │                       │
+ API/*            Git HTTP                    │
+    │             *.git/*                     │
+    ▼                 │        gRPC           │
+┌──────────┐         │       (Auth)          │
+│Main App  │◄────────┼────────────────────────┤
+│  :8081   │         │       :50051          │
+└──────────┘         │                       │
+                    │        gRPC           │
+                    │      (Git ops)        │
+                    └──────────┬────────────┘
+                               ▼
+                    ┌─────────────────┐
+                    │    GitLayer     │
+                    │     :50052      │
+                    │   (Git 操作)    │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │ Git Repositories│
+                    │    ./repos/     │
+                    └─────────────────┘
 ```
 
-和 GitLab 类似，GitFox 采用分层架构：
-- **sshd**: 系统 SSH 服务器，处理 SSH 连接
-- **gitfox-shell**: 作为 git 用户的登录 shell，负责 SSH Git 请求
-- **Workhorse**: HTTP 反向代理，负责所有 HTTP 请求
-- **Main App**: 业务逻辑和 gRPC Auth 服务
-- **GitLayer**: Git 操作 RPC 服务（类似 Gitaly）
+**GitFox Shell 是一个独立的 SSH 服务器，不依赖系统 sshd。**
 
-**关键点：Git 操作直接通过 GitLayer，不经过 Main App**
+请求流：
+- **HTTP Git**: `客户端 → Workhorse → GitLayer`
+- **SSH Git**: `客户端 → gitfox-shell → GitLayer`
+- **认证**: 都通过 Main App 的 gRPC Auth 服务
 
 ## 功能特性
 
-- **SSH 认证**: 通过 `AuthorizedKeysCommand` 动态查找用户 SSH 公钥
-- **gRPC 权限控制**: 通过 gRPC 与主应用通信进行权限验证（推荐）
-- **HTTP API 权限控制**: 备选的 HTTP API 认证方式
+- **内置 SSH 服务器**: 使用 russh 库实现，无需系统 sshd
+- **公钥认证**: 通过 gRPC 查询用户 SSH 公钥
+- **权限控制**: 通过 gRPC 与主应用通信进行权限验证
 - **Git 操作**: 支持 `git clone`, `git push`, `git pull`, `git fetch`
 - **Git LFS**: 支持 Git Large File Storage 认证
-- **GitLayer 集成**: 可选通过 GitLayer RPC 执行 Git 操作
-- **安全限制**: 禁止交互式 shell 访问，防止端口转发等
-
-## 组件
-
-### gitfox-shell
-
-主要的 shell 程序，当用户通过 SSH 执行 Git 命令时被调用。
-
-```
-用户 → SSH → sshd → gitfox-shell → gRPC Auth → GitLayer/直接 git
-```
-
-### gitfox-shell-authorized-keys-check
-
-用于 sshd 的 `AuthorizedKeysCommand`，动态从 GitFox 数据库查找 SSH 公钥。
+- **GitLayer 集成**: 通过 gRPC 调用 GitLayer 执行 Git 操作
+- **安全限制**: 禁止交互式 shell 访问，禁止端口转发
 
 ## 安装
 
@@ -83,112 +65,135 @@ cd gitfox-shell
 cargo build --release
 ```
 
-### 2. 安装二进制文件
+### 2. 安装
 
 ```bash
-sudo cp target/release/gitfox-shell /usr/bin/
-sudo cp target/release/gitfox-shell-authorized-keys-check /usr/bin/
-sudo chmod 755 /usr/bin/gitfox-shell
-sudo chmod 755 /usr/bin/gitfox-shell-authorized-keys-check
+sudo cp target/release/gitfox-shell /usr/local/bin/
+sudo chmod 755 /usr/local/bin/gitfox-shell
 ```
 
-### 3. 创建 git 用户
+### 3. 配置
 
-```bash
-sudo useradd -r -m -d /var/opt/gitfox -s /usr/bin/gitfox-shell git
-```
+创建配置文件 `/etc/gitfox/shell.env`:
 
-### 4. 配置 sshd
+```env
+# SSH 服务器配置
+SSH_LISTEN_ADDR=0.0.0.0:22
+SSH_HOST_KEY_PATH=/var/lib/gitfox/ssh_host_key
 
-编辑 `/etc/ssh/sshd_config`:
-
-```
-# GitFox Shell Configuration
-Match User git
-    AuthorizedKeysCommand /usr/bin/gitfox-shell-authorized-keys-check %u %k %t
-    AuthorizedKeysCommandUser git
-    PasswordAuthentication no
-    AllowTcpForwarding no
-    X11Forwarding no
-    AllowAgentForwarding no
-```
-
-重启 sshd:
-
-```bash
-sudo systemctl restart sshd
-```
-
-### 5. 配置环境变量
-
-创建 `/etc/gitfox/shell.env` (参考 `config.example.env`):
-
-```bash
-# ============================================
-# gRPC Authentication (推荐)
-# ============================================
-# 使用 gRPC 进行权限认证
+# gRPC 认证服务
 GITFOX_USE_GRPC_AUTH=true
+AUTH_GRPC_ADDRESS=http://[::1]:50051
 
+# GitLayer 服务
+GITFOX_USE_GITLAYER=true
+GITLAYER_ADDRESS=http://[::1]:50052
+```
+
+### 4. 配置环境变量
+
+创建 `/etc/gitfox/shell.env`:
+
+```bash
+# ============================================
+# SSH 服务器配置
+# ============================================
+# 监听地址
+SSH_LISTEN_ADDR=0.0.0.0:22
+
+# Host Key 路径 (不存在时自动生成)
+SSH_HOST_KEY_PATH=/etc/gitfox/ssh_host_ed25519_key
+
+# ============================================
+# gRPC 配置
+# ============================================
 # Auth gRPC 服务地址（主应用提供）
 AUTH_GRPC_ADDRESS=http://[::1]:50051
 
-# ============================================
-# GitLayer Configuration (可选)
-# ============================================
-# 使用 GitLayer 处理 Git 操作
-GITFOX_USE_GITLAYER=true
+# GitLayer gRPC 服务地址（所有 Git 操作通过 GitLayer 执行）
 GITLAYER_ADDRESS=http://[::1]:50052
 
-# ============================================
-# API Authentication (备选 HTTP 模式)
-# ============================================
-# GitFox API URL
-GITFOX_API_URL=http://localhost:8080
-
-# API Secret (内部通信认证)
+# 内部 API 认证密钥
 GITFOX_API_SECRET=your-secret-token-here
-
-# ============================================
-# Repository Storage
-# ============================================
-GITFOX_REPOS_PATH=/var/opt/gitfox/repos
 
 # ============================================
 # Debug (生产环境关闭)
 # ============================================
 GITFOX_DEBUG=false
+RUST_LOG=info
+```
+
+### 5. 启动服务
+
+```bash
+# 直接运行
+gitfox-shell server --listen 0.0.0.0:22 --host-key /etc/gitfox/ssh_host_ed25519_key
+
+# 使用 systemd
+sudo systemctl enable gitfox-shell
+sudo systemctl start gitfox-shell
+```
+
+### 6. Systemd 服务单元
+
+创建 `/etc/systemd/system/gitfox-shell.service`:
+
+```ini
+[Unit]
+Description=GitFox Shell SSH Server
+After=network.target gitfox.service
+
+[Service]
+Type=simple
+User=git
+Group=git
+EnvironmentFile=/etc/gitfox/shell.env
+ExecStart=/usr/bin/gitfox-shell server --listen ${SSH_LISTEN_ADDR} --host-key ${SSH_HOST_KEY_PATH}
+Restart=always
+RestartSec=5
+
+# 安全设置
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/etc/gitfox
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 ## 环境变量
 
-### gRPC 配置 (推荐)
+gitfox-shell 会从以下位置按优先级加载配置（优先级从高到低）：
+1. 当前目录的 `.env` 文件
+2. `/etc/gitfox/shell.env`
+3. `~/.gitfox/shell.env`
+
+后加载的文件不会覆盖已设置的环境变量。
+
+### SSH 服务器配置
 
 | 变量名 | 必需 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `GITFOX_USE_GRPC_AUTH` | 否 | `false` | 使用 gRPC 进行权限认证 |
-| `AUTH_GRPC_ADDRESS` | 是* | - | Auth gRPC 服务地址 |
-| `GITFOX_USE_GITLAYER` | 否 | `false` | 使用 GitLayer 处理 Git 操作 |
-| `GITLAYER_ADDRESS` | 否 | - | GitLayer gRPC 服务地址 |
+| `SSH_LISTEN_ADDR` | 否 | `0.0.0.0:22` | SSH 服务监听地址 |
+| `SSH_HOST_KEY_PATH` | 否 | `./ssh_host_key` | Host Key 文件路径 |
 
-*当 `GITFOX_USE_GRPC_AUTH=true` 时必需
-
-### HTTP API 配置 (备选)
+### gRPC 配置
 
 | 变量名 | 必需 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `GITFOX_API_URL` | 否 | `http://localhost:8080` | GitFox API 服务器地址 |
-| `GITFOX_API_SECRET` | **是** | - | 内部 API 认证密钥 |
-| `GITFOX_API_TIMEOUT` | 否 | `30` | API 请求超时时间（秒） |
+| `AUTH_GRPC_ADDRESS` | **是** | - | Auth gRPC 服务地址 |
+| `GITLAYER_ADDRESS` | **是** | - | GitLayer gRPC 服务地址 |
 
 ### 通用配置
 
 | 变量名 | 必需 | 默认值 | 描述 |
 |--------|------|--------|------|
-| `GITFOX_REPOS_PATH` | 否 | `/var/opt/gitfox/repos` | Git 仓库存储路径 |
-| `GITFOX_GIT_UPLOAD_PACK` | 否 | `git-upload-pack` | git-upload-pack 路径 |
-| `GITFOX_GIT_RECEIVE_PACK` | 否 | `git-receive-pack` | git-receive-pack 路径 |
+| `GITFOX_API_SECRET` | **是** | - | 内部 API 认证密钥（与主应用保持一致）|
 | `GITFOX_DEBUG` | 否 | `false` | 启用调试日志 |
+| `RUST_LOG` | 否 | `info` | 日志级别 (debug, info, warn, error) |
+
+**注意**: gitfox-shell 通过 GitLayer 执行所有 Git 操作，不直接访问仓库目录。仓库路径只需要在 GitLayer 中配置。
 
 ## gRPC 接口
 
@@ -333,37 +338,43 @@ git pull origin main
 ## 安全特性
 
 1. **无交互式 Shell**: 用户无法获得交互式 shell 访问
-2. **命令白名单**: 只允许执行特定的 Git 命令
+2. **命令白名单**: 只允许执行特定的 Git 命令 (`git-upload-pack`, `git-receive-pack`)
 3. **路径验证**: 防止路径遍历攻击
-4. **API 认证**: 内部通信使用 secret token 认证
-5. **SSH 限制**: 禁用端口转发、X11 转发、代理转发
+4. **gRPC 认证**: 所有认证通过 gRPC 内部通信
+5. **公钥认证**: 只支持 SSH 公钥认证，禁用密码
+6. **禁用危险功能**: 禁用端口转发、X11 转发、代理转发
 
 ## 故障排除
 
 ### 查看日志
 
 ```bash
-# GitFox Shell 日志
-sudo journalctl -u sshd | grep gitfox-shell
+# 使用 systemd
+sudo journalctl -u gitfox-shell -f
 
 # 启用调试模式
-export GITFOX_DEBUG=true
+RUST_LOG=debug gitfox-shell server --listen 0.0.0.0:2222
 ```
 
 ### 常见问题
 
 **1. Permission denied (publickey)**
-- 检查 SSH 公钥是否已添加到 GitFox
-- 验证 `AuthorizedKeysCommand` 配置
-- 检查 git 用户权限
+- 检查 SSH 公钥是否已添加到 GitFox 账户
+- 验证公钥指纹是否匹配
+- 检查 Auth gRPC 服务是否正常运行
 
-**2. Repository not found**
+**2. Connection refused**
+- 确认 gitfox-shell 服务正在运行
+- 检查防火墙设置（端口 22）
+- 验证监听地址配置
+
+**3. Repository not found**
 - 确认仓库路径正确
 - 检查用户是否有访问权限
 
-**3. API connection failed**
-- 检查 `GITFOX_API_URL` 配置
-- 验证 GitFox 服务是否运行
+**4. gRPC connection failed**
+- 检查 `AUTH_GRPC_ADDRESS` 和 `GITLAYER_ADDRESS` 配置
+- 验证 GitFox 主服务和 GitLayer 是否运行
 - 检查网络连接
 
 ## 开发
@@ -375,8 +386,40 @@ cargo test
 # 构建调试版本
 cargo build
 
-# 运行 (测试模式)
-GITFOX_API_SECRET=test ./target/debug/gitfox-shell key-1
+# 运行 SSH 服务器 (开发模式，使用非特权端口)
+RUST_LOG=debug \
+AUTH_GRPC_ADDRESS=http://localhost:50051 \
+GITLAYER_ADDRESS=http://localhost:50052 \
+cargo run -- server --listen 127.0.0.1:2222
+
+# 测试 SSH 连接
+ssh -p 2222 -T git@localhost
+```
+
+## CLI 命令
+
+### server 模式 (主模式)
+
+启动独立 SSH 服务器：
+
+```bash
+gitfox-shell server [OPTIONS]
+
+Options:
+  -l, --listen <ADDR>      监听地址 [default: 0.0.0.0:22]
+  -k, --host-key <PATH>    Host Key 文件路径 (不存在时自动生成 Ed25519 密钥)
+  -h, --help               显示帮助
+```
+
+### session 模式 (兼容模式)
+
+用于传统 sshd 集成（不推荐）：
+
+```bash
+gitfox-shell session <KEY_ID>
+
+# 或直接传递 key_id
+gitfox-shell <KEY_ID>
 ```
 
 ## License

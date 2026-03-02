@@ -26,14 +26,23 @@ async fn main() -> std::io::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // 加载配置
+    // 加载配置（按优先级）
     let config = if let Ok(config_path) = std::env::var("WORKHORSE_CONFIG") {
-        tracing::info!("Loading config from file: {}", config_path);
+        // 1. 优先使用 WORKHORSE_CONFIG 环境变量指定的路径
+        tracing::info!("Loading config from WORKHORSE_CONFIG: {}", config_path);
         Config::from_file(&config_path).unwrap_or_else(|e| {
             tracing::warn!("Failed to load config file: {}, using env vars", e);
             Config::from_env()
         })
+    } else if std::path::Path::new("config.toml").exists() {
+        // 2. 尝试当前目录的 config.toml
+        tracing::info!("Loading config from ./config.toml");
+        Config::from_file("config.toml").unwrap_or_else(|e| {
+            tracing::warn!("Failed to load ./config.toml: {}, using env vars", e);
+            Config::from_env()
+        })
     } else {
+        // 3. 从环境变量加载
         tracing::info!("Loading config from environment variables");
         Config::from_env()
     };
@@ -60,7 +69,6 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Frontend dist: {:?}", config.frontend_dist_path);
     tracing::info!("WebIDE dist: {:?}", config.webide_dist_path);
     tracing::info!("Assets path: {:?}", config.assets_path);
-    tracing::info!("Git repos path: {:?}", config.git_repos_path);
 
     let client_data = web::Data::new(backend_client);
     let backend_url_data = web::Data::new(config.backend_url.clone());

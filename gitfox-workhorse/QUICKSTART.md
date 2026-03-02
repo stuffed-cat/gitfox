@@ -118,7 +118,6 @@ Workhorse 会智能路由请求：
 | `WORKHORSE_FRONTEND_DIST`         | `./frontend/dist`         | 前端构建输出目录      |
 | `WORKHORSE_WEBIDE_DIST`           | `./webide/dist`           | WebIDE 构建输出目录   |
 | `WORKHORSE_ASSETS_PATH`           | `./assets`                | Assets 目录           |
-| `WORKHORSE_GIT_REPOS_PATH`        | `./repos`                 | Git 仓库目录          |
 | `WORKHORSE_MAX_UPLOAD_SIZE`       | `104857600` (100MB)       | 最大上传大小（字节）  |
 | `WORKHORSE_WEBSOCKET_TIMEOUT`     | `3600` (1小时)            | WebSocket 超时（秒）  |
 | `RUST_LOG`                        | `info`                    | 日志级别              |

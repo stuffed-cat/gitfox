@@ -317,6 +317,12 @@ fn build_rust_binaries(workspace: &Path, output_dir: &Path, target: &str, releas
     compile_rust_binary_with_name(&shell_dir, "gitfox-shell-authorized-keys-check", target, release)?;
     copy_binary(&shell_dir, "gitfox-shell-authorized-keys-check", target, profile_dir, output_dir)?;
 
+    // 编译 gitlayer (Git 操作 RPC 服务)
+    info!("Building gitlayer...");
+    let gitlayer_dir = workspace.join("gitlayer");
+    compile_rust_binary(&gitlayer_dir, "gitlayer", target, release)?;
+    copy_binary(&gitlayer_dir, "gitlayer", target, profile_dir, output_dir)?;
+
     info!("All Rust binaries built successfully");
     Ok(())
 }

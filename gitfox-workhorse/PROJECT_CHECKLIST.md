@@ -122,7 +122,6 @@ gitfox-workhorse/
 - `WORKHORSE_FRONTEND_DIST` - 前端构建目录
 - `WORKHORSE_WEBIDE_DIST` - WebIDE 构建目录
 - `WORKHORSE_ASSETS_PATH` - Assets 目录
-- `WORKHORSE_GIT_REPOS_PATH` - Git 仓库目录
 - `WORKHORSE_CONFIG` - 配置文件路径（可选）
 
 ### 配置文件 (TOML)

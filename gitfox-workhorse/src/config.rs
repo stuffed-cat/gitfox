@@ -33,10 +33,6 @@ pub struct Config {
     #[serde(default = "default_assets_path")]
     pub assets_path: PathBuf,
 
-    /// Git 仓库路径（用于 Git HTTP 协议）
-    #[serde(default = "default_git_repos_path")]
-    pub git_repos_path: PathBuf,
-
     /// 启用请求日志
     #[serde(default = "default_true")]
     pub enable_request_logging: bool,
@@ -109,10 +105,6 @@ fn default_assets_path() -> PathBuf {
     PathBuf::from(env::var("WORKHORSE_ASSETS_PATH").unwrap_or_else(|_| "./assets".to_string()))
 }
 
-fn default_git_repos_path() -> PathBuf {
-    PathBuf::from(env::var("WORKHORSE_GIT_REPOS_PATH").unwrap_or_else(|_| "./repos".to_string()))
-}
-
 fn default_true() -> bool {
     true
 }
@@ -181,7 +173,7 @@ impl Config {
             frontend_dist_path: default_frontend_dist_path(),
             webide_dist_path: default_webide_dist_path(),
             assets_path: default_assets_path(),
-            git_repos_path: default_git_repos_path(),
+
             enable_request_logging: default_true(),
             enable_cors: default_true(),
             max_upload_size: default_max_upload_size(),
@@ -239,10 +231,6 @@ impl Config {
 
         if !self.assets_path.exists() {
             tracing::warn!("Assets path does not exist: {:?}", self.assets_path);
-        }
-
-        if !self.git_repos_path.exists() {
-            tracing::warn!("Git repos path does not exist: {:?}", self.git_repos_path);
         }
 
         Ok(())

@@ -43,7 +43,7 @@ impl GitAction {
 }
 
 /// Parsed Git command
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GitCommand {
     /// The git action to perform
     pub action: GitAction,

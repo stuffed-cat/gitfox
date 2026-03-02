@@ -29,6 +29,18 @@ pub enum ShellError {
     #[error("GitLayer connection error: {0}")]
     GitLayerConnection(String),
 
+    #[error("SSH server error: {0}")]
+    Ssh(String),
+
+    #[error("Command error: {0}")]
+    Command(String),
+
+    #[error("Git error: {0}")]
+    Git(String),
+
+    #[error("GitLayer error: {0}")]
+    GitLayer(String),
+
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
@@ -37,6 +49,9 @@ pub enum ShellError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("SSH protocol error: {0}")]
+    SshProtocol(#[from] russh::Error),
 }
 
 impl ShellError {
@@ -59,6 +74,11 @@ impl ShellError {
             }
             ShellError::Auth(msg) => format!("Authentication failed: {}", msg),
             ShellError::GitExecution(msg) => format!("Git operation failed: {}", msg),
+            ShellError::Ssh(msg) => format!("SSH error: {}", msg),
+            ShellError::SshProtocol(_) => "SSH protocol error.".to_string(),
+            ShellError::Command(msg) => format!("Command error: {}", msg),
+            ShellError::Git(msg) => format!("Git error: {}", msg),
+            ShellError::GitLayer(msg) => format!("GitLayer error: {}", msg),
             ShellError::Io(_) => "An I/O error occurred.".to_string(),
             ShellError::Http(_) => "Network error. Please try again later.".to_string(),
             ShellError::Json(_) => "Internal error processing response.".to_string(),
