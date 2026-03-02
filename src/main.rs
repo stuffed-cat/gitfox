@@ -100,6 +100,9 @@ async fn main() -> std::io::Result<()> {
     
     // 提前提取 socket_path 以避免借用问题
     let socket_path = config.server_socket_path.clone();
+    let max_upload_size = config.max_upload_size;
+    
+    log::info!("Max upload size: {} bytes ({:.2} MB)", max_upload_size, max_upload_size as f64 / 1024.0 / 1024.0);
 
     let server = HttpServer::new(move || {
         let cors = Cors::default()
@@ -111,6 +114,8 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .wrap(Logger::default())
+            // 配置请求体大小限制（支持大文件 Git push）
+            .app_data(web::PayloadConfig::new(max_upload_size))
             .app_data(web::Data::new(pg_pool.clone()))
             .app_data(web::Data::new(redis_pool.clone()))
             .app_data(web::Data::new(message_queue.clone()))

@@ -19,9 +19,10 @@ enable_request_logging = true
 # 启用 CORS
 enable_cors = true
 
-# 最大上传文件大小 (500MB)
-# Git push 操作可能需要较大的限制，建议至少 500MB
-max_upload_size = 524288000
+# 最大上传文件大小
+# Git push 操作可能需要较大的限制，建议至少 500MB (524288000) 或 1GB (1073741824)
+# 这个值会被 gitfox-omnibus 自动设置为与后端一致的值
+max_upload_size = {{MAX_UPLOAD_SIZE}}
 
 # WebSocket 超时时间 (3600秒 = 1小时)
 websocket_timeout = 3600

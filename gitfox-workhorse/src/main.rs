@@ -132,6 +132,8 @@ async fn main() -> std::io::Result<()> {
             // API 代理到后端
             .service(
                 web::scope("/api")
+                    // API 上传也需要更大的限制
+                    .app_data(web::PayloadConfig::new(max_upload_size))
                     .default_service(web::to(proxy::proxy_to_backend))
             )
             
@@ -144,9 +146,11 @@ async fn main() -> std::io::Result<()> {
             
             // Git HTTP 协议代理
             // 匹配 /namespace/project.git/* 路径
-            .route(
-                r#"/{namespace}/{project:.*\.git.*}"#,
-                web::route().to(proxy::proxy_git_http)
+            .service(
+                web::resource(r#"/{namespace}/{project:.*\.git.*}"#)
+                    // Git push 操作需要更大的上传限制
+                    .app_data(web::PayloadConfig::new(max_upload_size))
+                    .route(web::route().to(proxy::proxy_git_http))
             )
             
             // 前端 SPA 文件服务

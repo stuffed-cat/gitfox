@@ -363,11 +363,18 @@ fn start_backend_from_env(
     }
     
     // 后端直接从环境变量读取所有配置，我们只需要启动并继承环境
-    let child = Command::new(&binary)
-        .env("DATABASE_URL", database_url)
+    let mut cmd = Command::new(&binary);
+    cmd.env("DATABASE_URL", database_url)
         .env("REDIS_URL", redis_url)
         .env("GIT_REPOS_PATH", &paths.repos_dir)
-        .env("RUST_LOG", if verbose { "debug" } else { "info" })
+        .env("RUST_LOG", if verbose { "debug" } else { "info" });
+    
+    // 如果环境变量中设置了 MAX_UPLOAD_SIZE，就传递给后端
+    if let Ok(max_size) = env::var("MAX_UPLOAD_SIZE") {
+        cmd.env("MAX_UPLOAD_SIZE", max_size);
+    }
+    
+    let child = cmd
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
@@ -392,6 +399,10 @@ struct WorkhorseConfig {
 }
 
 fn start_workhorse(config: &WorkhorseConfig) -> Result<Child> {
+    // 从环境变量读取 MAX_UPLOAD_SIZE，默认 1GB
+    let max_upload_size = env::var("MAX_UPLOAD_SIZE")
+        .unwrap_or_else(|_| "1073741824".to_string());
+    
     let child = Command::new(&config.binary)
         .env("WORKHORSE_LISTEN_ADDR", "0.0.0.0")
         .env("WORKHORSE_LISTEN_PORT", config.listen_port.to_string())
@@ -403,7 +414,7 @@ fn start_workhorse(config: &WorkhorseConfig) -> Result<Child> {
         .env("WORKHORSE_WEBIDE_DIST", &config.webide_dir)
         .env("WORKHORSE_ASSETS_PATH", &config.assets_dir)
         .env("WORKHORSE_GIT_REPOS_PATH", &config.repos_dir)
-        .env("WORKHORSE_MAX_UPLOAD_SIZE", "524288000")  // 500MB
+        .env("WORKHORSE_MAX_UPLOAD_SIZE", max_upload_size)
         .env("RUST_LOG", if config.verbose { "debug" } else { "info" })
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -1050,6 +1061,9 @@ fn generate_gitfox_env_template(data_dir: &Path, secrets: &GeneratedSecrets, use
     
     template = template.replace("{{WEBAUTHN_RP_ID}}", &user_config.webauthn_rp_id);
     
+    // MAX_UPLOAD_SIZE 默认 1GB
+    template = template.replace("{{MAX_UPLOAD_SIZE}}", "1073741824");
+    
     template
 }
 
@@ -1081,6 +1095,10 @@ fn generate_workhorse_toml_template(data_dir: &Path, user_config: &UserConfig) -
     template = template.replace("{{WEBIDE_DIST_PATH}}", &webide_dir.display().to_string());
     template = template.replace("{{ASSETS_PATH}}", &assets_dir.display().to_string());
     template = template.replace("{{GIT_REPOS_PATH}}", &repos_dir.display().to_string());
+    
+    // MAX_UPLOAD_SIZE 默认 1GB
+    let max_upload_size = env::var("MAX_UPLOAD_SIZE").unwrap_or_else(|_| "1073741824".to_string());
+    template = template.replace("{{MAX_UPLOAD_SIZE}}", &max_upload_size);
     
     template
 }

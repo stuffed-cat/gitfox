@@ -188,6 +188,8 @@ pub struct Config {
     pub webide_client_id: String,
     /// WebIDE OAuth2 redirect URI path
     pub webide_redirect_uri_path: String,
+    /// Maximum upload size in bytes (default: 1GB for Git operations)
+    pub max_upload_size: usize,
 }
 
 impl Config {
@@ -303,6 +305,10 @@ impl Config {
                 .unwrap_or("gitfox-webide".to_string()),
             webide_redirect_uri_path: env::var("WEBIDE_REDIRECT_URI_PATH")
                 .unwrap_or("/-/ide/oauth/callback".to_string()),
+            max_upload_size: env::var("MAX_UPLOAD_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1024 * 1024 * 1024), // Default: 1GB
         }
     }
 }

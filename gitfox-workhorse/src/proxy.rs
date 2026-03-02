@@ -1,6 +1,6 @@
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use crate::http_client::BackendClient;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use std::time::Duration;
@@ -208,10 +208,10 @@ async fn proxy_via_unix(
     Ok(client_resp.body(body_bytes.to_vec()))
 }
 
-/// Git HTTP 协议代理 - 特殊处理 Git 相关请求
+/// Git HTTP 协议代理 - 特殊处理 Git 相关请求（使用流式处理）
 pub async fn proxy_git_http(
     req: HttpRequest,
-    body: web::Bytes,
+    mut payload: web::Payload,
     client: web::Data<BackendClient>,
     backend_url: web::Data<String>,
     backend_socket: web::Data<Option<String>>,
@@ -224,16 +224,22 @@ pub async fn proxy_git_http(
 
     // 根据客户端类型选择代理方式（Git 操作超时时间更长）
     if client.is_unix() {
-        proxy_via_unix(req, body, client, &path, &query).await
+        // Unix socket: 需要先收集完整body
+        let mut body_bytes = web::BytesMut::new();
+        while let Some(chunk) = payload.next().await {
+            let chunk = chunk?;
+            body_bytes.extend_from_slice(&chunk);
+        }
+        proxy_via_unix(req, body_bytes.freeze(), client, &path, &query).await
     } else {
-        proxy_git_via_tcp(req, body, client, backend_url, &path, &query).await
+        proxy_git_via_tcp_stream(req, payload, client, backend_url, &path, &query).await
     }
 }
 
-/// 通过 TCP 代理 Git 请求（超时时间更长）
-async fn proxy_git_via_tcp(
+/// 通过 TCP 代理 Git 请求（流式处理，支持大文件）
+async fn proxy_git_via_tcp_stream(
     req: HttpRequest,
-    body: web::Bytes,
+    mut payload: web::Payload,
     client: web::Data<BackendClient>,
     backend_url: web::Data<String>,
     path: &str,
@@ -270,9 +276,16 @@ async fn proxy_git_via_tcp(
     }
     backend_req = backend_req.header("X-Forwarded-Proto", req.connection_info().scheme());
 
+    // 流式读取请求体
+    let mut body_bytes = web::BytesMut::new();
+    while let Some(chunk) = payload.next().await {
+        let chunk = chunk?;
+        body_bytes.extend_from_slice(&chunk);
+    }
+
     // 添加请求体
-    if !body.is_empty() {
-        backend_req = backend_req.body(body.to_vec());
+    if !body_bytes.is_empty() {
+        backend_req = backend_req.body(body_bytes.to_vec());
     }
 
     // 发送请求
