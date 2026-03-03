@@ -5,7 +5,7 @@
 //! 2. 编译 WebIDE
 //! 3. 编译 Rust 二进制 (musl 静态链接)
 //! 4. 收集 migrations
-//! 5. （可选）编译内置依赖 (PostgreSQL, Redis, Nginx)
+//! 5. 编译内置依赖 (PostgreSQL, Redis, Nginx)
 //! 6. 生成 stub 程序源码
 //! 7. 编译 stub 程序 -> 最终超级二进制
 
@@ -28,14 +28,6 @@ pub struct BuildConfig {
     pub skip_rust: bool,
     pub release: bool,
     pub keep_temp: bool,
-    /// 是否构建内置依赖
-    pub bundled_deps: bool,
-    /// 构建 PostgreSQL
-    pub build_postgresql: bool,
-    /// 构建 Redis
-    pub build_redis: bool,
-    /// 构建 Nginx
-    pub build_nginx: bool,
     /// 跳过依赖构建（使用缓存）
     pub skip_deps_build: bool,
 }
@@ -139,18 +131,19 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
     fs::create_dir_all(&templates_dir)?;
     copy_templates(&config.workspace_root, &templates_dir)?;
 
-    // Step 5: 构建内置依赖（可选）
-    let deps_dir = if config.bundled_deps {
+    // Step 5: 构建内置依赖 (PostgreSQL, Redis, Nginx)
+    // GitLab Omnibus 风格：总是打包，运行时选择使用
+    let deps_dir = {
         let deps_work_dir = build_dir.join("deps-work");
         let deps_output_dir = assets_dir.join("deps");
         fs::create_dir_all(&deps_output_dir)?;
 
         if !config.skip_deps_build {
-            info!("Building bundled dependencies...");
+            info!("Building bundled dependencies (PostgreSQL, Redis, Nginx)...");
             let deps_config = deps::DepsConfig {
-                build_postgresql: config.build_postgresql,
-                build_redis: config.build_redis,
-                build_nginx: config.build_nginx,
+                build_postgresql: true,
+                build_redis: true,
+                build_nginx: true,
                 work_dir: deps_work_dir,
                 output_dir: deps_output_dir.clone(),
                 target: config.target.clone(),
@@ -165,8 +158,6 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
         }
 
         Some(deps_output_dir)
-    } else {
-        None
     };
 
     // Step 6: 生成 stub 程序源码

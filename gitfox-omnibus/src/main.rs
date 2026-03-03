@@ -3,7 +3,7 @@
 //! # 用法
 //!
 //! ```bash
-//! # 构建超级二进制
+//! # 构建超级二进制（包含所有内置依赖）
 //! gitfox-omnibus build --output ./gitfox
 //!
 //! # 指定 musl 目标
@@ -12,8 +12,8 @@
 //! # 跳过前端构建（使用已有的 dist）
 //! gitfox-omnibus build --skip-frontend --output ./gitfox
 //!
-//! # 构建包含内置依赖的完整版本 (PostgreSQL, Redis, Nginx)
-//! gitfox-omnibus build --bundled-deps --output ./gitfox
+//! # 使用缓存的内置依赖（跳过重新编译）
+//! gitfox-omnibus build --skip-deps-build --output ./gitfox
 //! ```
 //!
 //! # 生成的超级二进制
@@ -25,9 +25,10 @@
 //! - frontend/dist (Vue SPA)
 //! - webide/dist (VS Code Web)
 //! - migrations/*.sql
-//! - （可选）内置依赖：PostgreSQL, Redis, Nginx
+//! - 内置依赖：PostgreSQL, Redis, Nginx
 //!
 //! 运行时会解压到 data_dir 然后启动各组件。
+//! 用户可以在 gitfox.toml 中选择使用内置服务还是外部服务。
 
 mod build;
 mod deps;
@@ -88,17 +89,7 @@ enum Commands {
         #[arg(long)]
         keep_temp: bool,
 
-        /// 构建并嵌入内置依赖 (PostgreSQL, Redis, Nginx)
-        /// 启用后可在 gitfox.toml 中配置使用内置或外置服务
-        #[arg(long)]
-        bundled_deps: bool,
-
-        /// 只构建指定的内置依赖 (逗号分隔: postgresql,redis,nginx)
-        /// 默认构建全部。仅在 --bundled-deps 时有效
-        #[arg(long, value_delimiter = ',')]
-        deps: Vec<String>,
-
-        /// 跳过内置依赖构建（使用已缓存的）
+        /// 跳过内置依赖构建（使用已缓存的 PostgreSQL/Redis/Nginx）
         #[arg(long)]
         skip_deps_build: bool,
     },
@@ -169,27 +160,12 @@ async fn main() -> Result<()> {
             skip_rust,
             release,
             keep_temp,
-            bundled_deps,
-            deps,
             skip_deps_build,
         } => {
             let workspace = workspace.unwrap_or_else(|| find_workspace_root());
 
-            // 解析要构建的依赖
-            let (build_pg, build_redis, build_nginx) = if bundled_deps {
-                if deps.is_empty() {
-                    // 默认构建全部
-                    (true, true, true)
-                } else {
-                    (
-                        deps.iter().any(|d| d == "postgresql" || d == "pg"),
-                        deps.iter().any(|d| d == "redis"),
-                        deps.iter().any(|d| d == "nginx"),
-                    )
-                }
-            } else {
-                (false, false, false)
-            };
+            // GitLab Omnibus 风格：总是构建所有内置依赖
+            // 用户在运行时通过 gitfox.toml 选择使用内置还是外部服务
 
             let config = build::BuildConfig {
                 workspace_root: workspace,
@@ -200,10 +176,6 @@ async fn main() -> Result<()> {
                 skip_rust,
                 release,
                 keep_temp,
-                bundled_deps,
-                build_postgresql: build_pg,
-                build_redis,
-                build_nginx,
                 skip_deps_build,
             };
 
