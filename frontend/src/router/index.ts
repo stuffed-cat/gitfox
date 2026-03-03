@@ -330,6 +330,21 @@ const routes = [
         component: () => import('@/views/pipelines/JobListView.vue')
       },
       {
+        path: '-/ci/editor',
+        name: 'CiEditor',
+        component: () => import('@/views/pipelines/PipelineEditorView.vue')
+      },
+      {
+        path: '-/pipeline_schedules',
+        name: 'PipelineSchedules',
+        component: () => import('@/views/pipelines/PipelineScheduleView.vue')
+      },
+      {
+        path: '-/artifacts',
+        name: 'Artifacts',
+        component: () => import('@/views/pipelines/ArtifactListView.vue')
+      },
+      {
         path: '-/runners',
         name: 'ProjectRunners',
         component: () => import('@/views/projects/ProjectRunnersView.vue'),

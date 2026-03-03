@@ -23,7 +23,8 @@
     "monaco-editor": "^0.55.1",
     "pinia": "^2.1.7",
     "vue": "^3.4.0",
-    "vue-router": "^4.2.5"
+    "vue-router": "^4.2.5",
+    "yaml": "^2.8.2"
   },
   "devDependencies": {
     "@types/node": "^20.10.5",

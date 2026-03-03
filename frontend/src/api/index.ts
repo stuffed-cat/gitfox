@@ -308,6 +308,18 @@ class ApiClient {
         params: { ref_name: refName }
       })
       return response.data
+    },
+    createFile: async (path: ProjectPath, filePath: string, data: { branch: string; content: string; commit_message: string }): Promise<{ sha: string }> => {
+      const response = await this.client.post(`${this.projectPath(path)}/repository/files/${encodeURIComponent(filePath)}`, data)
+      return response.data
+    },
+    updateFile: async (path: ProjectPath, filePath: string, data: { branch: string; content: string; commit_message: string }): Promise<{ sha: string }> => {
+      const response = await this.client.put(`${this.projectPath(path)}/repository/files/${encodeURIComponent(filePath)}`, data)
+      return response.data
+    },
+    deleteFile: async (path: ProjectPath, filePath: string, params: { branch: string; commit_message: string }): Promise<{ sha: string }> => {
+      const response = await this.client.delete(`${this.projectPath(path)}/repository/files/${encodeURIComponent(filePath)}`, { params })
+      return response.data
     }
   }
 
