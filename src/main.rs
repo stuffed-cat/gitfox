@@ -88,14 +88,16 @@ async fn main() -> std::io::Result<()> {
         let grpc_pool = pg_pool.clone();
         let grpc_addr = config.grpc_address.clone();
         
-        log::info!("Starting GitFox gRPC Auth server on {}", grpc_addr);
+        log::info!("Starting GitFox gRPC server (Auth + LFS) on {}", grpc_addr);
         
         tokio::spawn(async move {
             use tonic::transport::Server;
-            let auth_service = grpc::AuthServiceImpl::new(grpc_pool, grpc_config);
+            let auth_service = grpc::AuthServiceImpl::new(grpc_pool.clone(), grpc_config.clone());
+            let lfs_service = grpc::LfsServiceImpl::new(grpc_pool, grpc_config);
             
             if let Err(e) = Server::builder()
                 .add_service(auth_service.into_service())
+                .add_service(lfs_service.into_service())
                 .serve(grpc_addr.parse().expect("Invalid gRPC address"))
                 .await
             {

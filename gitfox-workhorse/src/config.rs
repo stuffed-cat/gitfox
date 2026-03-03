@@ -72,6 +72,28 @@ pub struct Config {
     /// 内部 API 认证密钥
     #[serde(default = "default_shell_secret")]
     pub shell_secret: String,
+
+    // ============ LFS 配置 ============
+    
+    /// 是否启用 LFS 支持
+    #[serde(default = "default_true")]
+    pub lfs_enabled: bool,
+
+    /// LFS 对象存储路径
+    #[serde(default = "default_lfs_storage_path")]
+    pub lfs_storage_path: PathBuf,
+
+    /// LFS 最大对象大小 (bytes)，默认 5GB
+    #[serde(default = "default_lfs_max_object_size")]
+    pub lfs_max_object_size: u64,
+
+    /// LFS 链接过期时间 (秒)，默认 1 小时
+    #[serde(default = "default_lfs_link_expires")]
+    pub lfs_link_expires: u64,
+
+    /// LFS 外部 URL（用于生成下载/上传链接，默认与 base_url 相同）
+    #[serde(default)]
+    pub lfs_external_url: Option<String>,
 }
 
 fn default_listen_addr() -> String {
@@ -151,6 +173,30 @@ fn default_use_grpc_auth() -> bool {
         .unwrap_or(false)
 }
 
+fn default_lfs_storage_path() -> PathBuf {
+    PathBuf::from(env::var("LFS_STORAGE_PATH").unwrap_or_else(|_| "./lfs-objects".to_string()))
+}
+
+fn default_lfs_max_object_size() -> u64 {
+    // 默认 5GB
+    env::var("LFS_MAX_OBJECT_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5 * 1024 * 1024 * 1024)
+}
+
+fn default_lfs_link_expires() -> u64 {
+    // 默认 1 小时
+    env::var("LFS_LINK_EXPIRES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3600)
+}
+
+fn default_lfs_external_url() -> Option<String> {
+    env::var("LFS_EXTERNAL_URL").ok()
+}
+
 fn default_shell_secret() -> String {
     env::var("GITFOX_SHELL_SECRET")
         .or_else(|_| env::var("GITFOX_API_SECRET"))
@@ -184,6 +230,13 @@ impl Config {
             auth_grpc_address,
             use_grpc_auth,
             shell_secret: default_shell_secret(),
+            
+            // LFS 配置
+            lfs_enabled: default_true(),
+            lfs_storage_path: default_lfs_storage_path(),
+            lfs_max_object_size: default_lfs_max_object_size(),
+            lfs_link_expires: default_lfs_link_expires(),
+            lfs_external_url: default_lfs_external_url(),
         }
     }
 

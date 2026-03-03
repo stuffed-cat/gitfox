@@ -15,6 +15,7 @@ pub mod oauth;
 pub mod two_factor;
 pub mod runner_usage;
 pub mod scope;  // 新增：类型安全的 scope 模块
+pub mod lfs;    // Git LFS 支持
 
 pub use user::*;
 pub use project::*;

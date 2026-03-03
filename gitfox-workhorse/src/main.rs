@@ -2,6 +2,7 @@ mod auth_client;
 mod config;
 mod gitlayer_client;
 mod http_client;
+mod lfs;
 mod proxy;
 mod static_files;
 
@@ -77,15 +78,30 @@ async fn main() -> std::io::Result<()> {
     let webide_dist_data = web::Data::new(config.webide_dist_path.clone());
     let assets_path_data = web::Data::new(config.assets_path.clone());
 
+    // 初始化 LFS 状态
+    let lfs_state = if config.lfs_enabled {
+        tracing::info!("LFS enabled, storage path: {:?}", config.lfs_storage_path);
+        let state = lfs::LfsState::new(std::sync::Arc::new(config.clone()));
+        if let Err(e) = state.init().await {
+            tracing::error!("Failed to initialize LFS storage: {}", e);
+            std::process::exit(1);
+        }
+        Some(web::Data::new(state))
+    } else {
+        tracing::info!("LFS disabled");
+        None
+    };
+
     let listen_addr = config.listen_addr.clone();
     let listen_port = config.listen_port;
     let max_upload_size = config.max_upload_size;
+    let lfs_max_upload_size = config.lfs_max_object_size as usize;
 
     tracing::info!("Max upload size: {} bytes ({:.2} MB)", max_upload_size, max_upload_size as f64 / 1024.0 / 1024.0);
 
     // 启动 HTTP 服务器
     HttpServer::new(move || {
-        App::new()
+        let mut app = App::new()
             .app_data(client_data.clone())
             .app_data(backend_url_data.clone())
             .app_data(backend_socket_data.clone())
@@ -152,34 +168,79 @@ async fn main() -> std::io::Result<()> {
             // 使用 web::route() 匹配所有 HTTP 方法，与 vite proxy 行为一致
             .route("/oauth/token", web::route().to(proxy::proxy_to_backend))
             .route("/oauth/revoke", web::route().to(proxy::proxy_to_backend))
-            .route("/oauth/userinfo", web::route().to(proxy::proxy_to_backend))
+            .route("/oauth/userinfo", web::route().to(proxy::proxy_to_backend));
             
-            // Git HTTP 协议代理
-            // 匹配 /namespace/project.git/* 路径
-            .service(
-                web::resource(r#"/{namespace}/{project:.*\.git.*}"#)
-                    // Git push 操作需要更大的上传限制
-                    .app_data(web::PayloadConfig::new(max_upload_size))
-                    .route(web::route().to(proxy::proxy_git_http))
-            )
+        // 添加 LFS 路由（如果启用）
+        // LFS 路由必须在 Git HTTP 代理之前，因为它们匹配更具体的路径
+        if let Some(ref lfs_data) = lfs_state {
+            app = app
+                .app_data(lfs_data.clone())
+                // LFS Batch API
+                .route(
+                    "/{namespace}/{project}.git/info/lfs/objects/batch",
+                    web::post().to(lfs::handle_batch)
+                )
+                // LFS 对象验证
+                .route(
+                    "/{namespace}/{project}.git/info/lfs/objects/verify",
+                    web::post().to(lfs::handle_verify)
+                )
+                // LFS 对象下载
+                .route(
+                    "/{namespace}/{project}.git/info/lfs/objects/{oid}",
+                    web::get().to(lfs::handle_download)
+                )
+                // LFS 对象上传
+                .service(
+                    web::resource("/{namespace}/{project}.git/info/lfs/objects/{oid}")
+                        .app_data(web::PayloadConfig::new(lfs_max_upload_size))
+                        .route(web::put().to(lfs::handle_upload))
+                )
+                // LFS 锁 API
+                .route(
+                    "/{namespace}/{project}.git/info/lfs/locks",
+                    web::post().to(lfs::handle_create_lock)
+                )
+                .route(
+                    "/{namespace}/{project}.git/info/lfs/locks",
+                    web::get().to(lfs::handle_list_locks)
+                )
+                .route(
+                    "/{namespace}/{project}.git/info/lfs/locks/verify",
+                    web::post().to(lfs::handle_verify_locks)
+                )
+                .route(
+                    "/{namespace}/{project}.git/info/lfs/locks/{id}/unlock",
+                    web::post().to(lfs::handle_delete_lock)
+                );
+        }
             
-            // 前端 SPA 文件服务
-            // 必须放在最后作为 catch-all 路由，匹配所有未被上面路由处理的请求
-            // default_handler 用于处理前端路由（如 /projects）- 返回 index.html 让前端路由接管
-            .service(
-                Files::new("/", frontend_dist_data.get_ref().clone())
-                    .index_file("index.html")
-                    .use_last_modified(true)
-                    .use_etag(true)
-                    .prefer_utf8(true)
-                    .default_handler({
-                        let frontend_dist = frontend_dist_data.clone();
-                        web::to(move |req: HttpRequest| {
-                            let dist = frontend_dist.clone();
-                            async move { static_files::serve_spa_index(req, dist).await }
-                        })
+        // Git HTTP 协议代理
+        // 匹配 /namespace/project.git/* 路径
+        app = app.service(
+            web::resource(r#"/{namespace}/{project:.*\.git.*}"#)
+                // Git push 操作需要更大的上传限制
+                .app_data(web::PayloadConfig::new(max_upload_size))
+                .route(web::route().to(proxy::proxy_git_http))
+        );
+            
+        // 前端 SPA 文件服务
+        // 必须放在最后作为 catch-all 路由，匹配所有未被上面路由处理的请求
+        // default_handler 用于处理前端路由（如 /projects）- 返回 index.html 让前端路由接管
+        app.service(
+            Files::new("/", frontend_dist_data.get_ref().clone())
+                .index_file("index.html")
+                .use_last_modified(true)
+                .use_etag(true)
+                .prefer_utf8(true)
+                .default_handler({
+                    let frontend_dist = frontend_dist_data.clone();
+                    web::to(move |req: HttpRequest| {
+                        let dist = frontend_dist.clone();
+                        async move { static_files::serve_spa_index(req, dist).await }
                     })
-            )
+                })
+        )
     })
     .bind((listen_addr.as_str(), listen_port))?
     .workers(num_cpus::get())

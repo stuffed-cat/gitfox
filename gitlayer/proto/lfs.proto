@@ -1,0 +1,203 @@
+syntax = "proto3";
+
+package gitfox.lfs;
+
+option go_package = "gitfox/lfs;lfs";
+
+// LfsService - Git LFS 服务接口
+// 由主应用(devops)实现，Workhorse作为客户端调用
+service LfsService {
+    // BatchObjects - 批量检查/创建 LFS 对象（核心 Batch API）
+    rpc BatchObjects(BatchObjectsRequest) returns (BatchObjectsResponse);
+    
+    // VerifyObject - 验证上传完成的对象
+    rpc VerifyObject(VerifyObjectRequest) returns (VerifyObjectResponse);
+    
+    // GetObject - 获取单个 LFS 对象信息
+    rpc GetObject(GetObjectRequest) returns (GetObjectResponse);
+    
+    // CreateLock - 创建文件锁
+    rpc CreateLock(CreateLockRequest) returns (CreateLockResponse);
+    
+    // ListLocks - 列出文件锁
+    rpc ListLocks(ListLocksRequest) returns (ListLocksResponse);
+    
+    // DeleteLock - 删除文件锁
+    rpc DeleteLock(DeleteLockRequest) returns (DeleteLockResponse);
+    
+    // VerifyLocks - 验证锁状态
+    rpc VerifyLocks(VerifyLocksRequest) returns (VerifyLocksResponse);
+}
+
+// LFS 对象标识
+message LfsObjectId {
+    // OID (SHA-256 hash)
+    string oid = 1;
+    // 文件大小
+    int64 size = 2;
+}
+
+// Batch 操作类型
+enum BatchOperation {
+    BATCH_OPERATION_UNSPECIFIED = 0;
+    BATCH_OPERATION_DOWNLOAD = 1;
+    BATCH_OPERATION_UPLOAD = 2;
+}
+
+// Batch 请求
+message BatchObjectsRequest {
+    // 项目 ID
+    int64 project_id = 1;
+    // 用户 ID（用于权限检查）
+    int64 user_id = 2;
+    // 操作类型：download 或 upload
+    BatchOperation operation = 3;
+    // 请求的对象列表
+    repeated LfsObjectId objects = 4;
+    // 可选的 ref 名称
+    string ref = 5;
+}
+
+// 对象动作
+message LfsAction {
+    // 下载/上传 URL
+    string href = 1;
+    // HTTP 头
+    map<string, string> header = 2;
+    // 链接过期时间（秒）
+    int64 expires_in = 3;
+}
+
+// 对象错误
+message LfsObjectError {
+    int32 code = 1;
+    string message = 2;
+}
+
+// Batch 响应中的对象
+message BatchObject {
+    // OID
+    string oid = 1;
+    // 大小
+    int64 size = 2;
+    // 是否已认证
+    bool authenticated = 3;
+    // 可用动作（download/upload/verify）
+    map<string, LfsAction> actions = 4;
+    // 错误信息
+    LfsObjectError error = 5;
+}
+
+// Batch 响应
+message BatchObjectsResponse {
+    // transfer 类型，默认 "basic"
+    string transfer = 1;
+    // 对象列表
+    repeated BatchObject objects = 2;
+    // 错误消息（全局错误）
+    string message = 3;
+}
+
+// 验证对象请求
+message VerifyObjectRequest {
+    int64 project_id = 1;
+    int64 user_id = 2;
+    string oid = 3;
+    int64 size = 4;
+}
+
+// 验证对象响应
+message VerifyObjectResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// 获取对象请求
+message GetObjectRequest {
+    int64 project_id = 1;
+    string oid = 2;
+}
+
+// 获取对象响应
+message GetObjectResponse {
+    bool found = 1;
+    string oid = 2;
+    int64 size = 3;
+    string storage_path = 4;
+}
+
+// 文件锁
+message LfsLock {
+    string id = 1;
+    string path = 2;
+    LfsLockOwner owner = 3;
+    string locked_at = 4;  // ISO 8601 格式
+}
+
+message LfsLockOwner {
+    string name = 1;
+}
+
+// 创建锁请求
+message CreateLockRequest {
+    int64 project_id = 1;
+    int64 user_id = 2;
+    string username = 3;
+    string path = 4;
+    string ref = 5;
+}
+
+// 创建锁响应
+message CreateLockResponse {
+    bool success = 1;
+    LfsLock lock = 2;
+    string message = 3;
+}
+
+// 列出锁请求
+message ListLocksRequest {
+    int64 project_id = 1;
+    string path = 2;       // 可选：按路径过滤
+    string id = 3;         // 可选：按 ID 过滤
+    string cursor = 4;     // 分页游标
+    int32 limit = 5;       // 每页数量
+    string ref = 6;
+}
+
+// 列出锁响应
+message ListLocksResponse {
+    repeated LfsLock locks = 1;
+    string next_cursor = 2;
+}
+
+// 删除锁请求
+message DeleteLockRequest {
+    int64 project_id = 1;
+    int64 user_id = 2;
+    string id = 3;         // 锁 ID
+    bool force = 4;        // 强制解锁（即使不是所有者）
+    string ref = 5;
+}
+
+// 删除锁响应
+message DeleteLockResponse {
+    bool success = 1;
+    LfsLock lock = 2;      // 被删除的锁
+    string message = 3;
+}
+
+// 验证锁请求
+message VerifyLocksRequest {
+    int64 project_id = 1;
+    int64 user_id = 2;
+    string cursor = 3;
+    int32 limit = 4;
+    string ref = 5;
+}
+
+// 验证锁响应
+message VerifyLocksResponse {
+    repeated LfsLock ours = 1;    // 当前用户持有的锁
+    repeated LfsLock theirs = 2;  // 其他用户持有的锁
+    string next_cursor = 3;
+}

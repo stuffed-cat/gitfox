@@ -11,6 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "../gitlayer/proto/operations.proto",
         "../gitlayer/proto/health.proto",
         "../gitlayer/proto/auth.proto",
+        "../gitlayer/proto/lfs.proto",
     ];
     
     // Only compile if proto files exist

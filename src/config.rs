@@ -190,6 +190,8 @@ pub struct Config {
     pub grpc_address: String,
     /// GitLayer gRPC address (for passing to clients)
     pub gitlayer_address: Option<String>,
+    /// LFS link expiration time in seconds (default: 3600 = 1 hour)
+    pub lfs_link_expires: Option<i64>,
 }
 
 impl Config {
@@ -305,6 +307,9 @@ impl Config {
             grpc_address: env::var("GRPC_ADDRESS")
                 .unwrap_or_else(|_| "[::1]:50051".to_string()),
             gitlayer_address: env::var("GITLAYER_ADDRESS").ok(),
+            lfs_link_expires: env::var("LFS_LINK_EXPIRES")
+                .ok()
+                .and_then(|s| s.parse().ok()),
         }
     }
 }
