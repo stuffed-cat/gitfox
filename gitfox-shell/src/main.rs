@@ -194,7 +194,6 @@ async fn run_session(key_id: &str) -> Result<(), ShellError> {
     let mut config = config;
     if let Some(addr) = gitlayer_addr {
         config.gitlayer_address = Some(addr);
-        config.use_gitlayer = true;
     }
 
     // Build the full repository path

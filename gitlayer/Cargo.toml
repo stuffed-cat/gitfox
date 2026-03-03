@@ -39,5 +39,17 @@ dotenv = "0.15"
 [build-dependencies]
 tonic-build = "0.12"
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+tempfile = "3"
+
+[[bench]]
+name = "smarthttp_bench"
+harness = false
+
+[lib]
+name = "gitlayer"
+path = "src/lib.rs"
+
 [features]
 default = []

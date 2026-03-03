@@ -28,11 +28,9 @@ pub struct Config {
     /// Enable debug logging
     pub debug: bool,
 
-    /// GitLayer gRPC server address (if using GitLayer instead of direct git)
+    /// GitLayer gRPC server address (必需，用于处理所有 Git 操作)
+    /// 可以从环境变量 GITLAYER_ADDRESS 配置，或从 auth 响应中获取
     pub gitlayer_address: Option<String>,
-
-    /// Whether to use GitLayer for Git operations (fallback to direct git if unavailable)
-    pub use_gitlayer: bool,
 
     /// Auth gRPC server address (主应用的 gRPC 地址，用于权限认证)
     pub auth_grpc_address: Option<String>,
@@ -75,10 +73,6 @@ impl Config {
 
         let gitlayer_address = env::var("GITLAYER_ADDRESS").ok();
 
-        let use_gitlayer = env::var("GITFOX_USE_GITLAYER")
-            .map(|v| v == "1" || v.to_lowercase() == "true")
-            .unwrap_or(gitlayer_address.is_some());
-
         let auth_grpc_address = env::var("AUTH_GRPC_ADDRESS")
             .or_else(|_| env::var("GITFOX_AUTH_GRPC_ADDRESS"))
             .ok();
@@ -96,7 +90,6 @@ impl Config {
             api_timeout_secs,
             debug,
             gitlayer_address,
-            use_gitlayer,
             auth_grpc_address,
             use_grpc_auth,
         })
@@ -154,6 +147,9 @@ mod tests {
             git_receive_pack_path: "git-receive-pack".to_string(),
             api_timeout_secs: 30,
             debug: false,
+            gitlayer_address: Some("http://localhost:50052".to_string()),
+            auth_grpc_address: None,
+            use_grpc_auth: false,
         };
 
         assert_eq!(
@@ -180,6 +176,9 @@ mod tests {
             git_receive_pack_path: "git-receive-pack".to_string(),
             api_timeout_secs: 30,
             debug: false,
+            gitlayer_address: Some("http://localhost:50052".to_string()),
+            auth_grpc_address: None,
+            use_grpc_auth: false,
         };
 
         assert_eq!(

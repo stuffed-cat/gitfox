@@ -85,8 +85,7 @@ SSH_HOST_KEY_PATH=/var/lib/gitfox/ssh_host_key
 GITFOX_USE_GRPC_AUTH=true
 AUTH_GRPC_ADDRESS=http://[::1]:50051
 
-# GitLayer 服务
-GITFOX_USE_GITLAYER=true
+# GitLayer 服务 (必需)
 GITLAYER_ADDRESS=http://[::1]:50052
 ```
 

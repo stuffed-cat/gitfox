@@ -382,23 +382,20 @@ impl SshHandler {
         // Build repository path
         let repo_path = config.repo_path(&git_command.repo_path);
         
-        // Use GitLayer if configured
-        if config.use_gitlayer {
-            let gitlayer_addr = access_info.gitlayer_address.as_ref()
-                .or(config.gitlayer_address.as_ref())
-                .ok_or_else(|| ShellError::Config("GitLayer address not configured".to_string()))?;
-            
-            return self.execute_via_gitlayer(
-                channel,
-                session,
-                git_command,
-                gitlayer_addr,
-                &repo_path,
-            ).await;
-        }
+        // GitLayer is required for all Git operations
+        let gitlayer_addr = access_info.gitlayer_address.as_ref()
+            .or(config.gitlayer_address.as_ref())
+            .ok_or_else(|| ShellError::Config(
+                "GITLAYER_ADDRESS not configured. GitLayer is required for all Git operations.".to_string()
+            ))?;
         
-        // Direct git execution (fallback)
-        self.execute_git_directly(channel, session, git_command, &repo_path).await
+        self.execute_via_gitlayer(
+            channel,
+            session,
+            git_command,
+            gitlayer_addr,
+            &repo_path,
+        ).await
     }
 
     /// Execute git via GitLayer gRPC

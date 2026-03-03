@@ -157,7 +157,7 @@ sudo chmod 755 /usr/local/bin/gitfox-shell*
 ```env
 GITFOX_USE_GRPC_AUTH=true
 AUTH_GRPC_ADDRESS=http://[::1]:50051
-GITFOX_USE_GITLAYER=true
+# GitLayer 是必需的
 GITLAYER_ADDRESS=http://[::1]:50052
 GITFOX_REPOS_PATH=/var/lib/gitfox/repos
 ```
@@ -232,20 +232,10 @@ git clone git@localhost:user/repo.git
 
 ## 常见问题
 
-### Q: 旧的 SSH 端口 2222 怎么办？
-
-新架构使用标准 sshd (端口 22)。如果需要保持 2222 端口，可以配置 sshd 监听多个端口：
-
-```
-# /etc/ssh/sshd_config
-Port 22
-Port 2222
-```
-
 ### Q: 可以同时运行新旧版本吗？
 
 不推荐。两个版本可能会冲突（数据库、仓库锁等）。
 
 ### Q: GitLayer 是可选的吗？
 
-GitLayer 是新架构的核心组件。虽然可以配置 fallback 到直接 Git 操作，但强烈建议使用 GitLayer 以获得更好的性能和可扩展性。
+GitLayer 是新架构的核心组件, 对于配置 fallback 到直接 Git 操作的兼容性路径已经被完全移除。主应用并不知道如何处理 Git Smart HTTP 请求和git ssh 操作。因此，GitLayer 是必需的。

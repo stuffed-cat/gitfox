@@ -177,8 +177,7 @@ let response = client.handle_ssh_session(request).await?;
 
 **环境变量**:
 - `GITFOX_SHELL_LISTEN_ADDR`: SSH 监听地址（默认 `0.0.0.0:2222`）
-- `GITFOX_USE_GITLAYER=true`: 强制使用 GitLayer
-- `GITLAYER_ADDRESS`: GitLayer 地址（如 `http://[::1]:50052`）
+- `GITLAYER_ADDRESS`: GitLayer 地址（必需，如 `http://[::1]:50052`）
 
 ### 5. Runner - [gitfox-runner/](gitfox-runner/)
 
@@ -205,14 +204,27 @@ let response = client.handle_ssh_session(request).await?;
 ```bash
 cd gitfox-omnibus
 cargo run --release -- build --output ./gitfox
+
+# 跳过依赖构建（使用缓存）
+cargo run --release -- build --skip-deps-build --output ./gitfox
+
+# 清理构建产物（保留依赖缓存）
+cargo run -- clean
 ```
 
 **内部步骤**:
 1. `npm run build` (frontend + webide)
-2. `cargo build --release` (devops + workhorse + shell + gitlayer)
+2. `cargo build --release --target x86_64-unknown-linux-musl` (devops + workhorse + shell + gitlayer)
 3. 收集 `migrations/*.sql`
-4. 嵌入资源到 stub 程序（使用 `rust-embed`）
-5. 编译 stub → 最终超级二进制
+4. 构建内置依赖 (PostgreSQL, Redis, Nginx) - 首次构建或使用缓存
+5. 嵌入资源到 stub 程序（使用 `rust-embed`）
+6. 编译 stub → 最终超级二进制
+
+**依赖缓存**:
+- 位置: `gitfox-omnibus/.build/deps-work/`
+- 包含: PostgreSQL, Redis, Nginx, zlib, readline, openssl, icu 源码和编译产物
+- 策略: 永久保留，使用 `use_cache: true` 自动复用
+- 手动清理: `rm -rf gitfox-omnibus/.build/deps-work`
 
 **运行时**:
 ```bash

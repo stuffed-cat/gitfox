@@ -9,7 +9,6 @@ pub mod tag;
 pub mod merge_request;
 pub mod pipeline;
 pub mod webhook;
-pub mod git_http;
 pub mod namespace;
 pub mod ssh_key;
 pub mod internal;
@@ -130,9 +129,6 @@ pub async fn get_server_config(
 }
 
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    // Git HTTP Smart Protocol routes (must be before API routes)
-    git_http::configure_git_routes(cfg);
-    
     // Internal API routes for GitFox Shell
     internal::configure_internal_routes(cfg);
     

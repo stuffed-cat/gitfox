@@ -732,3 +732,66 @@ export interface WebAuthnAuthFinishRequest {
   state_key: string
   credential: any // PublicKeyCredential
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Package Registry Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type PackageType = 'docker' | 'npm' | 'maven' | 'pypi' | 'generic'
+export type PackageStatus = 'default' | 'hidden' | 'pending_destruction'
+
+export interface Package {
+  id: number
+  project_id: number
+  name: string
+  version: string
+  package_type: PackageType
+  status: PackageStatus
+  size?: number
+  created_at: string
+  updated_at?: string
+  created_by_id?: number
+  created_by?: {
+    id: number
+    username: string
+    avatar_url?: string
+  }
+}
+
+export interface PackageFile {
+  id: number
+  package_id: number
+  file_name: string
+  size: number
+  file_sha256?: string
+  file_sha512?: string
+  created_at: string
+  download_url?: string
+}
+
+export interface DockerManifest {
+  id: number
+  package_id: number
+  digest: string
+  media_type: string
+  schema_version: number
+  total_size: number
+  created_at: string
+  config_digest?: string
+  architecture?: string
+  os?: string
+}
+
+export interface NpmPackageMetadata {
+  id: number
+  package_id: number
+  description?: string
+  license?: string
+  homepage?: string
+  repository?: string
+  keywords?: string[]
+  author?: string
+  dependencies?: Record<string, string>
+  dev_dependencies?: Record<string, string>
+  peer_dependencies?: Record<string, string>
+}

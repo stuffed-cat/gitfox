@@ -53,13 +53,10 @@ pub struct Config {
     #[serde(default = "default_static_cache_control")]
     pub static_cache_control: String,
 
-    /// GitLayer gRPC 服务地址（用于直接处理 Git 操作）
-    #[serde(default)]
+    /// GitLayer gRPC 服务地址（必需，用于处理所有 Git 操作）
+    /// 如果未配置，Git HTTP 请求将返回错误
+    #[serde(default = "default_gitlayer_address")]
     pub gitlayer_address: Option<String>,
-
-    /// 是否使用 GitLayer 处理 Git HTTP 请求
-    #[serde(default)]
-    pub use_gitlayer: bool,
 
     /// Auth gRPC 服务地址（主应用的 gRPC 地址，用于权限认证）
     #[serde(default)]
@@ -94,6 +91,44 @@ pub struct Config {
     /// LFS 外部 URL（用于生成下载/上传链接，默认与 base_url 相同）
     #[serde(default)]
     pub lfs_external_url: Option<String>,
+
+    // ============ Registry 配置 ============
+    
+    /// 是否启用 Package Registry
+    #[serde(default = "default_true")]
+    pub registry_enabled: bool,
+
+    /// Registry 独立域名（如 registry.gitfox.studio）
+    /// 为空则使用主域名的 /v2/ 和 /npm/ 路径
+    #[serde(default)]
+    pub registry_domain: Option<String>,
+
+    /// 是否启用 Docker Registry
+    #[serde(default = "default_true")]
+    pub registry_docker_enabled: bool,
+
+    /// 是否启用 npm Registry
+    #[serde(default = "default_true")]
+    pub registry_npm_enabled: bool,
+
+    /// Registry 存储路径
+    #[serde(default = "default_registry_storage_path")]
+    pub registry_storage_path: PathBuf,
+
+    /// Registry 最大包大小 (bytes)，默认 512MB
+    #[serde(default = "default_registry_max_size")]
+    pub registry_max_size: u64,
+}
+
+fn default_registry_storage_path() -> PathBuf {
+    PathBuf::from(env::var("REGISTRY_STORAGE_PATH").unwrap_or_else(|_| "./packages".to_string()))
+}
+
+fn default_registry_max_size() -> u64 {
+    env::var("REGISTRY_MAX_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(512 * 1024 * 1024) // 512MB
 }
 
 fn default_listen_addr() -> String {
@@ -132,11 +167,12 @@ fn default_true() -> bool {
 }
 
 fn default_max_upload_size() -> usize {
-    // 默认 500MB (Git push 操作可能需要较大的限制)
+    // 默认 10GB (支持大型 Git 仓库 push 操作，如 ICU 4.28GB)
+    // 注意：这是单次请求的最大大小，流式传输不会一次性加载到内存
     env::var("WORKHORSE_MAX_UPLOAD_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(500 * 1024 * 1024)
+        .unwrap_or(10 * 1024 * 1024 * 1024)
 }
 
 fn default_websocket_timeout() -> u64 {
@@ -153,12 +189,6 @@ fn default_static_cache_control() -> String {
 
 fn default_gitlayer_address() -> Option<String> {
     env::var("GITLAYER_ADDRESS").ok()
-}
-
-fn default_use_gitlayer() -> bool {
-    env::var("WORKHORSE_USE_GITLAYER")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false)
 }
 
 fn default_auth_grpc_address() -> Option<String> {
@@ -207,7 +237,6 @@ impl Config {
     /// 从环境变量加载配置
     pub fn from_env() -> Self {
         let gitlayer_address = default_gitlayer_address();
-        let use_gitlayer = default_use_gitlayer() || gitlayer_address.is_some();
         let auth_grpc_address = default_auth_grpc_address();
         let use_grpc_auth = default_use_grpc_auth() || auth_grpc_address.is_some();
         
@@ -226,7 +255,6 @@ impl Config {
             websocket_timeout: default_websocket_timeout(),
             static_cache_control: default_static_cache_control(),
             gitlayer_address,
-            use_gitlayer,
             auth_grpc_address,
             use_grpc_auth,
             shell_secret: default_shell_secret(),
@@ -237,6 +265,20 @@ impl Config {
             lfs_max_object_size: default_lfs_max_object_size(),
             lfs_link_expires: default_lfs_link_expires(),
             lfs_external_url: default_lfs_external_url(),
+            
+            // Registry 配置
+            registry_enabled: env::var("REGISTRY_ENABLED")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true),
+            registry_domain: env::var("REGISTRY_DOMAIN").ok().filter(|s| !s.is_empty()),
+            registry_docker_enabled: env::var("REGISTRY_DOCKER_ENABLED")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true),
+            registry_npm_enabled: env::var("REGISTRY_NPM_ENABLED")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true),
+            registry_storage_path: default_registry_storage_path(),
+            registry_max_size: default_registry_max_size(),
         }
     }
 

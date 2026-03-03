@@ -13,14 +13,11 @@ backend_url = "{{BACKEND_URL}}"
 # Auth gRPC 服务地址（主应用提供的认证服务）
 # auth_grpc_address = "http://[::1]:50051"
 
-# GitLayer gRPC 服务地址（Git 操作服务）
+# GitLayer gRPC 服务地址（Git 操作服务，必需）
 # gitlayer_address = "http://[::1]:50052"
 
 # 是否使用 gRPC 进行权限认证（推荐启用）
 # use_grpc_auth = true
-
-# 是否使用 GitLayer 处理 Git HTTP 请求
-# use_gitlayer = true
 
 # 静态文件路径
 frontend_dist_path = "{{FRONTEND_DIST_PATH}}"
@@ -43,3 +40,27 @@ websocket_timeout = 3600
 
 # 静态文件缓存控制头
 static_cache_control = "public, max-age=31536000, immutable"
+
+# ============================================
+# Package Registry 配置
+# ============================================
+# 类似 GitLab Package Registry，支持 Docker 和 npm
+
+# 是否启用 Package Registry
+registry_enabled = false
+
+# Registry 独立域名（如 registry.gitfox.studio）
+# 为空则使用主域名的 /v2/ 和 /npm/ 路径
+# registry_domain = "registry.gitfox.studio"
+
+# 是否启用 Docker Registry
+registry_docker_enabled = true
+
+# 是否启用 npm Registry  
+registry_npm_enabled = true
+
+# Registry 存储路径
+registry_storage_path = "{{REGISTRY_STORAGE_PATH}}"
+
+# 最大包文件大小 (bytes)，默认 512MB
+registry_max_size = 536870912

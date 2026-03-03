@@ -351,6 +351,18 @@ const routes = [
         meta: { requiresAuth: true }
       },
       {
+        path: '-/packages',
+        name: 'Packages',
+        component: () => import('@/views/packages/PackageListView.vue'),
+        meta: { requiresAuth: false }
+      },
+      {
+        path: '-/packages/:packageId',
+        name: 'PackageDetail',
+        component: () => import('@/views/packages/PackageDetailView.vue'),
+        meta: { requiresAuth: false }
+      },
+      {
         path: '-/settings',
         name: 'ProjectSettings',
         component: () => import('@/views/projects/ProjectSettingsView.vue')

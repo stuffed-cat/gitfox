@@ -124,6 +124,38 @@ ssh_host_key = "{{SSH_HOST_KEY_PATH}}"
 shell_path = "{{GITFOX_SHELL_PATH}}"
 
 # ════════════════════════════════════════════════════════════════════════════
+# 包注册表（Package Registry）
+# ════════════════════════════════════════════════════════════════════════════
+# 类似 GitLab Package Registry，支持 Docker 和 npm 包管理
+
+[registry]
+# 是否启用包注册表
+enabled = true
+
+# Registry 独立域名（必填）
+# 示例: registry.gitfox.studio
+# 用户通过此域名访问 Registry:
+# - Docker: docker pull registry.gitfox.studio/namespace/project/image:tag
+# - npm: npm install @namespace/package --registry=https://registry.gitfox.studio/npm/
+domain = "{{REGISTRY_DOMAIN}}"
+
+# 是否启用 Docker Registry
+docker_enabled = true
+
+# 是否启用 npm Registry
+npm_enabled = true
+
+# 包存储目录
+storage_path = "{{REGISTRY_STORAGE_PATH}}"
+
+# 最大包文件大小 (字节)
+# 推荐值：
+# - Docker 镜像：2147483648 (2GB)
+# - npm 包：52428800 (50MB)
+# 此处设置为统一最大值
+max_package_size = 536870912  # 512MB
+
+# ════════════════════════════════════════════════════════════════════════════
 # 初始管理员（仅首次启动时创建，之后可删除此段）
 # ════════════════════════════════════════════════════════════════════════════
 

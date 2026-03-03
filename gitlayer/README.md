@@ -92,15 +92,14 @@ export GITLAYER_STORAGE_PATH=/var/opt/gitfox/repos
 ### gitfox-shell
 
 ```env
-GITFOX_USE_GITLAYER=true
+# GitLayer 是必需的
 GITLAYER_ADDRESS=http://[::1]:50052
 ```
 
 ### gitfox-workhorse
 
 ```toml
-[grpc]
-use_gitlayer = true
+# GitLayer 是必需的
 gitlayer_address = "http://[::1]:50052"
 ```
 

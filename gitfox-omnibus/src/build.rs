@@ -27,7 +27,6 @@ pub struct BuildConfig {
     pub skip_webide: bool,
     pub skip_rust: bool,
     pub release: bool,
-    pub keep_temp: bool,
     /// 跳过依赖构建（使用缓存）
     pub skip_deps_build: bool,
 }
@@ -186,13 +185,8 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
     info!("Size: {} bytes ({:.2} MB)", size, size as f64 / 1024.0 / 1024.0);
     info!("SHA256: {}", hash);
 
-    // 清理或保留构建目录
-    if config.keep_temp {
-        info!("Build files kept at: {}", build_dir.display());
-    } else {
-        info!("Cleaning up build directory...");
-        fs::remove_dir_all(&build_dir)?;
-    }
+    // 保留构建目录作为缓存（依赖源码和编译产物）
+    info!("Build files kept at: {} (for dependency cache)", build_dir.display());
 
     Ok(())
 }

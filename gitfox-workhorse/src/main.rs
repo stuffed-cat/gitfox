@@ -1,9 +1,11 @@
 mod auth_client;
 mod config;
+mod git_http;
 mod gitlayer_client;
 mod http_client;
 mod lfs;
 mod proxy;
+mod registry;
 mod static_files;
 
 use actix_cors::Cors;
@@ -72,6 +74,7 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Assets path: {:?}", config.assets_path);
 
     let client_data = web::Data::new(backend_client);
+    let config_data = web::Data::new(config.clone());
     let backend_url_data = web::Data::new(config.backend_url.clone());
     let backend_socket_data = web::Data::new(config.backend_socket.clone());
     let frontend_dist_data = web::Data::new(config.frontend_dist_path.clone());
@@ -92,10 +95,71 @@ async fn main() -> std::io::Result<()> {
         None
     };
 
+    // 初始化 Registry 状态
+    let registry_config = std::sync::Arc::new(registry::RegistryConfig {
+        enabled: config.registry_enabled,
+        domain: config.registry_domain.clone(),
+        docker_enabled: config.registry_docker_enabled,
+        npm_enabled: config.registry_npm_enabled,
+        storage_path: config.registry_storage_path.clone(),
+        max_package_size: config.registry_max_size,
+        token_expires: 3600,
+    });
+    
+    let (docker_registry_state, npm_registry_state) = if config.registry_enabled {
+        tracing::info!("Package Registry enabled");
+        if let Some(ref domain) = config.registry_domain {
+            tracing::info!("Registry domain: {}", domain);
+        }
+        tracing::info!("Registry storage path: {:?}", config.registry_storage_path);
+        
+        let docker_state = if config.registry_docker_enabled {
+            tracing::info!("Docker Registry enabled");
+            let state = registry::DockerRegistryState::new(
+                registry_config.clone(),
+                config.shell_secret.clone(),
+            );
+            if let Err(e) = state.init().await {
+                tracing::error!("Failed to initialize Docker Registry storage: {}", e);
+                std::process::exit(1);
+            }
+            Some(web::Data::new(state))
+        } else {
+            None
+        };
+        
+        let npm_state = if config.registry_npm_enabled {
+            tracing::info!("npm Registry enabled");
+            let base_url = if let Some(ref domain) = config.registry_domain {
+                format!("https://{}", domain)
+            } else {
+                config.backend_url.clone()
+            };
+            let state = registry::NpmRegistryState::new(
+                registry_config.clone(),
+                config.shell_secret.clone(),
+                base_url,
+            );
+            if let Err(e) = state.init().await {
+                tracing::error!("Failed to initialize npm Registry storage: {}", e);
+                std::process::exit(1);
+            }
+            Some(web::Data::new(state))
+        } else {
+            None
+        };
+        
+        (docker_state, npm_state)
+    } else {
+        tracing::info!("Package Registry disabled");
+        (None, None)
+    };
+
     let listen_addr = config.listen_addr.clone();
     let listen_port = config.listen_port;
     let max_upload_size = config.max_upload_size;
     let lfs_max_upload_size = config.lfs_max_object_size as usize;
+    let registry_max_upload_size = config.registry_max_size as usize;
 
     tracing::info!("Max upload size: {} bytes ({:.2} MB)", max_upload_size, max_upload_size as f64 / 1024.0 / 1024.0);
 
@@ -214,15 +278,110 @@ async fn main() -> std::io::Result<()> {
                     web::post().to(lfs::handle_delete_lock)
                 );
         }
+        
+        // 添加 Docker Registry 路由（如果启用）
+        if let Some(ref docker_data) = docker_registry_state {
+            app = app
+                .app_data(docker_data.clone())
+                // Docker Registry V2 API
+                .route("/v2/", web::get().to(registry::handle_v2_check))
+                .route("/v2", web::get().to(registry::handle_v2_check))
+                .route("/v2/auth", web::get().to(registry::handle_token_auth))
+                .route("/v2/_catalog", web::get().to(registry::handle_catalog))
+                // Blob 操作
+                .route("/v2/{name:.*}/blobs/{digest}", web::head().to(registry::handle_blob_head))
+                .route("/v2/{name:.*}/blobs/{digest}", web::get().to(registry::handle_blob_get))
+                .route("/v2/{name:.*}/blobs/{digest}", web::delete().to(registry::handle_blob_delete))
+                // Blob 上传
+                .service(
+                    web::resource("/v2/{name:.*}/blobs/uploads/")
+                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                        .route(web::post().to(registry::handle_blob_upload_start))
+                )
+                .service(
+                    web::resource("/v2/{name:.*}/blobs/uploads/{uuid}")
+                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                        .route(web::patch().to(registry::handle_blob_upload_patch))
+                        .route(web::put().to(registry::handle_blob_upload_put))
+                        .route(web::delete().to(registry::handle_blob_upload_delete))
+                )
+                // Manifest 操作
+                .route("/v2/{name:.*}/manifests/{reference}", web::head().to(registry::handle_manifest_head))
+                .route("/v2/{name:.*}/manifests/{reference}", web::get().to(registry::handle_manifest_get))
+                .service(
+                    web::resource("/v2/{name:.*}/manifests/{reference}")
+                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                        .route(web::put().to(registry::handle_manifest_put))
+                        .route(web::delete().to(registry::handle_manifest_delete))
+                )
+                // Tags 列表
+                .route("/v2/{name:.*}/tags/list", web::get().to(registry::handle_tags_list));
+        }
+        
+        // 添加 npm Registry 路由（如果启用）
+        if let Some(ref npm_data) = npm_registry_state {
+            app = app
+                .app_data(npm_data.clone())
+                // npm Registry API
+                .route("/npm/-/ping", web::get().to(registry::handle_ping))
+                .route("/npm/-/whoami", web::get().to(registry::handle_whoami))
+                .route("/npm/-/user/org.couchdb.user:{username}", web::put().to(registry::handle_user_login))
+                .route("/npm/-/v1/search", web::get().to(registry::handle_search))
+                // dist-tags
+                .route("/npm/-/package/@{scope}/{name}/dist-tags", web::get().to(registry::handle_dist_tags_get))
+                .route("/npm/-/package/@{scope}/{name}/dist-tags/{tag}", web::get().to(registry::handle_dist_tags_get))
+                .route("/npm/-/package/@{scope}/{name}/dist-tags/{tag}", web::put().to(registry::handle_dist_tag_put))
+                .route("/npm/-/package/@{scope}/{name}/dist-tags/{tag}", web::delete().to(registry::handle_dist_tag_delete))
+                // Scoped 包
+                .route("/npm/@{scope}/{name}", web::get().to(registry::handle_package_get_scoped))
+                .service(
+                    web::resource("/npm/@{scope}/{name}")
+                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                        .route(web::put().to(registry::handle_package_publish_scoped))
+                )
+                .route("/npm/@{scope}/{name}/-/{tarball}", web::get().to(registry::handle_tarball_get_scoped))
+                .route("/npm/@{scope}/{name}/-/{tarball}/-rev/{rev}", web::delete().to(registry::handle_tarball_delete_scoped))
+                // 非 scoped 包（返回错误）
+                .route("/npm/{name}", web::get().to(registry::handle_package_get));
+        }
             
-        // Git HTTP 协议代理
-        // 匹配 /namespace/project.git/* 路径
-        app = app.service(
-            web::resource(r#"/{namespace}/{project:.*\.git.*}"#)
-                // Git push 操作需要更大的上传限制
+        // Git HTTP 协议 - 直接通过 GitLayer gRPC 处理（流式传输）
+        // 支持大仓库 push/clone，不再代理到 Main App
+        if config_data.gitlayer_address.is_some() {
+            let git_state = web::Data::new(git_http::GitHttpState::new(
+                std::sync::Arc::new(config_data.get_ref().clone()),
+                None, // TODO: auth_client
+            ));
+            app = app
+                .app_data(git_state.clone())
+                // PayloadConfig for large push
                 .app_data(web::PayloadConfig::new(max_upload_size))
-                .route(web::route().to(proxy::proxy_git_http))
-        );
+                // Git HTTP 路由（使用原始字符串避免转义问题）
+                .route(
+                    r"/{tail:.*\.git/info/refs}",
+                    web::get().to(git_http::handle_info_refs),
+                )
+                .route(
+                    r"/{tail:.*\.git/git-upload-pack}",
+                    web::post().to(git_http::handle_upload_pack),
+                )
+                .route(
+                    r"/{tail:.*\.git/git-receive-pack}",
+                    web::post().to(git_http::handle_receive_pack),
+                );
+            tracing::info!("Git HTTP: direct GitLayer mode (streaming)");
+        } else {
+            // GitLayer 未配置，Git HTTP 请求将失败
+            tracing::warn!("GITLAYER_ADDRESS not configured, Git HTTP will be unavailable");
+            app = app.service(
+                web::resource(r#"/{namespace}/{project:.*\.git.*}"#)
+                    .route(web::route().to(|| async {
+                        actix_web::HttpResponse::ServiceUnavailable()
+                            .content_type("text/plain")
+                            .body("GitLayer not configured. Git operations unavailable.")
+                    }))
+            );
+        }
             
         // 前端 SPA 文件服务
         // 必须放在最后作为 catch-all 路由，匹配所有未被上面路由处理的请求

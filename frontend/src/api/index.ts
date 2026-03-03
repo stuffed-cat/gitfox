@@ -58,6 +58,9 @@ import type {
   UpdateOAuthProviderRequest,
   // 2FA types
   TwoFactorRequiredResponse,
+  // Package types
+  Package,
+  PackageFile,
 } from '@/types'
 
 // 的项目路径
@@ -821,6 +824,40 @@ class ApiClient {
     projectDelete: async (path: ProjectPath, id: string): Promise<void> => {
       await this.client.delete(`${this.projectPath(path)}/runners/${id}`)
     },
+  }
+
+  // Package Registry - 软件包管理
+  packages = {
+    // 列出项目的软件包
+    list: async (namespace: string, project: string, options?: { package_type?: string; page?: number; per_page?: number }): Promise<{ data: Package[] }> => {
+      const response = await this.client.get(`/${namespace}/${project}/-/packages`, { params: options })
+      return { data: response.data }
+    },
+    // 获取单个软件包
+    get: async (namespace: string, project: string, packageId: string): Promise<{ data: Package }> => {
+      const response = await this.client.get(`/${namespace}/${project}/-/packages/${packageId}`)
+      return { data: response.data }
+    },
+    // 列出软件包的所有版本
+    listVersions: async (namespace: string, project: string, packageName: string): Promise<{ data: Package[] }> => {
+      const response = await this.client.get(`/${namespace}/${project}/-/packages`, { 
+        params: { name: packageName } 
+      })
+      return { data: response.data }
+    },
+    // 列出软件包的文件
+    listFiles: async (namespace: string, project: string, packageId: string): Promise<{ data: PackageFile[] }> => {
+      const response = await this.client.get(`/${namespace}/${project}/-/packages/${packageId}/files`)
+      return { data: response.data }
+    },
+    // 删除软件包
+    delete: async (namespace: string, project: string, packageId: string): Promise<void> => {
+      await this.client.delete(`/${namespace}/${project}/-/packages/${packageId}`)
+    },
+    // 删除特定版本
+    deleteVersion: async (namespace: string, project: string, packageId: string, version: string): Promise<void> => {
+      await this.client.delete(`/${namespace}/${project}/-/packages/${packageId}/versions/${version}`)
+    }
   }
 }
 

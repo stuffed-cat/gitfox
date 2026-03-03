@@ -125,6 +125,9 @@ pub struct BundledNginxConfig {
     pub worker_connections: u32,
     pub conf_dir: PathBuf,
     pub log_dir: PathBuf,
+    // Package Registry 配置
+    pub registry_enabled: bool,
+    pub registry_domain: String,
 }
 
 impl Default for BundledNginxConfig {
@@ -144,6 +147,8 @@ impl Default for BundledNginxConfig {
             worker_connections: 1024,
             conf_dir: PathBuf::from("/var/lib/gitfox/nginx/conf"),
             log_dir: PathBuf::from("/var/lib/gitfox/nginx/logs"),
+            registry_enabled: false,
+            registry_domain: String::new(),
         }
     }
 }
@@ -628,6 +633,108 @@ maxmemory-policy {}
                 config.upstream_host,
                 config.upstream_port,
             ));
+        }
+
+        // Package Registry 独立域名配置
+        if config.registry_enabled && !config.registry_domain.is_empty() {
+            // HTTP server for registry domain
+            server_block.push_str(&format!(r#"
+    # Package Registry (Docker/npm)
+    server {{
+        listen {};
+        listen [::]:{}; 
+        server_name {};
+
+        client_max_body_size 500m;
+
+        # Docker Registry V2 API
+        location /v2/ {{
+            proxy_pass http://{}:{}/v2/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_buffering off;
+            chunked_transfer_encoding on;
+        }}
+
+        # npm Registry API
+        location / {{
+            proxy_pass http://{}:{}/npm/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 300s;
+        }}
+    }}
+"#,
+                config.http_port,
+                config.http_port,
+                config.registry_domain,
+                config.upstream_host,
+                config.upstream_port,
+                config.upstream_host,
+                config.upstream_port,
+            ));
+
+            // HTTPS server for registry domain (if SSL enabled)
+            if config.ssl_enabled && !config.ssl_certificate.is_empty() {
+                server_block.push_str(&format!(r#"
+    # Package Registry (Docker/npm) - HTTPS
+    server {{
+        listen {} ssl http2;
+        listen [::]:{}  ssl http2;
+        server_name {};
+
+        ssl_certificate {};
+        ssl_certificate_key {};
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers on;
+
+        client_max_body_size 500m;
+
+        # Docker Registry V2 API
+        location /v2/ {{
+            proxy_pass http://{}:{}/v2/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_buffering off;
+            chunked_transfer_encoding on;
+        }}
+
+        # npm Registry API
+        location / {{
+            proxy_pass http://{}:{}/npm/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 300s;
+        }}
+    }}
+"#,
+                    config.https_port,
+                    config.https_port,
+                    config.registry_domain,
+                    config.ssl_certificate,
+                    config.ssl_certificate_key,
+                    config.upstream_host,
+                    config.upstream_port,
+                    config.upstream_host,
+                    config.upstream_port,
+                ));
+            }
         }
 
         let conf_content = format!(r#"

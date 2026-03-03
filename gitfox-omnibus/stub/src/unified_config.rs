@@ -79,6 +79,10 @@ pub struct GitFoxConfig {
     #[serde(default)]
     pub logging: LoggingConfig,
 
+    /// Package Registry 配置
+    #[serde(default)]
+    pub registry: RegistryConfig,
+
     /// 内置服务配置（GitLab Omnibus 风格）
     #[serde(default)]
     pub bundled: BundledConfig,
@@ -491,6 +495,66 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             level: default_log_level(),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Package Registry 配置
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Package Registry 配置（Docker/npm 等软件包仓库）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryConfig {
+    /// 是否启用 Package Registry
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Registry 独立域名（如 registry.gitfox.studio）
+    /// 如果配置了独立域名，Docker/npm 请求将通过此域名处理
+    #[serde(default)]
+    pub domain: String,
+
+    /// 是否启用 Docker Registry
+    #[serde(default = "default_true")]
+    pub docker_enabled: bool,
+
+    /// 是否启用 npm Registry
+    #[serde(default = "default_true")]
+    pub npm_enabled: bool,
+
+    /// Registry 存储路径
+    #[serde(default = "default_registry_storage_path")]
+    pub storage_path: String,
+
+    /// 最大软件包大小 (字节，默认 500MB)
+    #[serde(default = "default_registry_max_size")]
+    pub max_package_size: u64,
+
+    /// JWT 密钥（用于 Docker Registry Token 认证）
+    /// 如果为空，将使用 secrets.jwt
+    #[serde(default)]
+    pub jwt_secret: String,
+}
+
+fn default_registry_storage_path() -> String {
+    "./registry-storage".to_string()
+}
+
+fn default_registry_max_size() -> u64 {
+    524288000 // 500MB
+}
+
+impl Default for RegistryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            domain: String::new(),
+            docker_enabled: true,
+            npm_enabled: true,
+            storage_path: default_registry_storage_path(),
+            max_package_size: default_registry_max_size(),
+            jwt_secret: String::new(),
         }
     }
 }
@@ -996,9 +1060,8 @@ listen_port = {}
         config.push_str(&format!("webide_dist_path = \"{}\"\n", self.paths.webide));
         config.push_str(&format!("assets_path = \"{}\"\n", self.paths.assets));
 
-        // GitLayer
+        // GitLayer (required)
         config.push_str(&format!("\ngitlayer_address = \"http://127.0.0.1:{}\"\n", self.internal.gitlayer_port));
-        config.push_str("use_gitlayer = true\n");
 
         // Auth gRPC
         config.push_str(&format!("\nauth_grpc_address = \"http://[::1]:{}\"\n", self.internal.auth_grpc_port));
@@ -1006,6 +1069,26 @@ listen_port = {}
 
         // 内部认证密钥
         config.push_str(&format!("\nshell_secret = \"{}\"\n", self.secrets.internal));
+
+        // Package Registry
+        if self.registry.enabled {
+            config.push_str("\n# Package Registry\n");
+            config.push_str("registry_enabled = true\n");
+            if !self.registry.domain.is_empty() {
+                config.push_str(&format!("registry_domain = \"{}\"\n", self.registry.domain));
+            }
+            config.push_str(&format!("registry_docker_enabled = {}\n", self.registry.docker_enabled));
+            config.push_str(&format!("registry_npm_enabled = {}\n", self.registry.npm_enabled));
+            config.push_str(&format!("registry_storage_path = \"{}\"\n", self.registry.storage_path));
+            config.push_str(&format!("registry_max_size = {}\n", self.registry.max_package_size));
+            // 如果有独立的 registry JWT secret，使用它；否则使用主 JWT secret
+            let registry_jwt = if self.registry.jwt_secret.is_empty() {
+                &self.secrets.jwt
+            } else {
+                &self.registry.jwt_secret
+            };
+            config.push_str(&format!("registry_jwt_secret = \"{}\"\n", registry_jwt));
+        }
 
         config
     }
@@ -1419,7 +1502,6 @@ struct WorkhorseConfig {
     auth_grpc_address: Option<String>,
     gitlayer_address: Option<String>,
     use_grpc_auth: Option<bool>,
-    use_gitlayer: Option<bool>,
 }
 
 /// 从 workhorse.toml 解析配置

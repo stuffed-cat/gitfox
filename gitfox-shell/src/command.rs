@@ -155,13 +155,8 @@ impl GitCommand {
     pub async fn execute(&self, repo_path: &str, access_info: &AccessInfo, config: &Config) -> Result<(), ShellError> {
         info!("Executing {:?} on {}", self.action, repo_path);
 
-        // Check if the repository exists (only for direct execution mode)
-        if !config.use_gitlayer {
-            let repo_metadata = std::fs::metadata(repo_path);
-            if repo_metadata.is_err() || !repo_metadata.unwrap().is_dir() {
-                return Err(ShellError::RepoNotFound(self.repo_path.clone()));
-            }
-        }
+        // GitLayer is required - no more direct execution fallback
+        // Repository existence check is done by GitLayer
 
         match self.action {
             GitAction::UploadPack | GitAction::ReceivePack | GitAction::UploadArchive => {
@@ -173,29 +168,21 @@ impl GitCommand {
         }
     }
 
-    /// Execute a standard git command
+    /// Execute a standard git command (always via GitLayer)
     async fn execute_git_command(
         &self,
         repo_path: &str,
         access_info: &AccessInfo,
         config: &Config,
     ) -> Result<(), ShellError> {
-        // Try GitLayer RPC if configured
-        if config.use_gitlayer {
-            if let Some(ref gitlayer_addr) = config.gitlayer_address {
-                debug!("Using GitLayer RPC at {}", gitlayer_addr);
-                match self.execute_via_gitlayer(repo_path, access_info, gitlayer_addr).await {
-                    Ok(()) => return Ok(()),
-                    Err(e) => {
-                        error!("GitLayer execution failed, falling back to direct: {}", e);
-                        // Fall through to direct execution
-                    }
-                }
-            }
-        }
+        // GitLayer is required - get address from config or fail
+        let gitlayer_addr = config.gitlayer_address.as_ref()
+            .ok_or_else(|| ShellError::Config(
+                "GITLAYER_ADDRESS not configured. GitLayer is required for all Git operations.".to_string()
+            ))?;
         
-        // Direct execution
-        self.execute_git_command_direct(repo_path, access_info).await
+        debug!("Using GitLayer RPC at {}", gitlayer_addr);
+        self.execute_via_gitlayer(repo_path, access_info, gitlayer_addr).await
     }
     
     /// Execute git command via GitLayer RPC

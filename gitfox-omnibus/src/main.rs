@@ -14,6 +14,12 @@
 //!
 //! # 使用缓存的内置依赖（跳过重新编译）
 //! gitfox-omnibus build --skip-deps-build --output ./gitfox
+//!
+//! # 清理构建产物（保留依赖缓存）
+//! gitfox-omnibus clean
+//!
+//! # 清理所有（包括依赖缓存）
+//! gitfox-omnibus clean --all
 //! ```
 //!
 //! # 生成的超级二进制
@@ -85,14 +91,13 @@ enum Commands {
         #[arg(long, default_value = "true")]
         release: bool,
 
-        /// 保留临时文件 (调试用)
-        #[arg(long)]
-        keep_temp: bool,
-
         /// 跳过内置依赖构建（使用已缓存的 PostgreSQL/Redis/Nginx）
         #[arg(long)]
         skip_deps_build: bool,
     },
+
+    /// 清理构建产物（保留依赖缓存）
+    Clean,
 
     /// 列出会被打包的组件
     List {
@@ -159,7 +164,6 @@ async fn main() -> Result<()> {
             skip_webide,
             skip_rust,
             release,
-            keep_temp,
             skip_deps_build,
         } => {
             let workspace = workspace.unwrap_or_else(|| find_workspace_root());
@@ -175,11 +179,37 @@ async fn main() -> Result<()> {
                 skip_webide,
                 skip_rust,
                 release,
-                keep_temp,
                 skip_deps_build,
             };
 
             build::run_build(config).await?;
+        }
+
+        Commands::Clean => {
+            let workspace = find_workspace_root();
+            let omnibus_dir = workspace.join("gitfox-omnibus");
+            let build_dir = omnibus_dir.join(".build");
+            
+            if !build_dir.exists() {
+                println!("Nothing to clean");
+                return Ok(());
+            }
+            
+            // 只清理构建产物，保留依赖缓存
+            let assets_dir = build_dir.join("assets");
+            let stub_dir = build_dir.join("stub");
+            
+            if assets_dir.exists() {
+                println!("Cleaning assets...");
+                std::fs::remove_dir_all(&assets_dir)?;
+            }
+            
+            if stub_dir.exists() {
+                println!("Cleaning stub build...");
+                std::fs::remove_dir_all(&stub_dir)?;
+            }
+            
+            println!("Clean completed (dependency cache preserved at .build/deps-work)");
         }
 
         Commands::List { workspace } => {
