@@ -34,7 +34,7 @@ use std::fs;
 use std::path::Path;
 
 /// 配置文件版本
-pub const CONFIG_VERSION: &str = "1.0";
+pub const CONFIG_VERSION: &str = "1.1";
 
 /// 统一配置结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +78,10 @@ pub struct GitFoxConfig {
     /// 日志配置
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// 内置服务配置（GitLab Omnibus 风格）
+    #[serde(default)]
+    pub bundled: BundledConfig,
 }
 
 fn default_version() -> String {
@@ -492,6 +496,245 @@ impl Default for LoggingConfig {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// 内置服务配置（GitLab Omnibus 风格）
+// ═══════════════════════════════════════════════════════════════════════
+
+/// 内置服务总配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundledConfig {
+    /// 全局开关：是否启用内置服务
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// 内置 PostgreSQL 配置
+    #[serde(default)]
+    pub postgresql: BundledPostgresqlConfig,
+
+    /// 内置 Redis 配置
+    #[serde(default)]
+    pub redis: BundledRedisConfig,
+
+    /// 内置 Nginx 配置
+    #[serde(default)]
+    pub nginx: BundledNginxConfig,
+}
+
+impl Default for BundledConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            postgresql: BundledPostgresqlConfig::default(),
+            redis: BundledRedisConfig::default(),
+            nginx: BundledNginxConfig::default(),
+        }
+    }
+}
+
+/// 内置 PostgreSQL 配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundledPostgresqlConfig {
+    /// 使用内置 PostgreSQL
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// 监听端口
+    #[serde(default = "default_pg_port")]
+    pub port: u16,
+
+    /// 监听地址
+    #[serde(default = "default_localhost")]
+    pub host: String,
+
+    /// 数据库名称
+    #[serde(default = "default_pg_database")]
+    pub database: String,
+
+    /// 数据库用户名
+    #[serde(default = "default_pg_username")]
+    pub username: String,
+
+    /// 数据库密码
+    #[serde(default)]
+    pub password: String,
+
+    /// 最大连接数
+    #[serde(default = "default_pg_max_connections")]
+    pub max_connections: u32,
+
+    /// 共享缓冲区大小 (MB)
+    #[serde(default = "default_pg_shared_buffers")]
+    pub shared_buffers: u32,
+
+    /// 工作内存 (MB)
+    #[serde(default = "default_pg_work_mem")]
+    pub work_mem: u32,
+}
+
+fn default_pg_port() -> u16 { 5432 }
+fn default_localhost() -> String { "127.0.0.1".to_string() }
+fn default_pg_database() -> String { "gitfox".to_string() }
+fn default_pg_username() -> String { "gitfox".to_string() }
+fn default_pg_max_connections() -> u32 { 100 }
+fn default_pg_shared_buffers() -> u32 { 256 }
+fn default_pg_work_mem() -> u32 { 4 }
+
+impl Default for BundledPostgresqlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_pg_port(),
+            host: default_localhost(),
+            database: default_pg_database(),
+            username: default_pg_username(),
+            password: String::new(),
+            max_connections: default_pg_max_connections(),
+            shared_buffers: default_pg_shared_buffers(),
+            work_mem: default_pg_work_mem(),
+        }
+    }
+}
+
+/// 内置 Redis 配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundledRedisConfig {
+    /// 使用内置 Redis
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// 监听端口
+    #[serde(default = "default_redis_port")]
+    pub port: u16,
+
+    /// 监听地址
+    #[serde(default = "default_localhost")]
+    pub host: String,
+
+    /// 最大内存 (MB)
+    #[serde(default = "default_redis_maxmemory")]
+    pub maxmemory: u32,
+
+    /// 内存淘汰策略
+    #[serde(default = "default_redis_maxmemory_policy")]
+    pub maxmemory_policy: String,
+
+    /// 是否开启持久化
+    #[serde(default = "default_true")]
+    pub persistence: bool,
+
+    /// 持久化模式: rdb, aof, rdb+aof
+    #[serde(default = "default_redis_persistence_mode")]
+    pub persistence_mode: String,
+}
+
+fn default_redis_port() -> u16 { 6379 }
+fn default_redis_maxmemory() -> u32 { 256 }
+fn default_redis_maxmemory_policy() -> String { "volatile-lru".to_string() }
+fn default_redis_persistence_mode() -> String { "rdb".to_string() }
+
+impl Default for BundledRedisConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_redis_port(),
+            host: default_localhost(),
+            maxmemory: default_redis_maxmemory(),
+            maxmemory_policy: default_redis_maxmemory_policy(),
+            persistence: true,
+            persistence_mode: default_redis_persistence_mode(),
+        }
+    }
+}
+
+/// 内置 Nginx 配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundledNginxConfig {
+    /// 使用内置 Nginx
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// HTTP 监听端口
+    #[serde(default = "default_nginx_http_port")]
+    pub http_port: u16,
+
+    /// HTTPS 监听端口
+    #[serde(default = "default_nginx_https_port")]
+    pub https_port: u16,
+
+    /// 监听地址
+    #[serde(default = "default_nginx_host")]
+    pub host: String,
+
+    /// 启用 SSL/TLS
+    #[serde(default)]
+    pub ssl_enabled: bool,
+
+    /// SSL 证书路径
+    #[serde(default)]
+    pub ssl_certificate: String,
+
+    /// SSL 证书密钥路径
+    #[serde(default)]
+    pub ssl_certificate_key: String,
+
+    /// 上游服务地址
+    #[serde(default = "default_localhost")]
+    pub upstream_host: String,
+
+    /// 上游服务端口
+    #[serde(default = "default_upstream_port")]
+    pub upstream_port: u16,
+
+    /// 客户端最大请求体大小
+    #[serde(default = "default_nginx_client_max_body_size")]
+    pub client_max_body_size: String,
+
+    /// 静态文件缓存时间
+    #[serde(default = "default_nginx_static_cache_time")]
+    pub static_cache_time: String,
+
+    /// 启用 gzip 压缩
+    #[serde(default = "default_true")]
+    pub gzip_enabled: bool,
+
+    /// 工作进程数（0 = auto）
+    #[serde(default)]
+    pub worker_processes: u32,
+
+    /// 每个 worker 的最大连接数
+    #[serde(default = "default_nginx_worker_connections")]
+    pub worker_connections: u32,
+}
+
+fn default_nginx_http_port() -> u16 { 80 }
+fn default_nginx_https_port() -> u16 { 443 }
+fn default_nginx_host() -> String { "0.0.0.0".to_string() }
+fn default_upstream_port() -> u16 { 8080 }
+fn default_nginx_client_max_body_size() -> String { "1g".to_string() }
+fn default_nginx_static_cache_time() -> String { "1h".to_string() }
+fn default_nginx_worker_connections() -> u32 { 1024 }
+
+impl Default for BundledNginxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            http_port: default_nginx_http_port(),
+            https_port: default_nginx_https_port(),
+            host: default_nginx_host(),
+            ssl_enabled: false,
+            ssl_certificate: String::new(),
+            ssl_certificate_key: String::new(),
+            upstream_host: default_localhost(),
+            upstream_port: default_upstream_port(),
+            client_max_body_size: default_nginx_client_max_body_size(),
+            static_cache_time: default_nginx_static_cache_time(),
+            gzip_enabled: true,
+            worker_processes: 0,
+            worker_connections: default_nginx_worker_connections(),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // 配置加载和保存
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -501,7 +744,7 @@ impl GitFoxConfig {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
         
-        let config: Self = toml::from_str(&content)
+        let mut config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
         
         // 检查配置版本，如需迁移则处理
@@ -531,17 +774,49 @@ impl GitFoxConfig {
     }
 
     /// 检查配置版本并执行迁移
-    fn check_and_migrate(&self) -> Result<()> {
+    fn check_and_migrate(&mut self) -> Result<()> {
         // 当前版本就是最新版本，无需迁移
         if self.version == CONFIG_VERSION {
             return Ok(());
         }
 
-        // 未来版本迁移逻辑在这里添加
-        // match self.version.as_str() {
-        //     "0.9" => self.migrate_from_0_9(),
-        //     _ => {}
-        // }
+        // 从 1.0 迁移到 1.1：添加 bundled 配置
+        // 如果用户已经配置了外部数据库/Redis，则默认不启用内置服务
+        if self.version == "1.0" {
+            tracing::info!("Migrating config from 1.0 to 1.1...");
+            
+            // 检测是否使用了自定义（非默认）数据库配置
+            let has_custom_db = !self.database.url.is_empty() 
+                && self.database.url != "postgres://postgres:password@localhost:5432/devops"
+                && !self.database.url.contains("{{");
+            
+            // 检测是否使用了自定义（非默认）Redis 配置
+            let has_custom_redis = !self.redis.url.is_empty()
+                && self.redis.url != "redis://localhost:6379"
+                && self.redis.url != "redis://127.0.0.1:6379"
+                && !self.redis.url.contains("{{");
+            
+            // 如果用户已配置外部服务，则禁用对应的内置服务
+            if has_custom_db || has_custom_redis {
+                tracing::info!(
+                    "Detected existing external services (db: {}, redis: {}), disabling bundled services",
+                    has_custom_db, has_custom_redis
+                );
+                
+                // 全局禁用内置服务（用户已有外部服务）
+                self.bundled.enabled = false;
+                self.bundled.postgresql.enabled = false;
+                self.bundled.redis.enabled = false;
+                self.bundled.nginx.enabled = false;
+            } else {
+                // 全新安装或使用默认配置，保持内置服务启用
+                tracing::info!("No external services detected, bundled services available");
+            }
+            
+            // 更新版本号
+            self.version = "1.1".to_string();
+            tracing::info!("Config migrated to version 1.1");
+        }
 
         Ok(())
     }
@@ -1045,6 +1320,8 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
             url: get("REDIS_URL", "redis://127.0.0.1:6379"),
         },
 
+        bundled: BundledConfig::default(),
+
         secrets: SecretsConfig {
             jwt: get("JWT_SECRET", ""),
             internal: get("GITFOX_SHELL_SECRET", ""),
@@ -1189,6 +1466,7 @@ pub fn migrate_from_legacy(data_dir: &Path) -> Result<MigrationResult> {
                 jwt: String::new(),
                 internal: String::new(),
             },
+            bundled: BundledConfig::default(),
             server: ServerConfig::default(),
             internal: InternalConfig::default(),
             paths: PathsConfig::default(),
@@ -1304,6 +1582,31 @@ pub fn migrate_from_legacy(data_dir: &Path) -> Result<MigrationResult> {
     // 检查是否有配置来源
     if sources.is_empty() {
         return Err(anyhow::anyhow!("No configuration files found to migrate"));
+    }
+
+    // 从旧版迁移时，检测是否使用了外部服务
+    // 如果用户已经配置了外部数据库/Redis，则默认禁用内置服务
+    let has_custom_db = !config.database.url.is_empty() 
+        && config.database.url != "postgres://postgres:password@localhost:5432/devops"
+        && !config.database.url.contains("{{");
+    
+    let has_custom_redis = !config.redis.url.is_empty()
+        && config.redis.url != "redis://localhost:6379"
+        && config.redis.url != "redis://127.0.0.1:6379"
+        && !config.redis.url.contains("{{");
+    
+    if has_custom_db || has_custom_redis {
+        // 用户已配置外部服务，禁用所有内置服务
+        config.bundled.enabled = false;
+        config.bundled.postgresql.enabled = false;
+        config.bundled.redis.enabled = false;
+        config.bundled.nginx.enabled = false;
+        
+        warnings.push(format!(
+            "Detected external services (db: {}, redis: {}), bundled services disabled by default. \
+             Edit [bundled] section in gitfox.toml to enable if needed.",
+            has_custom_db, has_custom_redis
+        ));
     }
 
     Ok(MigrationResult {

@@ -7,7 +7,7 @@
 # 文档: https://docs.gitfox.studio/configuration
 # ════════════════════════════════════════════════════════════════════════════
 
-version = "1.0"
+version = "1.1"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 数据库和缓存（必填）
@@ -184,3 +184,118 @@ rp_origin = "{{WEBAUTHN_RP_ORIGIN}}"
 [logging]
 # 日志级别: trace, debug, info, warn, error
 level = "{{RUST_LOG}}"
+
+# ════════════════════════════════════════════════════════════════════════════
+# 内置服务（GitLab Omnibus 风格）
+# ════════════════════════════════════════════════════════════════════════════
+# GitFox Omnibus 可以打包内置的 PostgreSQL、Redis、Nginx
+# 如果您有自己的基础设施，可以禁用内置服务使用外部服务
+#
+# 注意：使用内置服务需要在构建时启用相应的 feature:
+#   gitfox-omnibus build --features bundled-deps
+#
+# 内置服务数据存储在 data_dir 下的对应子目录
+
+[bundled]
+# 全局开关：是否启用内置服务
+# 设置为 false 时会忽略下面所有内置服务配置
+enabled = true
+
+[bundled.postgresql]
+# 使用内置 PostgreSQL
+# 设置为 true 时，上面的 database.url 配置会被忽略
+# 内置 PostgreSQL 数据存储在: {data_dir}/postgresql/data
+enabled = false
+
+# 监听端口（仅内置模式有效）
+port = 5432
+
+# 监听地址（仅本地连接）
+# 出于安全考虑，内置 PostgreSQL 默认只监听本地
+host = "127.0.0.1"
+
+# 数据库名称
+database = "gitfox"
+
+# 数据库用户名
+username = "gitfox"
+
+# 数据库密码（首次初始化时自动生成）
+# 留空则自动生成
+password = ""
+
+# 最大连接数
+max_connections = 100
+
+# 共享缓冲区大小 (MB)
+# 推荐值: 系统内存的 25%，最大不超过 8GB
+shared_buffers = 256
+
+# 工作内存 (MB)
+# 用于排序和哈希操作
+work_mem = 4
+
+[bundled.redis]
+# 使用内置 Redis
+# 设置为 true 时，上面的 redis.url 配置会被忽略
+# 内置 Redis 数据存储在: {data_dir}/redis/data
+enabled = false
+
+# 监听端口
+port = 6379
+
+# 监听地址（仅本地连接）
+host = "127.0.0.1"
+
+# 最大内存 (MB)
+# 0 表示不限制
+maxmemory = 256
+
+# 内存淘汰策略
+# 推荐: volatile-lru (只淘汰设置了过期时间的 key)
+maxmemory_policy = "volatile-lru"
+
+# 是否开启持久化
+persistence = true
+
+# 持久化模式: rdb, aof, rdb+aof
+persistence_mode = "rdb"
+
+[bundled.nginx]
+# 使用内置 Nginx 作为前端反向代理
+# 适用于需要 HTTPS、负载均衡、静态文件缓存等场景
+# 设置为 true 时，HTTP 请求会经过 Nginx -> Workhorse -> Backend
+# 设置为 false 时，直接使用 Workhorse 处理请求
+enabled = false
+
+# Nginx 监听端口（对外）
+http_port = 80
+https_port = 443
+
+# 监听地址
+host = "0.0.0.0"
+
+# SSL/TLS 配置
+ssl_enabled = false
+ssl_certificate = ""
+ssl_certificate_key = ""
+
+# 代理到 Workhorse 的地址
+# 当 nginx 启用时，workhorse 只监听本地
+upstream_host = "127.0.0.1"
+upstream_port = 8080
+
+# 客户端最大请求体大小 (与 max_upload_size 对应)
+client_max_body_size = "1g"
+
+# 静态文件缓存时间
+static_cache_time = "1h"
+
+# 启用 gzip 压缩
+gzip_enabled = true
+
+# 工作进程数（0 = auto，根据 CPU 核心数）
+worker_processes = 0
+
+# 每个 worker 的最大连接数
+worker_connections = 1024

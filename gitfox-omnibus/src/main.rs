@@ -11,6 +11,9 @@
 //!
 //! # 跳过前端构建（使用已有的 dist）
 //! gitfox-omnibus build --skip-frontend --output ./gitfox
+//!
+//! # 构建包含内置依赖的完整版本 (PostgreSQL, Redis, Nginx)
+//! gitfox-omnibus build --bundled-deps --output ./gitfox
 //! ```
 //!
 //! # 生成的超级二进制
@@ -22,10 +25,12 @@
 //! - frontend/dist (Vue SPA)
 //! - webide/dist (VS Code Web)
 //! - migrations/*.sql
+//! - （可选）内置依赖：PostgreSQL, Redis, Nginx
 //!
 //! 运行时会解压到 data_dir 然后启动各组件。
 
 mod build;
+mod deps;
 mod stub;
 
 use anyhow::Result;
@@ -82,6 +87,20 @@ enum Commands {
         /// 保留临时文件 (调试用)
         #[arg(long)]
         keep_temp: bool,
+
+        /// 构建并嵌入内置依赖 (PostgreSQL, Redis, Nginx)
+        /// 启用后可在 gitfox.toml 中配置使用内置或外置服务
+        #[arg(long)]
+        bundled_deps: bool,
+
+        /// 只构建指定的内置依赖 (逗号分隔: postgresql,redis,nginx)
+        /// 默认构建全部。仅在 --bundled-deps 时有效
+        #[arg(long, value_delimiter = ',')]
+        deps: Vec<String>,
+
+        /// 跳过内置依赖构建（使用已缓存的）
+        #[arg(long)]
+        skip_deps_build: bool,
     },
 
     /// 列出会被打包的组件
@@ -96,6 +115,33 @@ enum Commands {
         /// 工作区根目录
         #[arg(short, long)]
         workspace: Option<PathBuf>,
+    },
+
+    /// 单独构建内置依赖（不构建完整二进制）
+    BuildDeps {
+        /// 工作区根目录
+        #[arg(short, long)]
+        workspace: Option<PathBuf>,
+
+        /// 输出目录
+        #[arg(short, long, default_value = ".build/deps/output")]
+        output: PathBuf,
+
+        /// 构建 PostgreSQL
+        #[arg(long)]
+        postgresql: bool,
+
+        /// 构建 Redis
+        #[arg(long)]
+        redis: bool,
+
+        /// 构建 Nginx
+        #[arg(long)]
+        nginx: bool,
+
+        /// 构建全部依赖
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -123,8 +169,27 @@ async fn main() -> Result<()> {
             skip_rust,
             release,
             keep_temp,
+            bundled_deps,
+            deps,
+            skip_deps_build,
         } => {
             let workspace = workspace.unwrap_or_else(|| find_workspace_root());
+
+            // 解析要构建的依赖
+            let (build_pg, build_redis, build_nginx) = if bundled_deps {
+                if deps.is_empty() {
+                    // 默认构建全部
+                    (true, true, true)
+                } else {
+                    (
+                        deps.iter().any(|d| d == "postgresql" || d == "pg"),
+                        deps.iter().any(|d| d == "redis"),
+                        deps.iter().any(|d| d == "nginx"),
+                    )
+                }
+            } else {
+                (false, false, false)
+            };
 
             let config = build::BuildConfig {
                 workspace_root: workspace,
@@ -135,6 +200,11 @@ async fn main() -> Result<()> {
                 skip_rust,
                 release,
                 keep_temp,
+                bundled_deps,
+                build_postgresql: build_pg,
+                build_redis,
+                build_nginx,
+                skip_deps_build,
             };
 
             build::run_build(config).await?;
@@ -148,6 +218,49 @@ async fn main() -> Result<()> {
         Commands::Verify { workspace } => {
             let workspace = workspace.unwrap_or_else(|| find_workspace_root());
             verify_workspace(&workspace)?;
+        }
+
+        Commands::BuildDeps {
+            workspace,
+            output,
+            postgresql,
+            redis,
+            nginx,
+            all,
+        } => {
+            let workspace = workspace.unwrap_or_else(|| find_workspace_root());
+            let omnibus_dir = workspace.join("gitfox-omnibus");
+            let work_dir = omnibus_dir.join(".build/deps");
+
+            let config = deps::DepsConfig {
+                build_postgresql: all || postgresql,
+                build_redis: all || redis,
+                build_nginx: all || nginx,
+                work_dir,
+                output_dir: output,
+                target: "x86_64-unknown-linux-musl".to_string(),
+                use_cache: true,
+                jobs: 0,
+            };
+
+            if !config.build_postgresql && !config.build_redis && !config.build_nginx {
+                eprintln!("Please specify at least one dependency to build:");
+                eprintln!("  --postgresql, --redis, --nginx, or --all");
+                return Ok(());
+            }
+
+            let result = deps::build_deps(&config)?;
+            
+            println!("\nBuild completed:");
+            if result.postgresql.is_some() {
+                println!("  ✓ PostgreSQL");
+            }
+            if result.redis.is_some() {
+                println!("  ✓ Redis");
+            }
+            if result.nginx.is_some() {
+                println!("  ✓ Nginx");
+            }
         }
     }
 

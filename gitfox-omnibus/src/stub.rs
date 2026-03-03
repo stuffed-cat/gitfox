@@ -37,9 +37,17 @@ pub fn generate_stub_project(
     copy_dir_all(&assets.binaries_dir, &embedded_dir.join("bin"))?;
     copy_dir_all(&assets.migrations_dir, &embedded_dir.join("migrations"))?;
     copy_dir_all(&assets.templates_dir, &embedded_dir.join("templates"))?;
+    
+    // 复制内置依赖（如果有）
+    if let Some(ref deps_dir) = assets.deps_dir {
+        if deps_dir.exists() {
+            info!("Copying bundled dependencies...");
+            copy_dir_all(deps_dir, &embedded_dir.join("deps"))?;
+        }
+    }
 
     // 生成 Cargo.toml (从模板复制)
-    generate_cargo_toml(stub_dir, &template_dir)?;
+    generate_cargo_toml(stub_dir, &template_dir, assets.deps_dir.is_some())?;
 
     // 复制 main.rs (使用相对路径)
     copy_main_rs(&src_dir, &template_dir)?;
@@ -64,10 +72,24 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// 复制 Cargo.toml 模板（只在内容变化时更新）
-fn generate_cargo_toml(stub_dir: &Path, template_dir: &Path) -> Result<()> {
+fn generate_cargo_toml(stub_dir: &Path, template_dir: &Path, has_deps: bool) -> Result<()> {
     let template_path = template_dir.join("Cargo.toml.template");
-    let content = fs::read_to_string(&template_path)
+    let mut content = fs::read_to_string(&template_path)
         .with_context(|| format!("Failed to read {}", template_path.display()))?;
+
+    // 如果有内置依赖，启用 bundled-deps feature
+    if has_deps {
+        // 在 [features] 部分添加 default feature
+        if content.contains("[features]") {
+            content = content.replace(
+                "[features]",
+                "[features]\ndefault = [\"bundled-deps\"]\nbundled-deps = []"
+            );
+        } else {
+            // 如果没有 [features] 部分，添加一个
+            content.push_str("\n[features]\ndefault = [\"bundled-deps\"]\nbundled-deps = []\n");
+        }
+    }
 
     let dest = stub_dir.join("Cargo.toml");
     

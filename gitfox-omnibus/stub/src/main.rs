@@ -71,8 +71,17 @@ struct MigrationAssets;
 #[prefix = ""]
 struct TemplateAssets;
 
+/// 内置依赖二进制（仅在 bundled-deps feature 启用时可用）
+#[cfg(feature = "bundled-deps")]
+#[derive(RustEmbed)]
+#[folder = "embedded/deps"]
+#[prefix = ""]
+struct BundledDepsAssets;
+
+mod services;
 mod unified_config;
 
+use services::{BundledServices, BundledPostgresConfig, BundledRedisConfig};
 use unified_config::{ConfigVars, GitFoxConfig, generate_config_template, migrate_from_legacy};
 
 // ============================================================================
@@ -260,43 +269,120 @@ fn init_logging(verbose: bool) {
 async fn start_services(cli: &Cli) -> Result<()> {
     info!("GitFox starting...");
 
-    // 加载配置文件
+    // 尝试加载 gitfox.toml（新格式）或 gitfox.env（旧格式）
+    let toml_file = cli.data_dir.join("gitfox.toml");
     let env_file = cli.data_dir.join("gitfox.env");
     let workhorse_config = cli.data_dir.join("workhorse.toml");
     
-    if !env_file.exists() {
-        eprintln!("❌ Configuration file not found: {}", env_file.display());
+    // 初始化内置服务管理器
+    let mut bundled_services = BundledServices::new(&cli.data_dir);
+    
+    // 用于存储实际使用的数据库和 Redis URL
+    let database_url: String;
+    let redis_url: String;
+    let http_port: u16;
+    
+    if toml_file.exists() {
+        // 使用新的 TOML 配置格式
+        info!("Loading configuration from: {}", toml_file.display());
+        let config = GitFoxConfig::load(&toml_file)?;
+        
+        // 检查是否启用内置服务
+        if config.bundled.enabled && BundledServices::has_bundled_deps() {
+            info!("Bundled dependencies available, checking configuration...");
+            
+            // 解压内置依赖
+            bundled_services.extract_deps()?;
+            
+            // 启动内置 PostgreSQL（如果启用）
+            if config.bundled.postgresql.enabled {
+                let pg_config = BundledPostgresConfig {
+                    enabled: true,
+                    port: config.bundled.postgresql.port,
+                    host: config.bundled.postgresql.host.clone(),
+                    database: config.bundled.postgresql.database.clone(),
+                    username: config.bundled.postgresql.username.clone(),
+                    password: config.bundled.postgresql.password.clone(),
+                    max_connections: config.bundled.postgresql.max_connections,
+                    shared_buffers_mb: config.bundled.postgresql.shared_buffers,
+                    work_mem_mb: config.bundled.postgresql.work_mem,
+                    data_dir: cli.data_dir.join("postgresql/data"),
+                };
+                database_url = bundled_services.start_postgresql(&pg_config)?;
+                info!("Using bundled PostgreSQL: {}", database_url);
+            } else {
+                database_url = config.database.url.clone();
+            }
+            
+            // 启动内置 Redis（如果启用）
+            if config.bundled.redis.enabled {
+                let redis_config = BundledRedisConfig {
+                    enabled: true,
+                    port: config.bundled.redis.port,
+                    host: config.bundled.redis.host.clone(),
+                    maxmemory_mb: config.bundled.redis.maxmemory,
+                    maxmemory_policy: config.bundled.redis.maxmemory_policy.clone(),
+                    persistence: config.bundled.redis.persistence,
+                    persistence_mode: config.bundled.redis.persistence_mode.clone(),
+                    data_dir: cli.data_dir.join("redis/data"),
+                };
+                redis_url = bundled_services.start_redis(&redis_config)?;
+                info!("Using bundled Redis: {}", redis_url);
+            } else {
+                redis_url = config.redis.url.clone();
+            }
+        } else {
+            // 使用外部服务
+            database_url = config.database.url.clone();
+            redis_url = config.redis.url.clone();
+        }
+        
+        http_port = config.server.http_port;
+        
+        // 设置环境变量供组件使用
+        env::set_var("DATABASE_URL", &database_url);
+        env::set_var("REDIS_URL", &redis_url);
+        env::set_var("JWT_SECRET", &config.secrets.jwt);
+        env::set_var("GITFOX_SHELL_SECRET", &config.secrets.internal);
+        env::set_var("GITFOX_BASE_URL", &config.server.base_url);
+        env::set_var("HTTP_PORT", http_port.to_string());
+        env::set_var("SSH_ENABLED", config.server.ssh.enabled.to_string());
+        env::set_var("SSH_PORT", config.server.ssh.port.to_string());
+        env::set_var("SSH_HOST", &config.server.ssh.host);
+        env::set_var("RUST_LOG", &config.logging.level);
+        
+    } else if env_file.exists() {
+        // 使用旧的 env 配置格式
+        info!("Loading configuration from: {}", env_file.display());
+        load_env_file(&env_file)?;
+
+        database_url = env::var("DATABASE_URL")
+            .context("DATABASE_URL not set in gitfox.env")?;
+        
+        redis_url = env::var("REDIS_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        
+        http_port = env::var("GITFOX_PORT")
+            .ok()
+            .or_else(|| {
+                if workhorse_config.exists() {
+                    fs::read_to_string(&workhorse_config)
+                        .ok()
+                        .and_then(|content| toml::from_str::<toml::Value>(&content).ok())
+                        .and_then(|config| config.get("listen_port")?.as_integer().map(|v| v.to_string()))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "8080".to_string())
+            .parse()
+            .context("Invalid GITFOX_PORT")?;
+    } else {
+        eprintln!("❌ Configuration file not found.");
+        eprintln!("   Expected: {} or {}", toml_file.display(), env_file.display());
         eprintln!("\nPlease run: gitfox init");
-        eprintln!("Then edit {} with your settings", env_file.display());
         return Err(anyhow::anyhow!("Configuration file missing"));
     }
-    
-    info!("Loading configuration from: {}", env_file.display());
-    load_env_file(&env_file)?;
-
-    // 验证必需的配置
-    let database_url = env::var("DATABASE_URL")
-        .context("DATABASE_URL not set in gitfox.env")?;
-    
-    let redis_url = env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    
-    // HTTP 端口：优先使用环境变量，其次读取 workhorse.toml，最后默认 8080
-    let http_port: u16 = env::var("GITFOX_PORT")
-        .ok()
-        .or_else(|| {
-            if workhorse_config.exists() {
-                fs::read_to_string(&workhorse_config)
-                    .ok()
-                    .and_then(|content| toml::from_str::<toml::Value>(&content).ok())
-                    .and_then(|config| config.get("listen_port")?.as_integer().map(|v| v.to_string()))
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "8080".to_string())
-        .parse()
-        .context("Invalid GITFOX_PORT")?;
 
     // 解压资源到 data_dir
     extract_assets(&cli.data_dir)?;
@@ -404,6 +490,9 @@ async fn start_services(cli: &Cli) -> Result<()> {
     if let Some(ref mut sh) = shell {
         shutdown_process(sh, "gitfox-shell");
     }
+    
+    // 停止内置服务（如果有）
+    bundled_services.stop_all();
 
     info!("GitFox stopped");
     Ok(())
