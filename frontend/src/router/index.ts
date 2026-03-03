@@ -45,7 +45,7 @@ const routes = [
     component: () => import('@/views/auth/ResetPasswordView.vue'),
     meta: { guest: true }
   },
-  
+
   // Dashboard routes (must be before /:owner/:repo)
   {
     path: '/',
@@ -89,7 +89,7 @@ const routes = [
     component: () => import('@/views/dashboard/MyActivityView.vue'),
     meta: { requiresAuth: true }
   },
-  
+
   // Search route
   {
     path: '/search',
@@ -97,7 +97,7 @@ const routes = [
     component: () => import('@/views/SearchView.vue'),
     meta: { requiresAuth: false }
   },
-  
+
   // Explore routes
   {
     path: '/explore',
@@ -115,7 +115,7 @@ const routes = [
     component: () => import('@/views/explore/ExploreGroupsView.vue'),
     meta: { requiresAuth: false }
   },
-  
+
   // Create routes
   {
     path: '/projects/new',
@@ -129,7 +129,7 @@ const routes = [
     component: () => import('@/views/groups/NewGroupView.vue'),
     meta: { requiresAuth: true }
   },
-  
+
   // User settings routes
   {
     path: '/-/profile',
@@ -173,7 +173,13 @@ const routes = [
     component: () => import('@/views/settings/OAuthApplicationsView.vue'),
     meta: { requiresAuth: true }
   },
-  
+  {
+    path: '/-/profile/runners',
+    name: 'UserRunners',
+    component: () => import('@/views/settings/UserRunnersView.vue'),
+    meta: { requiresAuth: true }
+  },
+
   // Admin routes (require admin role)
   {
     path: '/admin',
@@ -211,7 +217,13 @@ const routes = [
     component: () => import('@/views/admin/AdminOAuthProvidersView.vue'),
     meta: { requiresAuth: true, requiresAdmin: true }
   },
-  
+  {
+    path: '/admin/runners',
+    name: 'AdminRunners',
+    component: () => import('@/views/admin/AdminRunnersView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true }
+  },
+
   // User/Group profile (single segment path - handles both users and groups)
   // 注意：这个路由被 /:pathSegments+ 替代，单段路径也由它处理
 
@@ -228,7 +240,7 @@ const routes = [
     component: () => import('@/views/groups/GroupSettingsView.vue'),
     meta: { requiresAuth: true, contextType: 'group' }
   },
-  
+
   // Project routes (must be LAST - catches any path with 2+ segments)
   // 支持多段路径，如 gitfox/mirror/project（子组群下的项目）
   {
@@ -236,23 +248,6 @@ const routes = [
     name: 'Project',
     component: () => import('@/views/DynamicPathView.vue'),
     meta: { requiresAuth: false },
-    beforeEnter: async (to: RouteLocationNormalized, _from: RouteLocationNormalized, next: NavigationGuardNext) => {
-      const segments = to.params.pathSegments as string[]
-      const fullPath = segments.join('/')
-      
-      // 调用 resolve API 判断路径类型，存入 meta
-      const { api } = await import('@/api')
-      const result = await api.resolvePath(fullPath)
-      to.meta.entityType = result.type
-      to.meta.fullPath = fullPath
-      
-      // 解析 namespace 和 projectName（最后一段是 project，前面是 namespace）
-      if (segments.length >= 2) {
-        to.meta.namespace = segments.slice(0, -1).join('/')
-        to.meta.projectName = segments[segments.length - 1]
-      }
-      next()
-    },
     children: [
       {
         path: '',
@@ -330,6 +325,17 @@ const routes = [
         component: () => import('@/views/pipelines/PipelineDetailView.vue')
       },
       {
+        path: '-/jobs',
+        name: 'Jobs',
+        component: () => import('@/views/pipelines/JobListView.vue')
+      },
+      {
+        path: '-/runners',
+        name: 'ProjectRunners',
+        component: () => import('@/views/projects/ProjectRunnersView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
         path: '-/settings',
         name: 'ProjectSettings',
         component: () => import('@/views/projects/ProjectSettingsView.vue')
@@ -352,12 +358,12 @@ const router = createRouter({
 // 安全的 redirect 路径验证（防止 Open Redirect 攻击）
 function isSafeRedirect(path: string): boolean {
   if (!path || typeof path !== 'string') return false
-  
+
   // 只允许内部路径（以 / 开头，不包含协议）
   if (!path.startsWith('/')) return false
   if (path.includes('://')) return false
   if (path.startsWith('//')) return false // 防止 protocol-relative URL
-  
+
   return true
 }
 
@@ -369,9 +375,33 @@ function isOAuthFlow(to: any): boolean {
   return to.query && typeof to.query.redirect_uri === 'string'
 }
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
-  
+
+  // 处理动态路由的项目信息
+  if (to.params.pathSegments) {
+    const segments = to.params.pathSegments as string[]
+    const fullPath = segments.join('/')
+
+    // 只在 meta 中没有 entityType 时才调用 API
+    if (!to.meta.entityType) {
+      try {
+        const { api } = await import('@/api')
+        const result = await api.resolvePath(fullPath)
+        to.meta.entityType = result.type
+        to.meta.fullPath = fullPath
+      } catch (e) {
+        console.error('Failed to resolve path:', e)
+      }
+    }
+
+    // 解析 namespace 和 projectName
+    if (segments.length >= 2) {
+      to.meta.namespace = segments.slice(0, -1).join('/')
+      to.meta.projectName = segments[segments.length - 1]
+    }
+  }
+
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     // 需要登录但未登录，首页特殊处理：跳转到探索页
     if (to.path === '/') {

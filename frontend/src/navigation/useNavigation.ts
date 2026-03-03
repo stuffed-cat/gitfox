@@ -53,8 +53,22 @@ export function useNavigation(): UseNavigationReturn {
     }
     
     // 群组页面 - 检查路由 meta 或 namespace store
-    if (route.meta?.contextType === 'group' || namespaceStore.currentNamespaceType === 'group') {
-      const groupPath = (route.params.namespace || route.params.groupPath || namespaceStore.currentNamespace) as string
+    const entityType = route.meta?.entityType as string | undefined
+    const contextType = route.meta?.contextType as string | undefined
+    const namespaceParam = route.params.namespace
+    const storeNamespaceType = namespaceStore.currentNamespaceType
+    
+    if (entityType === 'group' || contextType === 'group' || storeNamespaceType === 'group') {
+      // 优先使用 route.params.namespace（数组或字符串）
+      let groupPath: string
+      if (Array.isArray(namespaceParam)) {
+        groupPath = namespaceParam.join('/')
+      } else if (typeof namespaceParam === 'string') {
+        groupPath = namespaceParam
+      } else {
+        groupPath = (route.params.groupPath as string) || namespaceStore.currentNamespace || (route.meta.fullPath as string) || ''
+      }
+      
       return {
         type: 'group',
         group: {
@@ -63,15 +77,18 @@ export function useNavigation(): UseNavigationReturn {
       }
     }
     
-    // 项目页面 - 检查路由参数
-    const { owner, repo } = route.params
-    if (owner && repo && typeof owner === 'string' && typeof repo === 'string') {
+    // 项目页面 - 从路由 meta 获取（由全局导航守卫设置）
+    const namespace = route.meta.namespace as string | undefined
+    const projectName = route.meta.projectName as string | undefined
+    
+    if (namespace && projectName) {
+      const fullPath = `/${namespace}/${projectName}`
       return {
         type: 'project',
         project: {
-          owner,
-          name: repo,
-          path: `/${owner}/${repo}`
+          owner: namespace,
+          name: projectName,
+          path: fullPath
         }
       }
     }
