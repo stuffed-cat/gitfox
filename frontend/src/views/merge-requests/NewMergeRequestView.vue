@@ -210,7 +210,7 @@ function goToEditForm() {
 
 onMounted(async () => {
   try {
-    project.value = await api.projects.get({ namespace, project: projectName });
+    project.value = await api.projects.get({ namespace: namespace.value, project: projectName.value });
     selectedSourceProjectId.value = project.value.id;
     selectedTargetProjectId.value = project.value.id;
     
@@ -230,7 +230,7 @@ async function loadRelatedProjects() {
   
   try {
     // Get the entire fork network (tree) - includes parent, siblings, children, etc.
-    const result = await api.projects.getForkNetwork({ namespace, project: projectName });
+    const result = await api.projects.getForkNetwork({ namespace: namespace.value, project: projectName.value });
     // Filter out current project from the list
     relatedProjects.value = result.projects.filter(p => p.id !== project.value?.id);
   } catch (e) {
@@ -294,13 +294,13 @@ async function handleSubmit() {
     }
     
     await api.mergeRequests.create(
-      { namespace, project: projectName }, 
+      { namespace: namespace.value, project: projectName.value }, 
       requestData
     );
     
     router.push({
       name: 'merge-requests',
-      params: { namespace, project: projectName }
+      params: { namespace: namespace.value, project: projectName.value }
     });
   } catch (e: any) {
     console.error('Failed to create MR:', e);

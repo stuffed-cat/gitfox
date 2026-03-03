@@ -63,23 +63,63 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 复制 Cargo.toml 模板
+/// 复制 Cargo.toml 模板（只在内容变化时更新）
 fn generate_cargo_toml(stub_dir: &Path, template_dir: &Path) -> Result<()> {
     let template_path = template_dir.join("Cargo.toml.template");
     let content = fs::read_to_string(&template_path)
         .with_context(|| format!("Failed to read {}", template_path.display()))?;
 
-    fs::write(stub_dir.join("Cargo.toml"), content)?;
+    let dest = stub_dir.join("Cargo.toml");
+    
+    // 只在文件不存在或内容不同时才写入
+    let should_write = if dest.exists() {
+        let existing = fs::read_to_string(&dest).unwrap_or_default();
+        existing != content
+    } else {
+        true
+    };
+    
+    if should_write {
+        fs::write(&dest, content)?;
+        info!("Updated: Cargo.toml");
+    }
+    
     Ok(())
 }
 
-/// 复制 main.rs (使用相对路径)
+/// 复制所有 Rust 源文件（只在内容变化时复制，避免触发不必要的重新编译）
 fn copy_main_rs(src_dir: &Path, template_dir: &Path) -> Result<()> {
-    let template_path = template_dir.join("src/main.rs");
-    let content = fs::read_to_string(&template_path)
-        .with_context(|| format!("Failed to read {}", template_path.display()))?;
-
-    fs::write(src_dir.join("main.rs"), content)?;
+    let template_src_dir = template_dir.join("src");
+    
+    // 复制 src/ 目录下所有 .rs 文件
+    for entry in fs::read_dir(&template_src_dir)
+        .with_context(|| format!("Failed to read directory {}", template_src_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        
+        if path.is_file() && path.extension().map(|e| e == "rs").unwrap_or(false) {
+            let filename = entry.file_name();
+            let content = fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read {}", path.display()))?;
+            
+            let dest = src_dir.join(&filename);
+            
+            // 只在文件不存在或内容不同时才写入
+            let should_write = if dest.exists() {
+                let existing = fs::read_to_string(&dest).unwrap_or_default();
+                existing != content
+            } else {
+                true
+            };
+            
+            if should_write {
+                fs::write(&dest, content)?;
+                info!("Updated: src/{}", filename.to_string_lossy());
+            }
+        }
+    }
+    
     Ok(())
 }
 

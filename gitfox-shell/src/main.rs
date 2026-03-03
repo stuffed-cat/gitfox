@@ -8,7 +8,7 @@
 //!
 //! Usage:
 //!   gitfox-shell server              # Start SSH server (main mode)
-//!   gitfox-shell <key-id>            # Legacy mode (called by sshd)
+//!   gitfox-shell <key-id>            # Legacy mode (called by gitfox main app)
 
 mod api;
 mod auth_client;
@@ -62,7 +62,7 @@ enum Commands {
         host_key: PathBuf,
     },
 
-    /// Legacy mode: handle single SSH session (called by sshd)
+    /// Legacy mode: handle single SSH session (called by gitfox main app with key_id argument)
     #[command(hide = true)]
     Session {
         /// The key ID used for authentication

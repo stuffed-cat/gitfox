@@ -143,6 +143,10 @@ pub struct ServerConfig {
     #[serde(default = "default_http_port")]
     pub http_port: u16,
 
+    /// 最大上传文件大小 (字节)
+    #[serde(default = "default_max_upload_size")]
+    pub max_upload_size: u64,
+
     /// SSH 配置
     #[serde(default)]
     pub ssh: SshConfig,
@@ -156,11 +160,16 @@ fn default_http_port() -> u16 {
     8080
 }
 
+fn default_max_upload_size() -> u64 {
+    1073741824 // 1GB
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             base_url: default_base_url(),
             http_port: default_http_port(),
+            max_upload_size: default_max_upload_size(),
             ssh: SshConfig::default(),
         }
     }
@@ -1044,7 +1053,7 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
         server: ServerConfig {
             base_url: get("GITFOX_BASE_URL", "http://localhost:8080"),
             http_port: get_u16("HTTP_PORT", 8080),
-            max_upload_size: get_u64("MAX_UPLOAD_SIZE", 1073741824),
+            max_upload_size: get_u64("MAX_UPLOAD_SIZE", 1073741824), // 1GB
             ssh,
         },
 
@@ -1059,9 +1068,9 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
         },
 
         admin: AdminConfig {
-            username: get("INITIAL_ADMIN_USERNAME", "admin"),
-            email: get("INITIAL_ADMIN_EMAIL", "admin@localhost"),
-            password: get("INITIAL_ADMIN_PASSWORD", "admin123"),
+            username: Some(get("INITIAL_ADMIN_USERNAME", "admin")),
+            email: Some(get("INITIAL_ADMIN_EMAIL", "admin@localhost")),
+            password: Some(get("INITIAL_ADMIN_PASSWORD", "admin123")),
         },
 
         smtp: SmtpConfig {
@@ -1080,16 +1089,23 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
             github: OAuthProviderConfig {
                 client_id: get("OAUTH_GITHUB_CLIENT_ID", ""),
                 client_secret: get("OAUTH_GITHUB_CLIENT_SECRET", ""),
+                url: None,
+                tenant_id: None,
             },
-            gitlab: GitLabOAuthConfig {
+            gitlab: OAuthProviderConfig {
                 client_id: get("OAUTH_GITLAB_CLIENT_ID", ""),
                 client_secret: get("OAUTH_GITLAB_CLIENT_SECRET", ""),
                 url: env.get("OAUTH_GITLAB_URL").cloned(),
+                tenant_id: None,
             },
             google: OAuthProviderConfig {
                 client_id: get("OAUTH_GOOGLE_CLIENT_ID", ""),
                 client_secret: get("OAUTH_GOOGLE_CLIENT_SECRET", ""),
+                url: None,
+                tenant_id: None,
             },
+            azure_ad: OAuthProviderConfig::default(),
+            bitbucket: OAuthProviderConfig::default(),
         },
 
         logging: LoggingConfig {
@@ -1237,9 +1253,11 @@ pub fn migrate_from_legacy(data_dir: &Path) -> Result<MigrationResult> {
                 }
                 
                 // 上传大小
-                if let Some(size) = wh.max_upload_size {
-                    config.server.max_upload_size = size;
-                    migrated_fields += 1;
+                if let Some(max_size) = wh.max_upload_size {
+                    if max_size > 0 {
+                        config.server.max_upload_size = max_size;
+                        migrated_fields += 1;
+                    }
                 }
                 
                 // gRPC 配置

@@ -13,6 +13,7 @@ use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use rand::Rng;
 use rust_embed::RustEmbed;
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File, Permissions};
 use std::io::Write;
@@ -72,7 +73,7 @@ struct TemplateAssets;
 
 mod unified_config;
 
-use unified_config::{ConfigVars, GitFoxConfig, generate_config_template, migrate_from_env, migrate_from_legacy};
+use unified_config::{ConfigVars, GitFoxConfig, generate_config_template, migrate_from_legacy};
 
 // ============================================================================
 // CLI
@@ -115,28 +116,15 @@ enum Commands {
     /// 显示版本信息
     Version,
 
-    /// 从旧版本升级 (配置迁移 + sshd 配置)
+    /// 从旧版本升级 (配置迁移)
     Upgrade {
         /// 自动应用所有变更 (不提示确认)
         #[arg(long)]
         yes: bool,
     },
 
-    /// 配置 gitfox-shell SSH 服务
-    SetupSsh {
-        /// git 用户名 (默认: git)
-        #[arg(long, default_value = "git")]
-        git_user: String,
-        /// git 用户 home 目录 (默认: /var/opt/gitfox)
-        #[arg(long, default_value = "/var/opt/gitfox")]
-        git_home: PathBuf,
-        /// SSH 服务监听端口 (默认: 22)
-        #[arg(long, default_value = "22")]
-        ssh_port: u16,
-        /// 输出配置而不是直接安装
-        #[arg(long)]
-        dry_run: bool,
-    },
+    /// 重新生成所有组件配置文件 (从 gitfox.toml)
+    Reconfigure,
 
     /// 验证和查看配置
     Config {
@@ -191,11 +179,60 @@ async fn main() -> Result<()> {
             println!("GitFox {}", env!("CARGO_PKG_VERSION"));
             println!("Built with GitFox Omnibus");
         }
-        Commands::Upgrade { yes } => {
-            upgrade_from_old_version(&cli.data_dir, yes)?;
+        Commands::Upgrade { yes: _ } => {
+            let gitfox_toml = cli.data_dir.join("gitfox.toml");
+            let gitfox_env = cli.data_dir.join("gitfox.env");
+            let workhorse_toml = cli.data_dir.join("workhorse.toml");
+            
+            if !gitfox_env.exists() && !workhorse_toml.exists() {
+                println!("❌ No configuration files found to migrate");
+                println!("   Expected: gitfox.env and/or workhorse.toml in {}", cli.data_dir.display());
+                return Ok(());
+            }
+            
+            if gitfox_toml.exists() {
+                println!("⚠️  gitfox.toml already exists at: {}", gitfox_toml.display());
+                println!("   To re-migrate, please remove or rename the existing file first.");
+                return Ok(());
+            }
+            
+            println!("🔄 Migrating configuration to gitfox.toml...\n");
+            
+            match migrate_from_legacy(&cli.data_dir) {
+                Ok(result) => {
+                    // 显示来源
+                    println!("📂 Source files:");
+                    for source in &result.sources {
+                        println!("   - {}", source);
+                    }
+                    
+                    // 保存新配置
+                    result.config.save(&gitfox_toml)?;
+                    
+                    println!("\n✅ Migration completed!");
+                    println!("   Migrated {} configuration fields", result.migrated_fields);
+                    println!("   Output: {}", gitfox_toml.display());
+                    
+                    if !result.warnings.is_empty() {
+                        println!("\n⚠️  Warnings:");
+                        for warning in &result.warnings {
+                            println!("   - {}", warning);
+                        }
+                    }
+                    
+                    println!("\n📋 Next steps:");
+                    println!("1. Review the generated gitfox.toml");
+                    println!("2. Update DATABASE_URL and secrets if needed");
+                    println!("3. Keep old config files as backup or remove them");
+                    println!("4. Run 'gitfox start' to use the new config");
+                }
+                Err(e) => {
+                    println!("❌ Migration failed: {}", e);
+                }
+            }
         }
-        Commands::SetupSsh { git_user, git_home, ssh_port, dry_run } => {
-            setup_ssh_server(&cli.data_dir, &git_user, &git_home, ssh_port, dry_run)?;
+        Commands::Reconfigure => {
+            reconfigure_from_toml(&cli.data_dir)?;
         }
         Commands::Config { action } => {
             handle_config_command(&cli.data_dir, action)?;
@@ -300,6 +337,23 @@ async fn start_services(cli: &Cli) -> Result<()> {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 
+    // 启动 gitfox-shell (SSH 服务器)
+    let ssh_enabled = env::var("SSH_ENABLED")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(true);
+    
+    let ssh_port = env::var("SSH_PORT")
+        .or_else(|_| env::var("SSH_PUBLIC_PORT"))
+        .unwrap_or_else(|_| "2222".to_string());
+    
+    let mut shell: Option<Child> = None;
+    if ssh_enabled {
+        info!("Starting gitfox-shell SSH server on port {}...", ssh_port);
+        shell = Some(start_shell(&paths, cli.verbose)?);
+        // 等待 SSH 服务器启动
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+
     // 启动后端
     info!("Starting backend on internal port {}...", backend_port);
     let mut backend = start_backend_from_env(&paths, database_url, redis_url, grpc_auth_port, cli.verbose)?;
@@ -326,20 +380,15 @@ async fn start_services(cli: &Cli) -> Result<()> {
         })?
     };
 
-    let ssh_port = env::var("SSH_PORT")
-        .or_else(|_| env::var("SSH_PUBLIC_PORT"))
-        .unwrap_or_else(|_| "22".to_string());
-
     info!("GitFox is running!");
     info!("  HTTP:      http://0.0.0.0:{}", http_port);
     info!("  gRPC Auth: [::1]:{}", grpc_auth_port);
     if gitlayer_enabled {
         info!("  GitLayer:  [::1]:{}", gitlayer_port);
     }
-    info!("  SSH:       ssh -p {} git@localhost (requires sshd setup)", ssh_port);
-    info!("");
-    info!("Note: SSH access requires system sshd configuration.");
-    info!("Run 'gitfox setup-ssh' for sshd integration guide.");
+    if ssh_enabled {
+        info!("  SSH:       ssh -p {} git@localhost", ssh_port);
+    }
 
     // 等待关闭信号
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -352,6 +401,9 @@ async fn start_services(cli: &Cli) -> Result<()> {
     if let Some(ref mut gl) = gitlayer {
         shutdown_process(gl, "gitlayer");
     }
+    if let Some(ref mut sh) = shell {
+        shutdown_process(sh, "gitfox-shell");
+    }
 
     info!("GitFox stopped");
     Ok(())
@@ -362,6 +414,7 @@ async fn start_services(cli: &Cli) -> Result<()> {
 // ============================================================================
 
 struct ServicePaths {
+    data_dir: PathBuf,     // 数据根目录，配置文件和所有子目录的父目录
     bin_dir: PathBuf,
     frontend_dir: PathBuf,
     webide_dir: PathBuf,
@@ -373,6 +426,7 @@ struct ServicePaths {
 impl ServicePaths {
     fn new(data_dir: &Path) -> Self {
         Self {
+            data_dir: data_dir.to_path_buf(),
             bin_dir: data_dir.join("bin"),
             frontend_dir: data_dir.join("frontend"),
             webide_dir: data_dir.join("webide"),
@@ -479,14 +533,54 @@ fn start_backend_from_env(
 fn start_gitlayer(paths: &ServicePaths, port: u16, verbose: bool) -> Result<Child> {
     let binary = paths.bin_dir.join("gitlayer");
     
-    let child = Command::new(&binary)
-        .env("GITLAYER_LISTEN_ADDR", format!("0.0.0.0:{}", port))
-        .env("GITLAYER_STORAGE_PATH", &paths.repos_dir)
-        .env("RUST_LOG", if verbose { "debug" } else { "info" })
+    // 加载 gitlayer.env（如果存在）
+    let gitlayer_env = paths.data_dir.join("gitlayer.env");
+    let mut cmd = Command::new(&binary);
+    
+    if gitlayer_env.exists() {
+        info!("Loading GitLayer configuration from: {}", gitlayer_env.display());
+        load_env_to_command(&gitlayer_env, &mut cmd)?;
+    } else {
+        // 使用默认配置
+        cmd.env("GITLAYER_GRPC_ADDRESS", format!("0.0.0.0:{}", port));
+        cmd.env("REPO_BASE_PATH", &paths.repos_dir);
+    }
+    
+    cmd.env("RUST_LOG", if verbose { "debug" } else { "info" });
+    
+    let child = cmd
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
         .context("Failed to start gitlayer")?;
+
+    Ok(child)
+}
+
+fn start_shell(paths: &ServicePaths, verbose: bool) -> Result<Child> {
+    let binary = paths.bin_dir.join("gitfox-shell");
+    
+    // 加载 gitfox-shell.env（如果存在）
+    let shell_env = paths.data_dir.join("gitfox-shell.env");
+    let mut cmd = Command::new(&binary);
+    
+    if shell_env.exists() {
+        info!("Loading gitfox-shell configuration from: {}", shell_env.display());
+        load_env_to_command(&shell_env, &mut cmd)?;
+    } else {
+        warn!("gitfox-shell.env not found, using defaults");
+        // 基本的默认配置
+        cmd.env("SSH_PORT", "2222");
+        cmd.env("GRPC_SERVER", "http://127.0.0.1:50051");
+    }
+    
+    cmd.env("RUST_LOG", if verbose { "debug" } else { "info" });
+    
+    let child = cmd
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .context("Failed to start gitfox-shell")?;
 
     Ok(child)
 }
@@ -1002,14 +1096,10 @@ fn init_config(data_dir: &Path) -> Result<()> {
         let ssh_dir = data_dir.join("ssh");
         let shell_path = data_dir.join("bin").join("gitfox-shell");
         
-        // 从模板生成配置
+        // 从模板生成配置（模板必须存在）
         let template = TemplateAssets::get("gitfox.toml.template")
             .map(|f| String::from_utf8_lossy(&f.data).to_string())
-            .unwrap_or_else(|| {
-                // 如果模板不存在，使用简化格式
-                warn!("gitfox.toml.template not found, using minimal config");
-                include_str!("../../../gitfox.toml.example").to_string()
-            });
+            .expect("gitfox.toml.template not found in embedded assets - build is corrupted");
         
         // 构建配置变量
         let vars = ConfigVars {
@@ -1058,7 +1148,101 @@ fn init_config(data_dir: &Path) -> Result<()> {
         info!("Created: {} (新统一配置格式)", gitfox_toml.display());
         println!("\n📋 NEW: gitfox.toml created (unified config format)");
         println!("   Future versions will use gitfox.toml as primary config.");
+        
+        // 从 gitfox.toml 生成各组件配置文件
+        println!("\n🔄 Generating component configuration files...");
+        reconfigure_from_toml(data_dir)?;
     }
+    
+    Ok(())
+}
+
+// ============================================================================
+// 配置重建 (从 gitfox.toml 生成各组件配置)
+// ============================================================================
+
+/// 从 gitfox.toml 重新生成所有组件配置文件
+fn reconfigure_from_toml(data_dir: &Path) -> Result<()> {
+    let gitfox_toml = data_dir.join("gitfox.toml");
+    
+    if !gitfox_toml.exists() {
+        println!("❌ gitfox.toml not found at: {}", gitfox_toml.display());
+        println!("\n   Run 'gitfox init' to create configuration first.");
+        return Err(anyhow::anyhow!("gitfox.toml not found"));
+    }
+    
+    println!("📂 Loading configuration from: {}", gitfox_toml.display());
+    let config = GitFoxConfig::load(&gitfox_toml)?;
+    
+    // 验证配置
+    if let Ok(warnings) = config.validate() {
+        if !warnings.is_empty() {
+            println!("\n⚠️  Configuration warnings:");
+            for warning in warnings {
+                println!("   - {}", warning);
+            }
+        }
+    }
+    
+    println!("\n🔄 Generating component configuration files...\n");
+    
+    // 1. gitfox.env (主应用 devops backend)
+    let gitfox_env_path = data_dir.join("gitfox.env");
+    write_env_file(&gitfox_env_path, &config.to_backend_env())?;
+    println!("✅ Generated: {}", gitfox_env_path.display());
+    
+    // 2. gitlayer.env
+    let gitlayer_env_path = data_dir.join("gitlayer.env");
+    write_env_file(&gitlayer_env_path, &config.to_gitlayer_env())?;
+    println!("✅ Generated: {}", gitlayer_env_path.display());
+    
+    // 3. gitfox-shell.env
+    let shell_env_path = data_dir.join("gitfox-shell.env");
+    write_env_file(&shell_env_path, &config.to_shell_env())?;
+    println!("✅ Generated: {}", shell_env_path.display());
+    
+    // 4. workhorse.toml
+    let workhorse_toml_path = data_dir.join("workhorse.toml");
+    fs::write(&workhorse_toml_path, config.to_workhorse_toml())?;
+    println!("✅ Generated: {}", workhorse_toml_path.display());
+    
+    println!("\n✨ All configuration files generated successfully!");
+    println!("\n📋 Generated files:");
+    println!("   - gitfox.env         (devops backend)");
+    println!("   - gitlayer.env       (Git operations service)");
+    println!("   - gitfox-shell.env   (SSH server)");
+    println!("   - workhorse.toml     (HTTP proxy)");
+    println!("\n💡 These files are auto-generated from gitfox.toml");
+    println!("   To update configuration:");
+    println!("   1. Edit gitfox.toml");
+    println!("   2. Run: gitfox reconfigure");
+    
+    Ok(())
+}
+
+/// 将环境变量 HashMap 写入 .env 文件
+fn write_env_file(path: &Path, env: &HashMap<String, String>) -> Result<()> {
+    let mut content = String::new();
+    content.push_str("# Auto-generated from gitfox.toml by 'gitfox reconfigure'\n");
+    content.push_str("# DO NOT EDIT MANUALLY - Changes will be overwritten\n");
+    content.push_str("# Edit gitfox.toml instead and run 'gitfox reconfigure'\n\n");
+    
+    // 按字母顺序排序 key
+    let mut keys: Vec<_> = env.keys().collect();
+    keys.sort();
+    
+    for key in keys {
+        let value = &env[key];
+        // 如果值包含空格或特殊字符，用引号包裹
+        if value.contains(' ') || value.contains('$') || value.contains('#') {
+            content.push_str(&format!("{}=\"{}\"\n", key, value));
+        } else {
+            content.push_str(&format!("{}={}\n", key, value));
+        }
+    }
+    
+    fs::write(path, content)
+        .with_context(|| format!("Failed to write env file: {}", path.display()))?;
     
     Ok(())
 }
@@ -1495,308 +1679,38 @@ fn load_env_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
-// ============================================================================
-// 版本升级迁移
-// ============================================================================
-
-/// 从旧版本升级配置
-fn upgrade_from_old_version(data_dir: &Path, auto_yes: bool) -> Result<()> {
-    info!("GitFox Upgrade Tool");
-    info!("==================");
-    info!("");
-    info!("This tool helps migrate from the old architecture (built-in SSH)");
-    info!("to the new architecture (sshd + gitfox-shell + GitLayer).");
-    info!("");
-
-    let env_file = data_dir.join("gitfox.env");
-    
-    if !env_file.exists() {
-        info!("No existing configuration found. Run 'gitfox init' first.");
+/// 从 .env 文件读取配置并设置到 Command 环境变量
+/// 与 load_env_file 类似，但设置到子进程命令而不是当前进程
+fn load_env_to_command(path: &Path, cmd: &mut Command) -> Result<()> {
+    if !path.exists() {
         return Ok(());
     }
-
-    // 读取现有配置
-    let content = fs::read_to_string(&env_file)?;
     
-    // 检查是否已经是新版本配置
-    if content.contains("GRPC_ENABLED") && content.contains("GITLAYER_ENABLED") {
-        info!("Configuration appears to be already upgraded.");
-        return Ok(());
-    }
-
-    info!("Detected old configuration format. Changes needed:");
-    info!("");
-    
-    // 检测需要的变更
-    let mut changes = Vec::new();
-    
-    // 1. 移除内置 SSH 配置
-    if content.contains("SSH_ENABLED=true") {
-        changes.push("- Remove SSH_ENABLED (internal SSH server removed)");
-    }
-    if content.contains("SSH_HOST=") {
-        changes.push("- Remove SSH_HOST (use system sshd instead)");
-    }
-    if content.contains("SSH_HOST_KEY_PATH=") {
-        changes.push("- Remove SSH_HOST_KEY_PATH (use system sshd keys)");
-    }
-    
-    // 2. 添加 gRPC 配置
-    if !content.contains("GRPC_ENABLED") {
-        changes.push("+ Add GRPC_ENABLED=true");
-        changes.push("+ Add GRPC_ADDRESS=[::1]:50051");
-    }
-    
-    // 3. 添加 GitLayer 配置
-    if !content.contains("GITLAYER_ENABLED") {
-        changes.push("+ Add GITLAYER_ENABLED=true");
-        changes.push("+ Add GITLAYER_PORT=50052");
-    }
-    
-    // 4. SSH Clone URL 配置
-    if !content.contains("SSH_PUBLIC_HOST") {
-        changes.push("+ Add SSH_PUBLIC_HOST=git.example.com (for clone URL display)");
-        changes.push("+ Add SSH_PUBLIC_PORT=22");
-    }
-
-    if changes.is_empty() {
-        info!("No changes needed.");
-        return Ok(());
-    }
-
-    for change in &changes {
-        info!("{}", change);
-    }
-    info!("");
-
-    // 确认
-    let proceed = if auto_yes {
-        true
-    } else {
-        Confirm::new("Apply these changes?")
-            .with_default(true)
-            .prompt()?
-    };
-
-    if !proceed {
-        info!("Upgrade cancelled.");
-        return Ok(());
-    }
-
-    // 应用变更
-    let mut new_content = String::new();
-    let mut removed_ssh = false;
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
     
     for line in content.lines() {
-        let trimmed = line.trim();
+        let line = line.trim();
         
-        // 跳过旧的 SSH 服务器配置
-        if trimmed.starts_with("SSH_ENABLED=") 
-            || trimmed.starts_with("SSH_HOST=") 
-            || trimmed.starts_with("SSH_PORT=") && !trimmed.starts_with("SSH_PUBLIC_PORT")
-            || trimmed.starts_with("SSH_HOST_KEY_PATH=") {
-            if !removed_ssh {
-                new_content.push_str("# [REMOVED] Old SSH server configuration (now using system sshd)\n");
-                removed_ssh = true;
-            }
+        // 跳过注释和空行
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
         
-        new_content.push_str(line);
-        new_content.push('\n');
+        // 解析 KEY=VALUE
+        if let Some((key, value)) = line.split_once('=') {
+            let key = key.trim();
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            
+            // 展开环境变量（如 ${HOME}）
+            let expanded = shellexpand::full(value)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| value.to_string());
+            
+            cmd.env(key, expanded);
+        }
     }
-
-    // 添加新配置
-    new_content.push_str("\n# ============================================\n");
-    new_content.push_str("# gRPC Services (added by upgrade)\n");
-    new_content.push_str("# ============================================\n");
-    new_content.push_str("GRPC_ENABLED=true\n");
-    new_content.push_str("GRPC_ADDRESS=[::1]:50051\n");
-    new_content.push_str("\n");
-    new_content.push_str("# GitLayer (Git operations RPC service)\n");
-    new_content.push_str("GITLAYER_ENABLED=true\n");
-    new_content.push_str("GITLAYER_PORT=50052\n");
-    new_content.push_str("\n");
-    new_content.push_str("# SSH Clone URL (for frontend display only)\n");
-    new_content.push_str("# Configure these to match your sshd setup\n");
-    new_content.push_str("SSH_PUBLIC_HOST=git.example.com\n");
-    new_content.push_str("SSH_PUBLIC_PORT=22\n");
-
-    // 备份并写入
-    let backup_path = data_dir.join("gitfox.env.backup");
-    fs::copy(&env_file, &backup_path)?;
-    info!("Backup created: {}", backup_path.display());
-
-    fs::write(&env_file, new_content)?;
-    info!("Configuration updated: {}", env_file.display());
-
-    info!("");
-    info!("Upgrade complete! Next steps:");
-    info!("1. Run 'gitfox setup-ssh' to configure system sshd");
-    info!("2. Restart GitFox: 'gitfox start'");
-
+    
     Ok(())
 }
 
-// ============================================================================
-// SSH 服务器设置
-// ============================================================================
-
-/// 设置 gitfox-shell SSH 服务器
-fn setup_ssh_server(data_dir: &Path, git_user: &str, git_home: &Path, ssh_port: u16, dry_run: bool) -> Result<()> {
-    info!("GitFox SSH Server Setup");
-    info!("========================");
-    info!("");
-    info!("gitfox-shell 是独立的 SSH 服务器，不依赖系统 sshd。");
-    info!("");
-    info!("Configuration:");
-    info!("  Git user:    {}", git_user);
-    info!("  Git home:    {}", git_home.display());
-    info!("  Data dir:    {}", data_dir.display());
-    info!("  SSH port:    {}", ssh_port);
-    info!("");
-
-    // 解压二进制（如果需要）
-    let bin_dir = data_dir.join("bin");
-    let shell_binary = bin_dir.join("gitfox-shell");
-
-    if !shell_binary.exists() {
-        info!("Extracting binaries...");
-        extract_embedded::<BinaryAssets>(&bin_dir, true)?;
-    }
-
-    let listen_addr = format!("0.0.0.0:{}", ssh_port);
-    let host_key_path = data_dir.join("ssh_host_ed25519_key");
-
-    // 生成 shell 环境配置
-    let shell_config = format!(r#"# GitFox Shell Configuration
-# /etc/gitfox/shell.env
-
-# SSH Server
-SSH_LISTEN_ADDR={listen_addr}
-SSH_HOST_KEY_PATH={host_key_path}
-
-# gRPC Services
-AUTH_GRPC_ADDRESS=http://[::1]:50051
-GITLAYER_ADDRESS=http://[::1]:50052
-
-# Internal API Secret (must match main app)
-GITFOX_API_SECRET=your-secret-token-here
-
-# Logging
-RUST_LOG=info
-"#, 
-        listen_addr = listen_addr,
-        host_key_path = host_key_path.display(),
-    );
-
-    // 生成 systemd 服务单元
-    let systemd_unit = format!(r#"[Unit]
-Description=GitFox Shell SSH Server
-After=network.target gitfox.service
-
-[Service]
-Type=simple
-User={git_user}
-Group={git_user}
-EnvironmentFile=/etc/gitfox/shell.env
-ExecStart={shell_binary} server --listen ${{SSH_LISTEN_ADDR}} --host-key ${{SSH_HOST_KEY_PATH}}
-Restart=always
-RestartSec=5
-
-# Security
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths={data_dir}
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-"#, 
-        git_user = git_user,
-        shell_binary = shell_binary.display(),
-        data_dir = data_dir.display(),
-    );
-
-    // 生成设置脚本
-    let setup_script = format!(r#"#!/bin/bash
-# GitFox SSH Setup Script
-# Run with: sudo bash setup-ssh.sh
-
-set -e
-
-echo "Setting up GitFox SSH server..."
-
-# 1. Create git user (if not exists)
-if ! id -u {git_user} &>/dev/null; then
-    echo "Creating git user..."
-    useradd -r -m -d {git_home} -s /usr/sbin/nologin {git_user}
-fi
-
-# 2. Create directories
-echo "Creating directories..."
-mkdir -p /etc/gitfox
-
-# 3. Install binary
-echo "Installing gitfox-shell..."
-cp {shell_binary} /usr/local/bin/gitfox-shell
-chmod 755 /usr/local/bin/gitfox-shell
-
-# 4. Create shell config
-echo "Creating shell configuration..."
-cat > /etc/gitfox/shell.env << 'SHELLCONFIG'
-{shell_config}
-SHELLCONFIG
-
-# 5. Install systemd service
-echo "Installing systemd service..."
-cat > /etc/systemd/system/gitfox-shell.service << 'SYSTEMDUNIT'
-{systemd_unit}
-SYSTEMDUNIT
-
-# 6. Set permissions
-echo "Setting permissions..."
-chown {git_user}:{git_user} /etc/gitfox/shell.env
-
-# 7. Reload systemd
-echo "Reloading systemd..."
-systemctl daemon-reload
-
-echo ""
-echo "Setup complete!"
-echo ""
-echo "To start the SSH server:"
-echo "  sudo systemctl enable gitfox-shell"
-echo "  sudo systemctl start gitfox-shell"
-echo ""
-echo "Note: If you're using port 22, make sure to stop/disable the system sshd first,"
-echo "or configure gitfox-shell to use a different port (e.g., 2222)."
-"#, 
-        git_user = git_user,
-        git_home = git_home.display(),
-        shell_binary = shell_binary.display(),
-        shell_config = shell_config.trim(),
-        systemd_unit = systemd_unit.trim(),
-    );
-
-    if dry_run {
-        info!("=== Shell config (/etc/gitfox/shell.env) ===");
-        println!("{}", shell_config);
-        info!("=== Systemd unit (/etc/systemd/system/gitfox-shell.service) ===");
-        println!("{}", systemd_unit);
-        info!("=== Setup script ===");
-        println!("{}", setup_script);
-    } else {
-        // 写入设置脚本
-        let script_path = data_dir.join("setup-ssh.sh");
-        fs::write(&script_path, &setup_script)?;
-        fs::set_permissions(&script_path, Permissions::from_mode(0o755))?;
-        
-        info!("Setup script created: {}", script_path.display());
-        info!("");
-        info!("To complete setup, run:");
-        info!("  sudo bash {}", script_path.display());
-    }
-
-    Ok(())
-}

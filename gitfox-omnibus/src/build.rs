@@ -55,9 +55,11 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
     let omnibus_dir = config.workspace_root.join("gitfox-omnibus");
     let build_dir = omnibus_dir.join(".build");
     
-    // 清理旧的构建目录
-    if build_dir.exists() {
-        fs::remove_dir_all(&build_dir)?;
+    // 只清理 embedded 资源目录（资源可能变化），保留 stub/target 以实现增量编译
+    let stub_embedded = build_dir.join("stub").join("embedded");
+    if stub_embedded.exists() {
+        info!("Cleaning embedded resources...");
+        fs::remove_dir_all(&stub_embedded)?;
     }
     
     info!("Build directory: {}", build_dir.display());
@@ -395,13 +397,14 @@ fn copy_templates(workspace: &Path, output_dir: &Path) -> Result<()> {
         warn!(".env.example not found");
     }
     
-    // 复制 gitfox.toml.example (新统一配置格式)
-    let toml_example = workspace.join("gitfox.toml.example");
+    // 复制 gitfox.toml.example (新统一配置格式) - 从 gitfox-omnibus 目录
+    let omnibus_dir = workspace.join("gitfox-omnibus");
+    let toml_example = omnibus_dir.join("gitfox.toml.example");
     if toml_example.exists() {
         fs::copy(&toml_example, output_dir.join("gitfox.toml.template"))?;
-        info!("Copied gitfox.toml.example → gitfox.toml.template");
+        info!("Copied gitfox-omnibus/gitfox.toml.example → gitfox.toml.template");
     } else {
-        warn!("gitfox.toml.example not found");
+        return Err(anyhow::anyhow!("gitfox-omnibus/gitfox.toml.example not found - this file is required"));
     }
     
     // 复制 config.example.toml
