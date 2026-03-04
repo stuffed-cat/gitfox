@@ -187,6 +187,33 @@ impl AuthClient {
         let response = self.client.check_ref_update(request).await?;
         Ok(response.into_inner())
     }
+
+    /// 生成 LFS 认证 token
+    pub async fn generate_lfs_token(
+        &mut self,
+        user_id: i64,
+        username: &str,
+        repo_path: &str,
+        operation: &str,
+        project_id: Option<i64>,
+    ) -> Result<LfsTokenResponse, Box<dyn std::error::Error>> {
+        debug!(
+            "GenerateLfsToken: user_id={}, repo={}, operation={}",
+            user_id, repo_path, operation
+        );
+
+        let mut request = Request::new(LfsTokenRequest {
+            user_id,
+            username: username.to_string(),
+            repo_path: repo_path.to_string(),
+            operation: operation.to_string(),
+            project_id: project_id.unwrap_or(0),
+        });
+        self.add_auth(&mut request);
+
+        let response = self.client.generate_lfs_token(request).await?;
+        Ok(response.into_inner())
+    }
 }
 
 /// SSH Key 信息

@@ -24,6 +24,9 @@ service AuthService {
     
     // CheckRefUpdate - 检查ref更新权限 (pre-receive hook)
     rpc CheckRefUpdate(RefUpdateRequest) returns (RefUpdateResponse);
+    
+    // GenerateLfsToken - 生成LFS认证token (用于git-lfs-authenticate)
+    rpc GenerateLfsToken(LfsTokenRequest) returns (LfsTokenResponse);
 }
 
 // SSH访问检查请求
@@ -178,4 +181,32 @@ message RefUpdateRequest {
 message RefUpdateResponse {
     bool allowed = 1;
     string message = 2;
+}
+
+// LFS Token生成请求
+message LfsTokenRequest {
+    // 用户ID
+    int64 user_id = 1;
+    // 用户名
+    string username = 2;
+    // 仓库路径 (格式: "namespace/project")
+    string repo_path = 3;
+    // 操作类型: "download" 或 "upload"
+    string operation = 4;
+    // 项目ID (可选)
+    int64 project_id = 5;
+}
+
+// LFS Token生成响应
+message LfsTokenResponse {
+    // 是否成功
+    bool success = 1;
+    // 错误消息
+    string message = 2;
+    // LFS认证token (JWT格式)
+    string token = 3;
+    // LFS服务端点URL
+    string href = 4;
+    // Token过期时间 (秒)
+    int64 expires_in = 5;
 }

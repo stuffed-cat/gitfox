@@ -7,10 +7,11 @@ use regex::Regex;
 use tokio::process::Command;
 use tracing::{debug, error, info};
 
-use crate::api::AccessInfo;
+use crate::auth_client::AuthClient;
 use crate::config::Config;
 use crate::error::ShellError;
 use crate::gitlayer_client::{GitLayerClient, GitLayerConfig};
+use crate::ssh_server::AccessInfo;
 
 /// Supported Git actions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,7 +164,7 @@ impl GitCommand {
                 self.execute_git_command(repo_path, access_info, config).await
             }
             GitAction::LfsAuthenticate => {
-                self.execute_lfs_authenticate(repo_path, access_info).await
+                self.execute_lfs_authenticate(repo_path, access_info, config).await
             }
         }
     }
@@ -470,8 +471,11 @@ impl GitCommand {
         info!("Detected {} ref changes, triggering post-receive", changes.len());
         
         // Call internal API
-        let base_url = access_info.base_url.as_deref().unwrap_or("http://localhost:8080");
-        let api_token = std::env::var("GITFOX_SHELL_SECRET")
+        // 从环境变量获取基础 URL（由 omnibus 或部署配置设置）
+        let base_url = std::env::var("GITFOX_BASE_URL")
+            .or_else(|_| std::env::var("GITFOX_URL"))
+            .unwrap_or_else(|_| "http://localhost:8080".to_string());
+        let api_token = std::env::var("GITFOX_API_SECRET")
             .unwrap_or_else(|_| "your-shell-secret".to_string());
         
         let payload = json!({
@@ -508,31 +512,74 @@ impl GitCommand {
     }
 
     /// Execute git-lfs-authenticate
+    /// 
+    /// 通过 Auth gRPC 服务获取 LFS 认证 token。
+    /// 返回 JSON 格式的认证信息，包含 token、href 和过期时间。
     async fn execute_lfs_authenticate(
         &self,
         _repo_path: &str,
         access_info: &AccessInfo,
+        config: &Config,
     ) -> Result<(), ShellError> {
         // Get the operation type (download or upload)
         let operation = self.extra_args.first().map(|s| s.as_str()).unwrap_or("download");
 
-        // Check permissions
+        // Check permissions locally first (quick fail)
         if operation == "upload" && !access_info.can_write {
             return Err(ShellError::AccessDenied(
                 "Write access required for LFS upload".to_string(),
             ));
         }
 
-        // Generate LFS authentication response
+        // 获取 Auth gRPC 地址
+        let auth_addr = config.auth_grpc_address.as_ref()
+            .ok_or_else(|| ShellError::Config(
+                "AUTH_GRPC_ADDRESS not configured. Auth gRPC service is required for LFS.".to_string()
+            ))?;
+
+        // 连接 Auth gRPC 服务
+        let mut auth_client = AuthClient::connect(auth_addr, config.api_secret.clone())
+            .await
+            .map_err(|e| ShellError::GitExecution(format!(
+                "Failed to connect to Auth gRPC service: {}", e
+            )))?;
+
+        // 调用 GenerateLfsToken RPC
+        let response = auth_client
+            .generate_lfs_token(
+                access_info.user_id,
+                &access_info.username,
+                &self.repo_path,
+                operation,
+                access_info.project_id,
+            )
+            .await
+            .map_err(|e| ShellError::GitExecution(format!(
+                "Failed to generate LFS token: {}", e
+            )))?;
+
+        // 检查响应
+        if !response.success {
+            return Err(ShellError::AccessDenied(
+                response.message.clone(),
+            ));
+        }
+
+        // 生成 LFS 认证响应（JSON 格式，符合 git-lfs 协议）
         let lfs_auth = serde_json::json!({
             "header": {
-                "Authorization": format!("Bearer {}", access_info.lfs_token.as_deref().unwrap_or("")),
+                "Authorization": format!("Bearer {}", response.token),
             },
-            "href": format!("{}/{}.git/info/lfs", access_info.base_url.as_deref().unwrap_or(""), self.repo_path),
-            "expires_in": 1800,
+            "href": response.href,
+            "expires_in": response.expires_in,
         });
 
         println!("{}", serde_json::to_string(&lfs_auth).unwrap());
+
+        info!(
+            "LFS authenticate completed for user {} on {} (operation: {})",
+            access_info.username, self.repo_path, operation
+        );
 
         Ok(())
     }

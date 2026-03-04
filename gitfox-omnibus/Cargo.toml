@@ -39,6 +39,12 @@ flate2 = "1"
 sha2 = "0.10"
 hex = "0.4"
 
+# Git operations
+git2 = "0.18"
+
+# Progress bar
+indicatif = "0.17"
+
 # Process execution
 which = "6"
 

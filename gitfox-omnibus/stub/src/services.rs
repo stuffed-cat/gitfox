@@ -249,6 +249,7 @@ impl BundledServices {
             let deps_dir = self.data_dir.join("deps/postgresql");
             let postgres_bin = deps_dir.join("bin/postgres");
             let initdb_bin = deps_dir.join("bin/initdb");
+            let lib_dir = deps_dir.join("lib");
 
             if !postgres_bin.exists() {
                 return Err(anyhow::anyhow!(
@@ -257,6 +258,15 @@ impl BundledServices {
                 ));
             }
 
+            // 查找 musl 动态链接器 (ld-musl-x86_64.so.1)
+            // PostgreSQL 使用 musl libc 动态链接编译，需要通过 ld-musl 启动
+            // 这避免了系统需要安装 musl，也避免了 patchelf 修改 ELF interpreter
+            let ld_musl = self.find_musl_loader(&lib_dir)?;
+            info!("Using musl loader: {}", ld_musl.display());
+
+            // 设置 LD_LIBRARY_PATH 让动态链接器找到所有 .so
+            let ld_library_path = lib_dir.to_string_lossy().to_string();
+
             // 创建数据目录
             fs::create_dir_all(&config.data_dir)?;
 
@@ -264,13 +274,16 @@ impl BundledServices {
             let pg_version_file = config.data_dir.join("PG_VERSION");
             if !pg_version_file.exists() {
                 info!("Initializing PostgreSQL database...");
-                let status = Command::new(&initdb_bin)
+                // 通过 ld-musl 执行 initdb
+                let status = Command::new(&ld_musl)
+                    .arg(&initdb_bin)
                     .args([
                         "-D", &config.data_dir.to_string_lossy(),
                         "-U", &config.username,
                         "--encoding=UTF8",
                         "--locale=C",
                     ])
+                    .env("LD_LIBRARY_PATH", &ld_library_path)
                     .status()?;
 
                 if !status.success() {
@@ -281,13 +294,16 @@ impl BundledServices {
                 self.write_postgresql_config(config)?;
             }
 
-            // 启动 PostgreSQL
-            let child = Command::new(&postgres_bin)
+            // 通过 ld-musl 启动 PostgreSQL
+            // 命令格式: /path/to/ld-musl-x86_64.so.1 /path/to/postgres -D ... -p ... -h ...
+            let child = Command::new(&ld_musl)
+                .arg(&postgres_bin)
                 .args([
                     "-D", &config.data_dir.to_string_lossy(),
                     "-p", &config.port.to_string(),
                     "-h", &config.host,
                 ])
+                .env("LD_LIBRARY_PATH", &ld_library_path)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -358,42 +374,78 @@ host    all             all             ::1/128                 md5
         Ok(())
     }
 
+    /// 查找 musl 动态链接器 (ld-musl-x86_64.so.1)
+    /// PostgreSQL 使用 musl 动态链接编译，需要通过此加载器启动
+    #[cfg(feature = "bundled-deps")]
+    fn find_musl_loader(&self, lib_dir: &Path) -> Result<PathBuf> {
+        // 查找 ld-musl-*.so.1 文件
+        for entry in fs::read_dir(lib_dir)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("ld-musl") && name.ends_with(".so.1") {
+                return Ok(entry.path());
+            }
+        }
+        
+        // 备选：查找符号链接可能指向的位置
+        let ld_musl = lib_dir.join("ld-musl-x86_64.so.1");
+        if ld_musl.exists() {
+            return Ok(ld_musl);
+        }
+        
+        Err(anyhow::anyhow!(
+            "musl dynamic loader not found in {}. Expected ld-musl-x86_64.so.1",
+            lib_dir.display()
+        ))
+    }
+
     #[cfg(feature = "bundled-deps")]
     fn setup_postgresql_database(&self, config: &BundledPostgresConfig) -> Result<()> {
         let deps_dir = self.data_dir.join("deps/postgresql");
+        let lib_dir = deps_dir.join("lib");
         let psql_bin = deps_dir.join("bin/psql");
+        
+        // 使用 musl loader 执行 psql
+        let ld_musl = self.find_musl_loader(&lib_dir)?;
+        let ld_library_path = lib_dir.to_string_lossy().to_string();
 
         // 检查数据库是否存在
-        let output = Command::new(&psql_bin)
+        let output = Command::new(&ld_musl)
+            .arg(&psql_bin)
             .args([
                 "-h", &config.host,
                 "-p", &config.port.to_string(),
                 "-U", &config.username,
                 "-tAc", &format!("SELECT 1 FROM pg_database WHERE datname = '{}'", config.database),
             ])
+            .env("LD_LIBRARY_PATH", &ld_library_path)
             .output()?;
 
         if output.stdout.is_empty() || String::from_utf8_lossy(&output.stdout).trim() != "1" {
             info!("Creating database: {}", config.database);
-            Command::new(&psql_bin)
+            Command::new(&ld_musl)
+                .arg(&psql_bin)
                 .args([
                     "-h", &config.host,
                     "-p", &config.port.to_string(),
                     "-U", &config.username,
                     "-c", &format!("CREATE DATABASE {}", config.database),
                 ])
+                .env("LD_LIBRARY_PATH", &ld_library_path)
                 .status()?;
         }
 
         // 如果设置了密码，更新用户密码
         if !config.password.is_empty() {
-            Command::new(&psql_bin)
+            Command::new(&ld_musl)
+                .arg(&psql_bin)
                 .args([
                     "-h", &config.host,
                     "-p", &config.port.to_string(),
                     "-U", &config.username,
                     "-c", &format!("ALTER USER {} WITH PASSWORD '{}'", config.username, config.password),
                 ])
+                .env("LD_LIBRARY_PATH", &ld_library_path)
                 .status()?;
         }
 
@@ -419,6 +471,7 @@ host    all             all             ::1/128                 md5
 
             let deps_dir = self.data_dir.join("deps/redis");
             let redis_bin = deps_dir.join("bin/redis-server");
+            let lib_dir = deps_dir.parent().unwrap().join("postgresql/lib"); // 共享 PostgreSQL 的 lib
 
             if !redis_bin.exists() {
                 return Err(anyhow::anyhow!(
@@ -427,6 +480,13 @@ host    all             all             ::1/128                 md5
                 ));
             }
 
+            // 查找 musl 动态链接器（Redis 也是用 musl 动态链接编译的）
+            let ld_musl = self.find_musl_loader(&lib_dir)?;
+            info!("Using musl loader for Redis: {}", ld_musl.display());
+
+            // 设置 LD_LIBRARY_PATH
+            let ld_library_path = lib_dir.to_string_lossy().to_string();
+
             // 创建数据目录
             fs::create_dir_all(&config.data_dir)?;
 
@@ -434,9 +494,12 @@ host    all             all             ::1/128                 md5
             let conf_file = config.data_dir.join("redis.conf");
             self.write_redis_config(config, &conf_file)?;
 
-            // 启动 Redis
-            let child = Command::new(&redis_bin)
+            // 通过 ld-musl 启动 Redis
+            // 命令格式: /path/to/ld-musl-x86_64.so.1 /path/to/redis-server config.conf
+            let child = Command::new(&ld_musl)
+                .arg(&redis_bin)
                 .arg(&conf_file)
+                .env("LD_LIBRARY_PATH", &ld_library_path)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()

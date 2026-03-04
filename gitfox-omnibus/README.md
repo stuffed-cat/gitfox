@@ -138,13 +138,10 @@ cargo build --release -p gitfox-omnibus
     --skip-webide \
     --output ./gitfox
 
-# 跳过依赖构建（使用缓存）
+# 保留临时文件（调试用）
 ./target/release/gitfox-omnibus build \
-    --skip-deps-build \
+    --keep-temp \
     --output ./gitfox
-
-# 清理构建产物（保留依赖缓存）
-./target/release/gitfox-omnibus clean
 ```
 
 ### 3. 使用生成的超级二进制
@@ -307,10 +304,7 @@ BUILD OPTIONS:
         --skip-webide         跳过 WebIDE 构建
         --skip-rust           跳过 Rust 二进制编译
         --release             使用 release 模式 [default: true]
-        --skip-deps-build     跳过依赖构建（使用缓存）
-
-CLEAN COMMAND:
-    clean                     清理构建产物（保留依赖缓存 .build/deps-work）
+        --keep-temp           保留临时文件
 ```
 
 ### gitfox (生成的超级二进制)
@@ -806,21 +800,15 @@ gitfox-omnibus/
 ### 调试
 
 ```bash
+# 保留构建文件查看中间产物
+./gitfox-omnibus build --keep-temp --output ./gitfox
+
 # 查看构建目录结构 (在工作区内，避免占用 /tmp)
 ls -la gitfox-omnibus/.build/
-
-# 清理构建产物（保留依赖缓存）
-./gitfox-omnibus clean
 ```
 
 **注意**: 构建过程会在 `gitfox-omnibus/.build/` 目录下进行，其中:
-- `assets/`: 收集的资源 (frontend, webide, binaries, migrations) - 每次构建会清理
-- `stub/`: 生成的 stub 项目 (包含 target/ 目录) - 每次构建会清理
-- `deps-work/`: 依赖源码和编译缓存 (PostgreSQL, Redis, Nginx 等) - **永久保留**
-
-依赖缓存策略:
-- 首次构建会克隆依赖源码并编译（可能需要 30+ 分钟）
-- 后续构建会复用缓存（只需几秒）
-- 手动清理依赖缓存: `rm -rf gitfox-omnibus/.build/deps-work`
+- `assets/`: 收集的资源 (frontend, webide, binaries, migrations)
+- `stub/`: 生成的 stub 项目 (包含 target/ 目录，可能达到 10+ GB)
 
 不使用 `/tmp` 是因为 Cargo 编译的 target 目录非常大。

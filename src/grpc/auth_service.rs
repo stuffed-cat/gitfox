@@ -384,6 +384,119 @@ impl AuthService for AuthServiceImpl {
             message: String::new(),
         }))
     }
+
+    /// 生成 LFS 认证 token
+    async fn generate_lfs_token(
+        &self,
+        request: Request<LfsTokenRequest>,
+    ) -> Result<Response<LfsTokenResponse>, Status> {
+        self.verify_internal_token(&request)?;
+
+        let req = request.into_inner();
+        debug!(
+            "GenerateLfsToken: user_id={}, repo={}, operation={}",
+            req.user_id, req.repo_path, req.operation
+        );
+
+        // 验证用户存在
+        let user_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND is_active = true)"
+        )
+        .bind(req.user_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
+
+        if !user_exists {
+            return Ok(Response::new(LfsTokenResponse {
+                success: false,
+                message: "User not found or inactive".to_string(),
+                ..Default::default()
+            }));
+        }
+
+        // 如果是 upload 操作，需要验证写权限
+        if req.operation == "upload" {
+            let (can_access, can_write, _, _) = self.check_repo_access(
+                req.user_id,
+                &req.repo_path,
+                "git-receive-pack"
+            ).await?;
+
+            if !can_access {
+                return Ok(Response::new(LfsTokenResponse {
+                    success: false,
+                    message: "You don't have access to this repository".to_string(),
+                    ..Default::default()
+                }));
+            }
+
+            if !can_write {
+                return Ok(Response::new(LfsTokenResponse {
+                    success: false,
+                    message: "You don't have write access to this repository".to_string(),
+                    ..Default::default()
+                }));
+            }
+        }
+
+        // 生成 LFS token (JWT)
+        use jsonwebtoken::{encode, EncodingKey, Header};
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct LfsClaims {
+            sub: String,           // subject: "lfs"
+            user_id: i64,
+            username: String,
+            repo: String,
+            operation: String,     // "download" 或 "upload"
+            exp: i64,             // 过期时间
+            iat: i64,             // 签发时间
+        }
+
+        let now = chrono::Utc::now();
+        // 使用配置的 LFS 链接过期时间，默认 1800 秒（30分钟）
+        let expires_in = self.config.lfs_link_expires.unwrap_or(1800);
+        let exp = now + chrono::Duration::seconds(expires_in);
+
+        let claims = LfsClaims {
+            sub: "lfs".to_string(),
+            user_id: req.user_id,
+            username: req.username.clone(),
+            repo: req.repo_path.clone(),
+            operation: req.operation.clone(),
+            exp: exp.timestamp(),
+            iat: now.timestamp(),
+        };
+
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(self.config.jwt_secret.as_bytes()),
+        )
+        .map_err(|e| Status::internal(format!("Failed to generate LFS token: {}", e)))?;
+
+        // 构建 LFS href
+        let href = format!(
+            "{}/{}.git/info/lfs",
+            self.config.base_url.trim_end_matches('/'),
+            req.repo_path
+        );
+
+        info!(
+            "Generated LFS token for user {} on repo {} (operation: {})",
+            req.user_id, req.repo_path, req.operation
+        );
+
+        Ok(Response::new(LfsTokenResponse {
+            success: true,
+            message: String::new(),
+            token,
+            href,
+            expires_in,
+        }))
+    }
 }
 
 impl AuthServiceImpl {

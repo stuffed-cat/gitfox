@@ -25,6 +25,8 @@
 //! - pkg-config
 
 use anyhow::{Context, Result};
+use git2::Repository;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -58,6 +60,9 @@ const NCURSES_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/ncurses.git";
 const READLINE_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/readline.git";
 const OPENSSL_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/openssl.git";
 const ICU_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/icu.git";
+
+// systemd（用于 Redis）
+const SYSTEMD_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/systemd.git";
 
 /// 构建配置
 #[derive(Debug, Clone)]
@@ -104,6 +109,8 @@ pub struct DepsOutput {
     pub redis: Option<RedisOutput>,
     /// Nginx 二进制
     pub nginx: Option<NginxOutput>,
+    /// 依赖库的 lib 目录（包含所有 .so 文件）
+    pub deps_lib_dir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -278,6 +285,10 @@ pub fn build_deps(config: &DepsConfig) -> Result<DepsOutput> {
     fs::create_dir_all(&config.output_dir)?;
 
     let mut output = DepsOutput::default();
+    
+    // 记录依赖库 lib 目录（包含 .so 文件）
+    let deps_install_dir = config.work_dir.join("deps-install");
+    output.deps_lib_dir = Some(deps_install_dir.join("lib"));
 
     // 计算并行任务数
     let jobs = if config.jobs == 0 {
@@ -311,24 +322,137 @@ pub fn build_deps(config: &DepsConfig) -> Result<DepsOutput> {
 
 /// 克隆或更新镜像仓库
 fn clone_or_update(url: &str, dest: &Path) -> Result<()> {
-    if dest.exists() {
+    // 尝试打开现有仓库，如果失败则说明需要 clone
+    if let Ok(repo) = Repository::open(dest) {
         info!("Updating existing repository: {}", dest.display());
-        let status = Command::new("git")
-            .args(["pull", "--ff-only"])
-            .current_dir(dest)
-            .status()?;
-        if !status.success() {
-            warn!("Git pull failed, continuing with existing version");
+        
+        // 查找 origin remote
+        let mut remote = repo.find_remote("origin")
+            .with_context(|| "Failed to find 'origin' remote")?;
+        
+        // 创建进度条
+        let pb = ProgressBar::new(100);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        
+        // 配置 fetch options：启用多线程对象处理
+        let mut fetch_opts = git2::FetchOptions::new();
+        
+        fetch_opts.remote_callbacks({
+            let pb = pb.clone();
+            let mut callbacks = git2::RemoteCallbacks::new();
+            callbacks.transfer_progress(move |stats| {
+                if stats.received_objects() == stats.total_objects() {
+                    // 开始解析 deltas
+                    pb.set_length(stats.total_deltas() as u64);
+                    pb.set_position(stats.indexed_deltas() as u64);
+                    pb.set_message(format!("Resolving deltas"));
+                } else {
+                    // 接收对象阶段
+                    pb.set_length(stats.total_objects() as u64);
+                    pb.set_position(stats.received_objects() as u64);
+                    pb.set_message(format!("Receiving objects"));
+                }
+                true
+            });
+            callbacks
+        });
+        
+        // Fetch 远程分支（libgit2 会自动使用多线程处理对象）
+        remote.fetch(&["refs/heads/*:refs/heads/*"], Some(&mut fetch_opts), None)
+            .with_context(|| "Failed to fetch from origin")?;
+        
+        pb.finish_with_message("Fetch complete");
+        
+        // 获取当前分支
+        let head = repo.head()
+            .with_context(|| "Failed to get HEAD reference")?;
+        
+        if !head.is_branch() {
+            warn!("HEAD is not a branch, skipping fast-forward");
+            return Ok(());
+        }
+        
+        let branch_name = head.shorthand()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get branch name"))?;
+        
+        // 查找对应的远程分支
+        let remote_branch_name = format!("refs/remotes/origin/{}", branch_name);
+        let remote_ref = repo.find_reference(&remote_branch_name)
+            .with_context(|| format!("Failed to find remote branch: {}", remote_branch_name))?;
+        
+        let remote_commit = remote_ref.peel_to_commit()
+            .with_context(|| "Failed to get remote commit")?;
+        
+        // Fast-forward merge (设置 HEAD 到远程 commit)
+        let local_commit = head.peel_to_commit()
+            .with_context(|| "Failed to get local commit")?;
+        
+        if repo.graph_descendant_of(remote_commit.id(), local_commit.id())? {
+            warn!("Remote is behind local, skipping update");
+        } else if repo.graph_descendant_of(local_commit.id(), remote_commit.id())? {
+            // 可以 fast-forward
+            repo.reference(
+                head.name().ok_or_else(|| anyhow::anyhow!("Invalid HEAD reference"))?,
+                remote_commit.id(),
+                true, // force
+                "Fast-forward merge"
+            )?;
+            
+            // 更新工作目录
+            repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                .with_context(|| "Failed to checkout HEAD")?;
+            
+            info!("Successfully updated repository to {}", remote_commit.id());
+        } else {
+            warn!("Cannot fast-forward, branches have diverged. Keeping local version.");
         }
     } else {
         info!("Cloning: {} -> {}", url, dest.display());
-        let status = Command::new("git")
-            .args(["clone", "--depth=1", url])
-            .arg(dest)
-            .status()?;
-        if !status.success() {
-            return Err(anyhow::anyhow!("Failed to clone {}", url));
-        }
+        
+        // 创建进度条
+        let pb = ProgressBar::new(100);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        
+        // 配置 fetch options：启用多线程对象处理
+        let mut fetch_opts = git2::FetchOptions::new();
+        
+        fetch_opts.remote_callbacks({
+            let pb = pb.clone();
+            let mut callbacks = git2::RemoteCallbacks::new();
+            callbacks.transfer_progress(move |stats| {
+                if stats.received_objects() == stats.total_objects() {
+                    // 开始解析 deltas
+                    pb.set_length(stats.total_deltas() as u64);
+                    pb.set_position(stats.indexed_deltas() as u64);
+                    pb.set_message(format!("Resolving deltas"));
+                } else {
+                    // 接收对象阶段
+                    pb.set_length(stats.total_objects() as u64);
+                    pb.set_position(stats.received_objects() as u64);
+                    pb.set_message(format!("Receiving objects"));
+                }
+                true
+            });
+            callbacks
+        });
+        
+        // 使用 RepoBuilder 配置 clone
+        git2::build::RepoBuilder::new()
+            .fetch_options(fetch_opts)
+            .clone(url, dest)
+            .with_context(|| format!("Failed to clone {} to {}", url, dest.display()))?;
+        
+        pb.finish_with_message("Clone complete");
     }
     Ok(())
 }
@@ -337,42 +461,148 @@ fn clone_or_update(url: &str, dest: &Path) -> Result<()> {
 fn build_postgresql_deps(config: &DepsConfig, jobs: usize) -> Result<PathBuf> {
     let deps_dir = config.output_dir.join("postgresql-deps");
     
-    // 检查缓存
-    if config.use_cache && deps_dir.exists() {
-        info!("Using cached PostgreSQL dependencies");
-        return Ok(deps_dir);
-    }
-    
     fs::create_dir_all(&deps_dir)?;
     let deps_include = deps_dir.join("include");
     let deps_lib = deps_dir.join("lib");
     fs::create_dir_all(&deps_include)?;
     fs::create_dir_all(&deps_lib)?;
     
+    // 所有依赖同时生成 .a 和 .so
+    // PostgreSQL 会静态链接 .a，我们只打包 .so 供运行时使用
+    
     // 构建 zlib
-    info!("Building zlib (static)...");
+    info!("Building zlib (static + shared)...");
     build_zlib(config, jobs, &deps_dir)?;
     
     // 构建 ncurses (readline 依赖)
-    info!("Building ncurses (static)...");
+    info!("Building ncurses (static + shared)...");
     build_ncurses(config, jobs, &deps_dir)?;
     
     // 构建 readline
-    info!("Building readline (static)...");
+    info!("Building readline (static + shared)...");
     build_readline(config, jobs, &deps_dir)?;
     
     // 构建 OpenSSL
-    info!("Building OpenSSL (static)...");
+    info!("Building OpenSSL (static + shared)...");
     build_openssl(config, jobs, &deps_dir)?;
     
     // 构建 ICU
-    info!("Building ICU (static)...");
+    info!("Building ICU (static + shared)...");
     build_icu(config, jobs, &deps_dir)?;
+    
+    // 复制 ld-musl 动态链接器到 lib 目录
+    // 这是运行时必需的，用于启动 musl 动态链接的二进制
+    copy_musl_loader(&deps_lib)?;
     
     Ok(deps_dir)
 }
 
-/// 构建 zlib 静态库
+/// 从 musl-toolchain 复制 ld-musl 动态链接器和运行时库
+fn copy_musl_loader(lib_dir: &Path) -> Result<()> {
+    use std::os::unix::fs::symlink;
+    
+    let cxx_path = get_musl_gxx();
+    if !cxx_path.contains("musl-toolchain") {
+        // 使用系统 musl-gcc，尝试从系统路径复制
+        let system_ld = Path::new("/lib/ld-musl-x86_64.so.1");
+        if system_ld.exists() {
+            let dest = lib_dir.join("ld-musl-x86_64.so.1");
+            if !dest.exists() {
+                fs::copy(system_ld, &dest)?;
+                info!("Copied ld-musl from system path");
+            }
+        }
+        return Ok(());
+    }
+    
+    // 从下载的 musl-toolchain 复制
+    if let Some(parent) = Path::new(cxx_path).parent() {
+        if let Some(toolchain_root) = parent.parent() {
+            let musl_lib = toolchain_root.join("x86_64-linux-musl/lib");
+            
+            // 先复制 libc.so（这是 musl 的核心）
+            let libc_src = musl_lib.join("libc.so");
+            let libc_dest = lib_dir.join("libc.so");
+            if libc_src.exists() && !libc_dest.exists() {
+                fs::copy(&libc_src, &libc_dest)?;
+                info!("Copied libc.so to deps lib");
+            }
+            
+            // 创建 ld-musl-x86_64.so.1 符号链接指向 libc.so
+            // musl 的动态链接器就是 libc.so 本身
+            let ld_musl_dest = lib_dir.join("ld-musl-x86_64.so.1");
+            if !ld_musl_dest.exists() {
+                symlink("libc.so", &ld_musl_dest)?;
+                info!("Created ld-musl-x86_64.so.1 symlink -> libc.so");
+            }
+            
+            // 复制 C++ 运行时库
+            for entry in fs::read_dir(&musl_lib)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().to_string();
+                let path = entry.path();
+                
+                // 跳过符号链接（我们已经手动处理了 ld-musl）
+                if path.is_symlink() {
+                    continue;
+                }
+                
+                // 复制 libstdc++, libgcc_s 等运行时必需的库
+                if name.starts_with("libstdc++.so") || name.starts_with("libgcc_s.so") {
+                    let dest = lib_dir.join(&name);
+                    if !dest.exists() {
+                        fs::copy(&path, &dest)?;
+                        info!("Copied {} to deps lib", name);
+                    }
+                }
+            }
+            
+            // 同时检查 gcc lib 目录下的 libstdc++ 和 libgcc_s
+            let gcc_lib = toolchain_root.join("lib/gcc/x86_64-linux-musl/11.2.1");
+            if gcc_lib.exists() {
+                for entry in fs::read_dir(&gcc_lib)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_symlink() {
+                        continue;
+                    }
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with("libstdc++.so") || name.starts_with("libgcc_s.so") {
+                        let dest = lib_dir.join(&name);
+                        if !dest.exists() {
+                            fs::copy(&path, &dest)?;
+                            info!("Copied {} to deps lib", name);
+                        }
+                    }
+                }
+            }
+            
+            // 还需要检查 x86_64-linux-musl/lib64 目录
+            let musl_lib64 = toolchain_root.join("x86_64-linux-musl/lib64");
+            if musl_lib64.exists() {
+                for entry in fs::read_dir(&musl_lib64)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_symlink() {
+                        continue;
+                    }
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with("libstdc++.so") || name.starts_with("libgcc_s.so") {
+                        let dest = lib_dir.join(&name);
+                        if !dest.exists() {
+                            fs::copy(&path, &dest)?;
+                            info!("Copied {} to deps lib", name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+/// 构建 zlib（同时生成 .a 和 .so）
 fn build_zlib(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     let src_dir = config.work_dir.join("zlib");
     clone_or_update(ZLIB_MIRROR, &src_dir)?;
@@ -389,11 +619,11 @@ fn build_zlib(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
             return Err(anyhow::anyhow!("zlib build script failed"));
         }
     } else {
+        // zlib 不带 --static 会同时生成 .a 和 .so
         let status = Command::new("./configure")
             .arg(&format!("--prefix={}", deps_dir.display()))
-            .arg("--static")
             .env("CC", get_musl_gcc())
-            .env("CFLAGS", "-static -Os -fPIC")
+            .env("CFLAGS", "-Os -fPIC")
             .current_dir(&src_dir)
             .status()?;
         if !status.success() {
@@ -419,7 +649,7 @@ fn build_zlib(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 构建 ncurses 静态库
+/// 构建 ncurses（同时生成 .a 和 .so）
 fn build_ncurses(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     let src_dir = config.work_dir.join("ncurses");
     clone_or_update(NCURSES_MIRROR, &src_dir)?;
@@ -436,17 +666,18 @@ fn build_ncurses(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()
             return Err(anyhow::anyhow!("ncurses build script failed"));
         }
     } else {
+        // --with-shared 同时生成 .a 和 .so
         let status = Command::new("./configure")
             .arg(&format!("--prefix={}", deps_dir.display()))
-            .arg("--without-shared")
+            .arg("--with-shared")
             .arg("--without-debug")
             .arg("--without-cxx-binding")
             .arg("--without-ada")
             .arg("--enable-widec")
-            .arg("--with-default-terminfo-dir=/usr/share/terminfo")
-            .arg("--with-terminfo-dirs=/etc/terminfo:/lib/terminfo:/usr/share/terminfo")
+            .arg(&format!("--with-default-terminfo-dir={}/share/terminfo", deps_dir.display()))
+            .arg(&format!("--with-terminfo-dirs={}/share/terminfo", deps_dir.display()))
             .env("CC", get_musl_gcc())
-            .env("CFLAGS", "-static -Os -fPIC")
+            .env("CFLAGS", "-Os -fPIC")
             .current_dir(&src_dir)
             .status()?;
         if !status.success() {
@@ -472,7 +703,7 @@ fn build_ncurses(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()
     Ok(())
 }
 
-/// 构建 readline 静态库
+/// 构建 readline（同时生成 .a 和 .so）
 fn build_readline(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     let src_dir = config.work_dir.join("readline");
     clone_or_update(READLINE_MIRROR, &src_dir)?;
@@ -489,13 +720,14 @@ fn build_readline(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<(
             return Err(anyhow::anyhow!("readline build script failed"));
         }
     } else {
+        // 同时生成 .a 和 .so
         let status = Command::new("./configure")
             .arg(&format!("--prefix={}", deps_dir.display()))
-            .arg("--disable-shared")
+            .arg("--enable-shared")
             .arg("--enable-static")
             .env("CC", get_musl_gcc())
-            .env("CFLAGS", format!("-static -Os -fPIC -I{}", deps_dir.join("include").display()))
-            .env("LDFLAGS", format!("-static -L{}", deps_dir.join("lib").display()))
+            .env("CFLAGS", format!("-Os -fPIC -I{}", deps_dir.join("include").display()))
+            .env("LDFLAGS", format!("-L{}", deps_dir.join("lib").display()))
             .current_dir(&src_dir)
             .status()?;
         if !status.success() {
@@ -521,7 +753,7 @@ fn build_readline(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<(
     Ok(())
 }
 
-/// 构建 OpenSSL 静态库
+/// 构建 OpenSSL（同时生成 .a 和 .so）
 fn build_openssl(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     let src_dir = config.work_dir.join("openssl");
     clone_or_update(OPENSSL_MIRROR, &src_dir)?;
@@ -538,13 +770,13 @@ fn build_openssl(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()
             return Err(anyhow::anyhow!("OpenSSL build script failed"));
         }
     } else {
+        // shared 同时生成 .a 和 .so
         let status = Command::new("./Configure")
             .arg("linux-x86_64")
             .arg(&format!("--prefix={}", deps_dir.display()))
-            .arg("no-shared")
-            .arg("-static")
+            .arg("shared")
             .env("CC", get_musl_gcc())
-            .env("CFLAGS", "-static -Os -fPIC")
+            .env("CFLAGS", "-Os -fPIC")
             .current_dir(&src_dir)
             .status()?;
         if !status.success() {
@@ -570,7 +802,7 @@ fn build_openssl(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()
     Ok(())
 }
 
-/// 构建 ICU 静态库
+/// 构建 ICU（同时生成 .a 和 .so）
 fn build_icu(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     let src_dir = config.work_dir.join("icu");
     clone_or_update(ICU_MIRROR, &src_dir)?;
@@ -587,20 +819,27 @@ fn build_icu(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
             return Err(anyhow::anyhow!("ICU build script failed"));
         }
     } else {
-        // ICU 源码通常在 source 子目录
-        let source_dir = src_dir.join("source");
-        let actual_dir = if source_dir.exists() { source_dir } else { src_dir.clone() };
+        // ICU 源码在 icu4c/source 子目录
+        let source_dir = src_dir.join("icu4c/source");
+        let actual_dir = if source_dir.exists() { 
+            source_dir 
+        } else {
+            // fallback: 可能是 tarball 解压后的 source 目录
+            let alt_dir = src_dir.join("source");
+            if alt_dir.exists() { alt_dir } else { src_dir.clone() }
+        };
         
+        // 同时生成 .a 和 .so
         let status = Command::new("./configure")
             .arg(&format!("--prefix={}", deps_dir.display()))
-            .arg("--disable-shared")
+            .arg("--enable-shared")
             .arg("--enable-static")
             .arg("--disable-samples")
             .arg("--disable-tests")
             .env("CC", get_musl_gcc())
             .env("CXX", get_musl_gxx())
-            .env("CFLAGS", "-static -Os -fPIC")
-            .env("CXXFLAGS", "-static -Os -fPIC")
+            .env("CFLAGS", "-Os -fPIC")
+            .env("CXXFLAGS", "-Os -fPIC")
             .current_dir(&actual_dir)
             .status()?;
         if !status.success() {
@@ -632,12 +871,6 @@ fn build_postgresql(config: &DepsConfig, jobs: usize) -> Result<PostgresqlOutput
     let build_dir = src_dir.join("build");
     let install_dir = config.output_dir.join("postgresql");
 
-    // 检查缓存
-    if config.use_cache && install_dir.join("bin/postgres").exists() {
-        info!("Using cached PostgreSQL build");
-        return Ok(postgresql_output(&install_dir));
-    }
-
     // 克隆源码
     clone_or_update(POSTGRESQL_MIRROR, &src_dir)?;
 
@@ -663,26 +896,73 @@ fn build_postgresql(config: &DepsConfig, jobs: usize) -> Result<PostgresqlOutput
         fs::create_dir_all(&build_dir)?;
         fs::create_dir_all(&install_dir)?;
 
-        // 配置 (musl 静态链接 + 启用所有功能)
-        info!("Configuring PostgreSQL with static dependencies...");
+        // 配置 (musl 动态链接 + 启用所有功能)
+        // 使用 musl libc 但动态链接，避免静态链接的循环依赖问题
+        // .so 文件会打包进超级二进制，运行时释放到 datadir
+        info!("Configuring PostgreSQL with musl dynamic linking...");
         let configure = src_dir.join("configure");
+        
+        // OpenSSL 可能安装在 lib64，添加到库搜索路径
+        let lib_paths = format!("{}/lib:{}/lib64", deps_dir.display(), deps_dir.display());
+        let include_paths = format!("{}/include:{}/include/ncursesw", 
+            deps_dir.display(), deps_dir.display());
+        
+        // 构建 LDFLAGS：
+        // - 不用 -static，使用动态链接
+        // - 设置 RPATH 为 $ORIGIN/../lib 让二进制在相对路径找 .so
+        let mut ldflags = format!(
+            "-L{}/lib -L{}/lib64 -Wl,-rpath,'$ORIGIN/../lib'",
+            deps_dir.display(), deps_dir.display()
+        );
+        
+        // 如果使用下载的 musl-toolchain，添加其 C++ 标准库路径
+        let cxx_path = get_musl_gxx();
+        if cxx_path.contains("musl-toolchain") {
+            if let Some(parent) = Path::new(cxx_path).parent() {
+                if let Some(toolchain_root) = parent.parent() {
+                    let toolchain_lib = toolchain_root.join("x86_64-linux-musl/lib");
+                    let gcc_lib = toolchain_root.join("lib/gcc/x86_64-linux-musl/11.2.1");
+                    
+                    if toolchain_lib.exists() {
+                        ldflags.push_str(&format!(" -L{}", toolchain_lib.display()));
+                        info!("Added C++ stdlib path: {}", toolchain_lib.display());
+                    }
+                    if gcc_lib.exists() {
+                        ldflags.push_str(&format!(" -L{}", gcc_lib.display()));
+                        info!("Added gcc lib path: {}", gcc_lib.display());
+                    }
+                }
+            }
+        }
+        
+        // PostgreSQL configure 不支持 --enable-shared/--disable-static
+        // 它默认会同时生成 .a 和 .so
+        // 需要 --host 因为 musl 编译的程序在 glibc 系统上无法直接运行
         let status = Command::new(&configure)
             .args([
                 &format!("--prefix={}", install_dir.display()),
-                &format!("--with-includes={}", deps_dir.join("include").display()),
-                &format!("--with-libraries={}", deps_dir.join("lib").display()),
+                &format!("--with-includes={}", include_paths),
+                &format!("--with-libraries={}", lib_paths),
+                "--host=x86_64-linux-musl",     // 交叉编译目标
+                "--build=x86_64-linux-gnu",     // 构建系统
                 "--with-readline",
                 "--with-zlib",
                 "--with-openssl",
                 "--with-icu",
-                "--disable-shared",
-                "--enable-static",
             ])
             .env("CC", get_musl_gcc())
-            .env("CFLAGS", format!("-static -Os -I{}", deps_dir.join("include").display()))
-            .env("LDFLAGS", format!("-static -L{}", deps_dir.join("lib").display()))
-            .env("CPPFLAGS", format!("-I{}", deps_dir.join("include").display()))
-            .env("PKG_CONFIG_PATH", deps_dir.join("lib/pkgconfig").display().to_string())
+            .env("CXX", get_musl_gxx())
+            .env("AR", "ar")
+            .env("CFLAGS", format!("-Os -I{}/include -I{}/include/ncursesw", 
+                deps_dir.display(), deps_dir.display()))
+            .env("CXXFLAGS", format!("-Os -I{}/include -I{}/include/ncursesw", 
+                deps_dir.display(), deps_dir.display()))
+            .env("LDFLAGS", &ldflags)
+            .env("LIBS", "-lreadline -lncursesw -lstdc++ -lpthread -lm")
+            .env("CPPFLAGS", format!("-I{}/include -I{}/include/ncursesw", 
+                deps_dir.display(), deps_dir.display()))
+            .env("PKG_CONFIG_PATH", format!("{}/lib/pkgconfig:{}/lib64/pkgconfig", 
+                deps_dir.display(), deps_dir.display()))
             .current_dir(&build_dir)
             .status()?;
         if !status.success() {
@@ -691,8 +971,11 @@ fn build_postgresql(config: &DepsConfig, jobs: usize) -> Result<PostgresqlOutput
 
         // 编译
         info!("Compiling PostgreSQL...");
+        let cxx = get_musl_gxx();
+        
         let status = Command::new("make")
             .args(["-j", &jobs.to_string()])
+            .arg(format!("LD={}", cxx))  // 使用 C++ 链接器（ICU 需要）
             .current_dir(&build_dir)
             .status()?;
         if !status.success() {
@@ -707,6 +990,52 @@ fn build_postgresql(config: &DepsConfig, jobs: usize) -> Result<PostgresqlOutput
             .status()?;
         if !status.success() {
             return Err(anyhow::anyhow!("PostgreSQL install failed"));
+        }
+        
+        // 复制 musl libc 动态库到 lib 目录
+        // PostgreSQL 可执行文件需要 musl libc.so
+        info!("Copying musl runtime to PostgreSQL lib directory...");
+        let pg_lib_dir = install_dir.join("lib");
+        if cxx_path.contains("musl-toolchain") {
+            use std::os::unix::fs::symlink;
+            
+            if let Some(parent) = Path::new(cxx_path).parent() {
+                if let Some(toolchain_root) = parent.parent() {
+                    let musl_lib = toolchain_root.join("x86_64-linux-musl/lib");
+                    
+                    // 先复制 libc.so（这是 musl 的核心）
+                    let libc_src = musl_lib.join("libc.so");
+                    let libc_dest = pg_lib_dir.join("libc.so");
+                    if libc_src.exists() && !libc_dest.exists() {
+                        fs::copy(&libc_src, &libc_dest)?;
+                        info!("Copied libc.so to PostgreSQL lib");
+                    }
+                    
+                    // 创建 ld-musl-x86_64.so.1 符号链接
+                    let ld_musl_dest = pg_lib_dir.join("ld-musl-x86_64.so.1");
+                    if !ld_musl_dest.exists() {
+                        symlink("libc.so", &ld_musl_dest)?;
+                        info!("Created ld-musl-x86_64.so.1 symlink");
+                    }
+                    
+                    // 复制其他运行时库（跳过符号链接）
+                    for entry in fs::read_dir(&musl_lib)? {
+                        let entry = entry?;
+                        let path = entry.path();
+                        if path.is_symlink() {
+                            continue;
+                        }
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.starts_with("libstdc++.so") || name.starts_with("libgcc_s.so") {
+                            let dest = pg_lib_dir.join(&name);
+                            if !dest.exists() {
+                                fs::copy(&path, &dest)?;
+                                info!("Copied {} to PostgreSQL lib", name);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -797,19 +1126,30 @@ host    all             all             ::1/128                 md5
     Ok(())
 }
 
+/// 克隆 systemd 仓库（Redis 只需要头文件）
+fn clone_systemd_headers(config: &DepsConfig) -> Result<PathBuf> {
+    let systemd_dir = config.work_dir.join("systemd");
+    
+    if !systemd_dir.exists() {
+        info!("Cloning systemd repository for headers...");
+        clone_or_update(SYSTEMD_MIRROR, &systemd_dir)?;
+    } else {
+        info!("systemd headers already available");
+    }
+    
+    Ok(systemd_dir)
+}
+
 /// 构建 Redis
 fn build_redis(config: &DepsConfig, jobs: usize) -> Result<RedisOutput> {
     let src_dir = config.work_dir.join("redis");
     let install_dir = config.output_dir.join("redis");
 
-    // 检查缓存
-    if config.use_cache && install_dir.join("bin/redis-server").exists() {
-        info!("Using cached Redis build");
-        return Ok(redis_output(&install_dir));
-    }
-
     // 克隆源码
     clone_or_update(REDIS_MIRROR, &src_dir)?;
+    
+    // 克隆 systemd 获取头文件
+    let systemd_dir = clone_systemd_headers(config)?;
 
     fs::create_dir_all(&install_dir)?;
     fs::create_dir_all(install_dir.join("bin"))?;
@@ -828,17 +1168,50 @@ fn build_redis(config: &DepsConfig, jobs: usize) -> Result<RedisOutput> {
             return Err(anyhow::anyhow!("Redis build script failed"));
         }
     } else {
-        // Redis 使用简单的 Makefile，musl 编译相对容易
-        info!("Compiling Redis with musl...");
+        // 复用 PostgreSQL 的依赖（OpenSSL, zlib 等）
+        info!("Building shared dependencies (OpenSSL, zlib, etc.)...");
+        let deps_dir = build_postgresql_deps(config, jobs)?;
+        
+        // Redis 使用简单的 Makefile，参考 PostgreSQL 的方式使用动态链接
+        info!("Compiling Redis with musl (all features enabled)...");
+        let cflags = format!("-O2 -fno-lto -Wno-error=deprecated-declarations -I{} -I{}/include", 
+            systemd_dir.display(), deps_dir.display());
+        
+        // 像 PostgreSQL 一样：不用 -static，使用动态链接 + RPATH
+        // 这样主二进制和测试模块都能正确编译
+        let mut ldflags = format!("-L{}/lib -L{}/lib64 -Wl,-rpath,'$ORIGIN/../lib' -lssl -lcrypto -lz", 
+            deps_dir.display(), deps_dir.display());
+        
+        // 添加 musl toolchain 的 C++ 库路径（如果使用下载的 toolchain）
+        let cxx_path = get_musl_gxx();
+        if cxx_path.contains("musl-toolchain") {
+            if let Some(parent) = Path::new(cxx_path).parent() {
+                if let Some(toolchain_root) = parent.parent() {
+                    let toolchain_lib = toolchain_root.join("x86_64-linux-musl/lib");
+                    let gcc_lib = toolchain_root.join("lib/gcc/x86_64-linux-musl/11.2.1");
+                    
+                    if toolchain_lib.exists() {
+                        ldflags.push_str(&format!(" -L{}", toolchain_lib.display()));
+                    }
+                    if gcc_lib.exists() {
+                        ldflags.push_str(&format!(" -L{}", gcc_lib.display()));
+                    }
+                }
+            }
+        }
+        
+        // 编译所有目标（包括测试模块）
         let status = Command::new("make")
             .args([
                 "-j", &jobs.to_string(),
-                "CC=musl-gcc",
-                "CFLAGS=-static -Os",
-                "LDFLAGS=-static",
+                &format!("CC={}", get_musl_gcc()),
+                &format!("CXX={}", get_musl_gxx()),  // C++ 编译器也要用 musl
+                &format!("CFLAGS={}", cflags),  // 添加 systemd 和依赖头文件路径，忽略 deprecated 错误
+                &format!("LDFLAGS={}", ldflags),  // 动态链接 + RPATH
                 "MALLOC=libc",  // musl 不兼容 jemalloc
+                "BUILD_TLS=yes",  // 启用 TLS（使用 OpenSSL）
             ])
-            .current_dir(&src_dir)
+            .current_dir(&src_dir.join("src"))
             .status()?;
         if !status.success() {
             return Err(anyhow::anyhow!("Redis make failed"));
@@ -926,12 +1299,6 @@ replica-lazy-flush no
 fn build_nginx(config: &DepsConfig, jobs: usize) -> Result<NginxOutput> {
     let src_dir = config.work_dir.join("nginx");
     let install_dir = config.output_dir.join("nginx");
-
-    // 检查缓存
-    if config.use_cache && install_dir.join("sbin/nginx").exists() {
-        info!("Using cached Nginx build");
-        return Ok(nginx_output(&install_dir));
-    }
 
     // 克隆源码
     clone_or_update(NGINX_MIRROR, &src_dir)?;
@@ -1186,6 +1553,26 @@ pub fn copy_deps_to_output(output: &DepsOutput, target_dir: &Path) -> Result<()>
         }
         if pg.share_dir.exists() {
             copy_dir_recursive(&pg.share_dir, &pg_dir.join("share"))?;
+        }
+        
+        // 复制依赖库的 .so 文件到 PostgreSQL lib 目录
+        // 这样运行时 ld-musl 可以通过 LD_LIBRARY_PATH 找到所有动态库
+        if let Some(ref deps_lib) = output.deps_lib_dir {
+            if deps_lib.exists() {
+                let pg_lib = pg_dir.join("lib");
+                for entry in fs::read_dir(deps_lib)? {
+                    let entry = entry?;
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    // 只复制 .so 文件（包括 .so.N 和 .so.N.N.N 等）
+                    if name.contains(".so") {
+                        let dest = pg_lib.join(&name);
+                        if !dest.exists() {
+                            fs::copy(entry.path(), &dest)?;
+                            info!("Copied {} to PostgreSQL lib", name);
+                        }
+                    }
+                }
+            }
         }
         
         // 复制配置

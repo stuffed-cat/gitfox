@@ -89,7 +89,7 @@ CREATE TABLE docker_upload_sessions (
     id BIGSERIAL PRIMARY KEY,
     uuid VARCHAR(36) NOT NULL UNIQUE,
     project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     digest VARCHAR(128),               -- 预期的 digest（可选）
     uploaded_bytes BIGINT NOT NULL DEFAULT 0,
     temp_path VARCHAR(1000),           -- 临时文件路径
@@ -141,13 +141,13 @@ CREATE INDEX idx_docker_upload_sessions_expires ON docker_upload_sessions(expire
 CREATE INDEX idx_npm_dist_tags_project_package ON npm_dist_tags(project_id, package_name);
 
 -- 添加 package registry 系统配置
-INSERT INTO system_configs (key, value, description) VALUES 
-    ('registry_enabled', 'true', '是否启用包注册表'),
-    ('registry_domain', '""', 'Registry 独立域名，如 registry.gitfox.studio'),
-    ('registry_docker_enabled', 'true', '是否启用 Docker Registry'),
-    ('registry_npm_enabled', 'true', '是否启用 npm Registry'),
-    ('registry_storage_path', '"./packages"', '包存储路径'),
-    ('registry_max_package_size', '536870912', '最大包文件大小（字节），默认 512MB')
+INSERT INTO system_configs (key, value) VALUES 
+    ('registry_enabled', 'true'),
+    ('registry_domain', '""'),
+    ('registry_docker_enabled', 'true'),
+    ('registry_npm_enabled', 'true'),
+    ('registry_storage_path', '"./packages"'),
+    ('registry_max_package_size', '536870912')
 ON CONFLICT (key) DO NOTHING;
 
 -- 创建清理过期上传会话的函数

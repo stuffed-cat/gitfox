@@ -10,7 +10,6 @@
 //!   gitfox-shell server              # Start SSH server (main mode)
 //!   gitfox-shell <key-id>            # Legacy mode (called by gitfox main app)
 
-mod api;
 mod auth_client;
 mod command;
 mod config;
@@ -28,12 +27,11 @@ use clap::{Parser, Subcommand};
 use tracing::{debug, error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use crate::api::{AccessInfo, ApiClient};
 use crate::auth_client::AuthClient;
 use crate::command::GitCommand;
 use crate::config::Config;
 use crate::error::ShellError;
-use crate::ssh_server::{SshServer, SshServerConfig};
+use crate::ssh_server::{AccessInfo, SshServer, SshServerConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "gitfox-shell")]
@@ -178,12 +176,8 @@ async fn run_session(key_id: &str) -> Result<(), ShellError> {
         git_command.action, git_command.repo_path
     );
 
-    // Verify access via gRPC or HTTP
-    let (access_info, gitlayer_addr) = if config.use_grpc_auth {
-        check_access_via_grpc(&config, key_id, &git_command).await?
-    } else {
-        check_access_via_http(&config, key_id, &git_command).await?
-    };
+    // Verify access via gRPC Auth service
+    let (access_info, gitlayer_addr) = check_access_via_grpc(&config, key_id, &git_command).await?;
 
     info!(
         "Access granted for user {} on repo {} (write: {})",
@@ -206,14 +200,14 @@ async fn run_session(key_id: &str) -> Result<(), ShellError> {
     Ok(())
 }
 
-/// Check access via gRPC Auth service (GitLab-style architecture)
+/// Check access via gRPC Auth service
 async fn check_access_via_grpc(
     config: &Config,
     key_id: &str,
     git_command: &GitCommand,
 ) -> Result<(AccessInfo, Option<String>), ShellError> {
-    let auth_addr = config.auth_grpc_address.as_ref()
-        .ok_or_else(|| ShellError::Config("AUTH_GRPC_ADDRESS not configured".to_string()))?;
+    // 这些地址在 Config::load() 中已验证为必需
+    let auth_addr = config.auth_grpc_address.as_ref().unwrap();
     
     debug!("Using gRPC auth at {}", auth_addr);
     
@@ -241,10 +235,11 @@ async fn check_access_via_grpc(
         username: response.username,
         can_write: response.can_write,
         project_id: if response.project_id > 0 { Some(response.project_id) } else { None },
-        repository_id: None,
-        lfs_token: None,
-        base_url: None,
-        repository_status: if response.repository_status.is_empty() { None } else { Some(response.repository_status) },
+        gitlayer_address: if response.gitlayer_address.is_empty() {
+            None
+        } else {
+            Some(response.gitlayer_address.clone())
+        },
     };
     
     let gitlayer_addr = if response.gitlayer_address.is_empty() {
@@ -254,18 +249,4 @@ async fn check_access_via_grpc(
     };
     
     Ok((access_info, gitlayer_addr))
-}
-
-/// Check access via HTTP API (legacy mode)
-async fn check_access_via_http(
-    config: &Config,
-    key_id: &str,
-    git_command: &GitCommand,
-) -> Result<(AccessInfo, Option<String>), ShellError> {
-    let api_client = ApiClient::new(config)?;
-    let access_info = api_client
-        .check_access(key_id, &git_command.repo_path, git_command.action.requires_write())
-        .await?;
-    
-    Ok((access_info, None))
 }

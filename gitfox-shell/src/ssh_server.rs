@@ -1,7 +1,7 @@
 //! SSH Server implementation for gitfox-shell
 //!
 //! This module implements a standalone SSH server (like gitlab-shell)
-//! that handles Git operations over SSH.
+//! that handles Git operations over SSH via GitLayer gRPC.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -12,15 +12,16 @@ use async_trait::async_trait;
 use russh::server::{self, Auth, Handler, Msg, Session};
 use russh::{Channel, ChannelId, CryptoVec, MethodSet};
 use russh_keys::key::PublicKey;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio::process::Command;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
 use crate::auth_client::AuthClient;
 use crate::command::{GitAction, GitCommand};
 use crate::config::Config;
 use crate::error::ShellError;
+use crate::gitlayer_client::{GitLayerClient, GitLayerConfig};
 
 /// SSH Server configuration
 pub struct SshServerConfig {
@@ -57,7 +58,7 @@ impl SshServer {
 
         info!("Starting SSH server on {}", self.config.listen_addr);
 
-        let listener = TcpListener::bind(&self.config.listen_addr)
+        let listener = tokio::net::TcpListener::bind(&self.config.listen_addr)
             .await
             .map_err(|e| ShellError::Ssh(format!("Failed to bind: {}", e)))?;
 
@@ -134,6 +135,9 @@ struct ChannelState {
     env: HashMap<String, String>,
     /// Git command being executed
     git_command: Option<GitCommand>,
+    /// Sender for forwarding SSH data to GitLayer
+    /// None if no git command is being executed
+    data_sender: Option<mpsc::Sender<Vec<u8>>>,
 }
 
 #[async_trait]
@@ -183,6 +187,7 @@ impl Handler for SshHandler {
         self.channels.insert(channel_id, ChannelState {
             env: HashMap::new(),
             git_command: None,
+            data_sender: None,
         });
         
         Ok(true)
@@ -271,12 +276,37 @@ impl Handler for SshHandler {
     /// Handle data from client
     async fn data(
         &mut self,
-        _channel: ChannelId,
+        channel: ChannelId,
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        debug!("Received {} bytes of data", data.len());
-        // Data is handled by the git process stdin
+        debug!("Received {} bytes of data on channel {:?}", data.len(), channel);
+        
+        // Forward data to the GitLayer stream if active
+        if let Some(state) = self.channels.get(&channel) {
+            if let Some(sender) = &state.data_sender {
+                if let Err(e) = sender.send(data.to_vec()).await {
+                    debug!("Failed to forward data to GitLayer: {} (channel might be closed)", e);
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Handle EOF from client
+    async fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        debug!("Channel EOF: {:?}", channel);
+        
+        // Close the data sender to signal EOF to GitLayer
+        if let Some(state) = self.channels.get_mut(&channel) {
+            state.data_sender = None;
+        }
+        
         Ok(())
     }
 
@@ -303,27 +333,22 @@ impl SshHandler {
         
         let key_fingerprint = public_key.fingerprint();
         
-        if config.use_grpc_auth {
-            let auth_addr = config.auth_grpc_address.as_ref()
-                .ok_or_else(|| ShellError::Config("AUTH_GRPC_ADDRESS not configured".to_string()))?;
-            
-            let mut auth_client = AuthClient::connect(auth_addr, config.api_secret.clone())
-                .await
-                .map_err(|e| ShellError::Auth(format!("Failed to connect to Auth service: {}", e)))?;
-            
-            // Find key by fingerprint
-            let key_info = auth_client
-                .find_ssh_key(&key_fingerprint)
-                .await
-                .map_err(|e| ShellError::Auth(format!("Key lookup failed: {}", e)))?;
-            
-            match key_info {
-                Some(info) => Ok(format!("key-{}", info.id)),
-                None => Err(ShellError::Auth("Public key not found".to_string())),
-            }
-        } else {
-            // Legacy HTTP API mode
-            Err(ShellError::Auth("HTTP key lookup not implemented for SSH server mode".to_string()))
+        // 这些地址在 Config::load() 中已验证为必需
+        let auth_addr = config.auth_grpc_address.as_ref().unwrap();
+        
+        let mut auth_client = AuthClient::connect(auth_addr, config.api_secret.clone())
+            .await
+            .map_err(|e| ShellError::Auth(format!("Failed to connect to Auth service: {}", e)))?;
+        
+        // Find key by fingerprint
+        let key_info = auth_client
+            .find_ssh_key(&key_fingerprint)
+            .await
+            .map_err(|e| ShellError::Auth(format!("Key lookup failed: {}", e)))?;
+        
+        match key_info {
+            Some(info) => Ok(format!("key-{}", info.id)),
+            None => Err(ShellError::Auth("Public key not found".to_string())),
         }
     }
 
@@ -335,8 +360,8 @@ impl SshHandler {
     ) -> Result<AccessInfo, ShellError> {
         let config = &self.config.app_config;
         
-        let auth_addr = config.auth_grpc_address.as_ref()
-            .ok_or_else(|| ShellError::Config("AUTH_GRPC_ADDRESS not configured".to_string()))?;
+        // 这些地址在 Config::load() 中已验证为必需
+        let auth_addr = config.auth_grpc_address.as_ref().unwrap();
         
         let mut auth_client = AuthClient::connect(auth_addr, config.api_secret.clone())
             .await
@@ -361,6 +386,7 @@ impl SshHandler {
             user_id: response.user_id,
             username: response.username,
             can_write: response.can_write,
+            project_id: if response.project_id > 0 { Some(response.project_id) } else { None },
             gitlayer_address: if response.gitlayer_address.is_empty() {
                 None
             } else {
@@ -371,7 +397,7 @@ impl SshHandler {
 
     /// Execute git command
     async fn execute_git_command(
-        &self,
+        &mut self,
         channel: ChannelId,
         session: &mut Session,
         git_command: &GitCommand,
@@ -379,97 +405,179 @@ impl SshHandler {
     ) -> Result<(), ShellError> {
         let config = &self.config.app_config;
         
-        // Build repository path
-        let repo_path = config.repo_path(&git_command.repo_path);
-        
         // GitLayer is required for all Git operations
+        // 地址在 Config::load() 中已验证为必需
         let gitlayer_addr = access_info.gitlayer_address.as_ref()
             .or(config.gitlayer_address.as_ref())
-            .ok_or_else(|| ShellError::Config(
-                "GITLAYER_ADDRESS not configured. GitLayer is required for all Git operations.".to_string()
-            ))?;
+            .unwrap()
+            .clone();
         
-        self.execute_via_gitlayer(
-            channel,
-            session,
-            git_command,
-            gitlayer_addr,
-            &repo_path,
-        ).await
-    }
-
-    /// Execute git via GitLayer gRPC
-    async fn execute_via_gitlayer(
-        &self,
-        channel: ChannelId,
-        session: &mut Session,
-        git_command: &GitCommand,
-        gitlayer_addr: &str,
-        repo_path: &str,
-    ) -> Result<(), ShellError> {
-        debug!("Executing via GitLayer at {}", gitlayer_addr);
+        // Create channel for SSH -> GitLayer data forwarding
+        let (tx, rx) = mpsc::channel::<Vec<u8>>(1024);
         
-        // TODO: Implement proper GitLayer streaming
-        // For now, fall back to direct execution
-        // The full implementation requires bidirectional stream handling
-        // between SSH client and GitLayer gRPC service
-        
-        warn!("GitLayer streaming not yet implemented, falling back to direct execution");
-        
-        let actual_repo_path = format!("{}/{}.git", self.config.app_config.repos_path, repo_path);
-        
-        self.execute_git_directly(channel, session, git_command, &actual_repo_path).await
-    }
-
-    /// Execute git directly (fallback when GitLayer is not available)
-    async fn execute_git_directly(
-        &self,
-        channel: ChannelId,
-        session: &mut Session,
-        git_command: &GitCommand,
-        repo_path: &str,
-    ) -> Result<(), ShellError> {
-        debug!("Executing git directly for {}", repo_path);
-        
-        let git_bin = git_command.action.binary_name();
-        
-        let mut cmd = Command::new(git_bin);
-        cmd.arg(repo_path);
-        cmd.stdin(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-        
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| ShellError::Git(format!("Failed to spawn git: {}", e)))?;
-        
-        // TODO: Properly handle bidirectional data transfer
-        // This is a simplified version
-        
-        if let Some(mut stdout) = child.stdout.take() {
-            let mut buf = Vec::new();
-            stdout.read_to_end(&mut buf)
-                .await
-                .map_err(|e| ShellError::Git(format!("Failed to read git output: {}", e)))?;
-            session.data(channel, CryptoVec::from_slice(&buf));
+        // Store sender in channel state for data callback to use
+        if let Some(state) = self.channels.get_mut(&channel) {
+            state.data_sender = Some(tx);
         }
         
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| ShellError::Git(format!("Failed to wait for git: {}", e)))?;
+        // Get session handle for sending data back from spawned task
+        let handle = session.handle();
         
-        let exit_code = status.code().unwrap_or(1) as u32;
-        session.exit_status_request(channel, exit_code);
+        // Build environment variables for GitLayer
+        let mut env_vars = HashMap::new();
+        env_vars.insert("GL_ID".to_string(), format!("user-{}", access_info.user_id));
+        env_vars.insert("GL_USERNAME".to_string(), access_info.username.clone());
+        env_vars.insert("GL_REPOSITORY".to_string(), git_command.repo_path.clone());
+        env_vars.insert("GL_PROTOCOL".to_string(), "ssh".to_string());
+        env_vars.insert("GITFOX_USER_ID".to_string(), access_info.user_id.to_string());
+        env_vars.insert("GITFOX_USERNAME".to_string(), access_info.username.clone());
         
-        if exit_code == 0 {
-            session.channel_success(channel);
-        } else {
-            session.channel_failure(channel);
+        if let Some(project_id) = access_info.project_id {
+            env_vars.insert("GL_PROJECT_PATH".to_string(), git_command.repo_path.clone());
+            env_vars.insert("GITFOX_PROJECT_ID".to_string(), project_id.to_string());
         }
         
+        let repo_path = git_command.repo_path.clone();
+        let action = git_command.action;
+        
+        // Spawn task to handle GitLayer communication
+        tokio::spawn(async move {
+            let result = execute_gitlayer_streaming(
+                channel,
+                handle.clone(),
+                &gitlayer_addr,
+                &repo_path,
+                action,
+                env_vars,
+                rx,
+            ).await;
+            
+            match result {
+                Ok(exit_code) => {
+                    debug!("GitLayer streaming completed with exit code {}", exit_code);
+                    let _ = handle.exit_status_request(channel, exit_code).await;
+                    if exit_code == 0 {
+                        let _ = handle.close(channel).await;
+                    }
+                }
+                Err(e) => {
+                    error!("GitLayer streaming error: {}", e);
+                    let error_msg = format!("GitFox: Git operation failed - {}\r\n", e);
+                    let _ = handle.data(channel, CryptoVec::from_slice(error_msg.as_bytes())).await;
+                    let _ = handle.exit_status_request(channel, 1).await;
+                    let _ = handle.close(channel).await;
+                }
+            }
+        });
+        
+        // exec_request returns immediately, streaming happens in background task
+        session.channel_success(channel);
         Ok(())
     }
+}
+
+/// Execute git operation via GitLayer gRPC streaming
+///
+/// This function handles the bidirectional streaming between SSH client and GitLayer:
+/// - Receives data from SSH client via rx channel
+/// - Sends data to GitLayer via gRPC stream
+/// - Receives responses from GitLayer and sends back to SSH client via handle
+async fn execute_gitlayer_streaming(
+    channel: ChannelId,
+    handle: russh::server::Handle,
+    gitlayer_addr: &str,
+    repo_path: &str,
+    action: GitAction,
+    env_vars: HashMap<String, String>,
+    rx: mpsc::Receiver<Vec<u8>>,
+) -> Result<u32, ShellError> {
+    debug!("Starting GitLayer streaming to {} for {}", gitlayer_addr, repo_path);
+    
+    // Connect to GitLayer
+    let gitlayer_config = GitLayerConfig {
+        address: gitlayer_addr.to_string(),
+        connect_timeout: 10,
+    };
+    
+    let client = GitLayerClient::connect(gitlayer_config).await?;
+    
+    // Convert receiver to stream
+    let stdin_stream = ReceiverStream::new(rx);
+    
+    // Execute via GitLayer based on action
+    let mut exit_code = 0u32;
+    
+    match action {
+        GitAction::UploadPack => {
+            let mut output_stream = client.ssh_upload_pack(repo_path, env_vars, stdin_stream).await?;
+            
+            while let Some(result) = output_stream.next().await {
+                match result {
+                    Ok(output) => {
+                        if !output.stdout.is_empty() {
+                            if let Err(e) = handle.data(channel, CryptoVec::from_slice(&output.stdout)).await {
+                                debug!("Failed to send stdout to SSH client: {:?}", e);
+                                break;
+                            }
+                        }
+                        if !output.stderr.is_empty() {
+                            // SSH extended data type 1 = stderr
+                            if let Err(e) = handle.extended_data(channel, 1, CryptoVec::from_slice(&output.stderr)).await {
+                                debug!("Failed to send stderr to SSH client: {:?}", e);
+                            }
+                        }
+                        if output.exit_code != 0 {
+                            exit_code = output.exit_code as u32;
+                        }
+                    }
+                    Err(e) => {
+                        error!("GitLayer stream error: {}", e);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        GitAction::ReceivePack => {
+            let mut output_stream = client.ssh_receive_pack(repo_path, env_vars, stdin_stream).await?;
+            
+            while let Some(result) = output_stream.next().await {
+                match result {
+                    Ok(output) => {
+                        if !output.stdout.is_empty() {
+                            if let Err(e) = handle.data(channel, CryptoVec::from_slice(&output.stdout)).await {
+                                debug!("Failed to send stdout to SSH client: {:?}", e);
+                                break;
+                            }
+                        }
+                        if !output.stderr.is_empty() {
+                            if let Err(e) = handle.extended_data(channel, 1, CryptoVec::from_slice(&output.stderr)).await {
+                                debug!("Failed to send stderr to SSH client: {:?}", e);
+                            }
+                        }
+                        if output.exit_code != 0 {
+                            exit_code = output.exit_code as u32;
+                        }
+                    }
+                    Err(e) => {
+                        error!("GitLayer stream error: {}", e);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        GitAction::UploadArchive => {
+            // Upload-archive via GitLayer
+            // TODO: Implement dedicated UploadArchive in GitLayer if needed
+            return Err(ShellError::GitExecution("git-upload-archive via GitLayer not yet implemented".to_string()));
+        }
+        GitAction::LfsAuthenticate => {
+            // LFS authenticate is handled separately in command.rs
+            unreachable!("LFS authenticate should be handled separately");
+        }
+    }
+    
+    info!("GitLayer streaming completed for {} with exit code {}", repo_path, exit_code);
+    Ok(exit_code)
 }
 
 /// Access information from auth check
@@ -478,5 +586,6 @@ pub struct AccessInfo {
     pub user_id: i64,
     pub username: String,
     pub can_write: bool,
+    pub project_id: Option<i64>,
     pub gitlayer_address: Option<String>,
 }

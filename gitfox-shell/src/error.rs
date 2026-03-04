@@ -1,4 +1,6 @@
 //! Error types for GitFox Shell
+//!
+//! GitFox Shell 现在完全基于 gRPC 架构，不再使用 HTTP API。
 
 use std::io;
 use thiserror::Error;
@@ -16,9 +18,6 @@ pub enum ShellError {
 
     #[error("Repository not found: {0}")]
     RepoNotFound(String),
-
-    #[error("API error: {0}")]
-    Api(String),
 
     #[error("Authentication error: {0}")]
     Auth(String),
@@ -44,12 +43,6 @@ pub enum ShellError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
-    #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
-
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-
     #[error("SSH protocol error: {0}")]
     SshProtocol(#[from] russh::Error),
 }
@@ -69,9 +62,6 @@ impl ShellError {
                     repo
                 )
             }
-            ShellError::Api(_) => {
-                "Unable to verify access. Please try again later.".to_string()
-            }
             ShellError::Auth(msg) => format!("Authentication failed: {}", msg),
             ShellError::GitExecution(msg) => format!("Git operation failed: {}", msg),
             ShellError::Ssh(msg) => format!("SSH error: {}", msg),
@@ -79,10 +69,8 @@ impl ShellError {
             ShellError::Command(msg) => format!("Command error: {}", msg),
             ShellError::Git(msg) => format!("Git error: {}", msg),
             ShellError::GitLayer(msg) => format!("GitLayer error: {}", msg),
-            ShellError::Io(_) => "An I/O error occurred.".to_string(),
-            ShellError::Http(_) => "Network error. Please try again later.".to_string(),
-            ShellError::Json(_) => "Internal error processing response.".to_string(),
             ShellError::GitLayerConnection(msg) => format!("GitLayer connection error: {}", msg),
+            ShellError::Io(_) => "An I/O error occurred.".to_string(),
         }
     }
 
