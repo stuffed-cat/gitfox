@@ -7,7 +7,8 @@ use crate::build::CollectedAssets;
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
-use tracing::info;
+use std::time::SystemTime;
+use tracing::{info, debug};
 
 /// stub 模板目录相对于 omnibus crate 根目录的路径
 const STUB_TEMPLATE_DIR: &str = "stub";
@@ -56,7 +57,8 @@ pub fn generate_stub_project(
     Ok(())
 }
 
-/// 递归复制目录（支持符号链接）
+/// 递归智能复制目录（支持符号链接）
+/// 只在源文件比目标文件更新时才复制，实现增量更新
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
@@ -74,10 +76,38 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
             }
             std::os::unix::fs::symlink(&target, &dst_path)?;
         } else {
-            fs::copy(entry.path(), &dst_path)?;
+            // 智能复制：只在源文件更新时才复制
+            if should_copy(&entry.path(), &dst_path) {
+                fs::copy(entry.path(), &dst_path)?;
+                debug!("Copied: {}", entry.path().display());
+            }
         }
     }
     Ok(())
+}
+
+/// 判断是否需要复制文件
+/// 如果目标不存在，或源文件修改时间更新，则需要复制
+fn should_copy(src: &Path, dst: &Path) -> bool {
+    if !dst.exists() {
+        return true;
+    }
+    
+    // 比较修改时间
+    let src_mtime = get_mtime(src);
+    let dst_mtime = get_mtime(dst);
+    
+    match (src_mtime, dst_mtime) {
+        (Some(src_t), Some(dst_t)) => src_t > dst_t,
+        _ => true, // 无法获取时间时，保守复制
+    }
+}
+
+/// 获取文件修改时间
+fn get_mtime(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
 }
 
 /// 复制 Cargo.toml 模板（只在内容变化时更新）

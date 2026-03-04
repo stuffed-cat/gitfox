@@ -7,7 +7,7 @@
 # 文档: https://docs.gitfox.studio/configuration
 # ════════════════════════════════════════════════════════════════════════════
 
-version = "1.1"
+version = "1.1.1"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 数据库和缓存（必填）
@@ -218,6 +218,26 @@ rp_origin = "{{WEBAUTHN_RP_ORIGIN}}"
 level = "{{RUST_LOG}}"
 
 # ════════════════════════════════════════════════════════════════════════════
+# 服务启用（控制哪些组件启动）
+# ════════════════════════════════════════════════════════════════════════════
+# 允许只运行部分组件，而不是 all-in-one 模式
+# 适用于分布式部署场景
+
+[services]
+# 是否启动 devops 后端（API + gRPC Auth）
+backend = {{SERVICES_BACKEND}}
+
+# 是否启动 GitLayer（Git 操作 gRPC 服务）
+gitlayer = {{SERVICES_GITLAYER}}
+
+# 是否启动 gitfox-shell（SSH 服务器）
+# 注意：还需要 server.ssh.enabled = true
+shell = {{SERVICES_SHELL}}
+
+# 是否启动 workhorse（HTTP 反向代理）
+workhorse = {{SERVICES_WORKHORSE}}
+
+# ════════════════════════════════════════════════════════════════════════════
 # 内置服务（GitLab Omnibus 风格）
 # ════════════════════════════════════════════════════════════════════════════
 # GitFox Omnibus 可以打包内置的 PostgreSQL、Redis、Nginx
@@ -231,13 +251,13 @@ level = "{{RUST_LOG}}"
 [bundled]
 # 全局开关：是否启用内置服务
 # 设置为 false 时会忽略下面所有内置服务配置
-enabled = true
+enabled = {{BUNDLED_ENABLED}}
 
 [bundled.postgresql]
 # 使用内置 PostgreSQL
 # 设置为 true 时，上面的 database.url 配置会被忽略
 # 内置 PostgreSQL 数据存储在: {data_dir}/postgresql/data
-enabled = false
+enabled = {{BUNDLED_POSTGRESQL_ENABLED}}
 
 # 监听端口（仅内置模式有效）
 port = 5432
@@ -271,7 +291,7 @@ work_mem = 4
 # 使用内置 Redis
 # 设置为 true 时，上面的 redis.url 配置会被忽略
 # 内置 Redis 数据存储在: {data_dir}/redis/data
-enabled = false
+enabled = {{BUNDLED_REDIS_ENABLED}}
 
 # 监听端口
 port = 6379
@@ -298,7 +318,7 @@ persistence_mode = "rdb"
 # 适用于需要 HTTPS、负载均衡、静态文件缓存等场景
 # 设置为 true 时，HTTP 请求会经过 Nginx -> Workhorse -> Backend
 # 设置为 false 时，直接使用 Workhorse 处理请求
-enabled = false
+enabled = {{BUNDLED_NGINX_ENABLED}}
 
 # Nginx 监听端口（对外）
 http_port = 80
@@ -312,22 +332,8 @@ ssl_enabled = false
 ssl_certificate = ""
 ssl_certificate_key = ""
 
-# 代理到 Workhorse 的地址
+# 上游服务器组（Workhorse 集群）
+# 支持多个实例实现负载均衡
+# 格式: ["host:port", "host:port", ...]
 # 当 nginx 启用时，workhorse 只监听本地
-upstream_host = "127.0.0.1"
-upstream_port = 8080
-
-# 客户端最大请求体大小 (与 max_upload_size 对应)
-client_max_body_size = "1g"
-
-# 静态文件缓存时间
-static_cache_time = "1h"
-
-# 启用 gzip 压缩
-gzip_enabled = true
-
-# 工作进程数（0 = auto，根据 CPU 核心数）
-worker_processes = 0
-
-# 每个 worker 的最大连接数
-worker_connections = 1024
+upstream_servers = ["127.0.0.1:8080"]

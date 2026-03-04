@@ -1,0 +1,48 @@
+# ════════════════════════════════════════════════════════════════════════════
+# GitFox 内置 PostgreSQL 配置
+# ════════════════════════════════════════════════════════════════════════════
+# 由 `gitfox reconfigure` 根据 gitfox.toml 生成
+# 修改 gitfox.toml 中的 [bundled.postgresql] 段后重新运行 reconfigure
+
+# 连接设置
+listen_addresses = '{{POSTGRESQL_HOST}}'
+port = {{POSTGRESQL_PORT}}
+max_connections = {{POSTGRESQL_MAX_CONNECTIONS}}
+
+# 内存设置
+shared_buffers = {{POSTGRESQL_SHARED_BUFFERS}}MB
+work_mem = {{POSTGRESQL_WORK_MEM}}MB
+maintenance_work_mem = 64MB
+effective_cache_size = {{POSTGRESQL_EFFECTIVE_CACHE}}MB
+
+# WAL 设置
+wal_level = replica
+max_wal_size = 1GB
+min_wal_size = 80MB
+checkpoint_completion_target = 0.9
+
+# 日志设置
+log_destination = 'stderr'
+logging_collector = on
+log_directory = 'log'
+log_filename = 'postgresql-%Y-%m-%d.log'
+log_rotation_age = 1d
+log_rotation_size = 100MB
+log_line_prefix = '%m [%p] %q%u@%d '
+log_timezone = 'UTC'
+
+# 本地化设置
+datestyle = 'iso, mdy'
+timezone = 'UTC'
+lc_messages = 'C'
+lc_monetary = 'C'
+lc_numeric = 'C'
+lc_time = 'C'
+default_text_search_config = 'pg_catalog.english'
+
+# 安全设置
+# 内置 PostgreSQL 仅监听本地，无需复杂认证
+# 如需远程连接，请使用外部 PostgreSQL
+
+# 数据目录
+data_directory = '{{POSTGRESQL_DATA_DIR}}'

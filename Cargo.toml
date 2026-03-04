@@ -27,9 +27,6 @@ deadpool-redis = "0.14"
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 
 # Git Operations
-# 注意：Git 读取操作（仓库浏览 API）仍使用 git2
-# Git 写入操作（HTTP push/pull）已移至 GitLayer/Workhorse
-# TODO: 将所有 Git 操作迁移到 GitLayer gRPC 调用
 git2 = { version = "0.18", features = ["vendored-libgit2", "vendored-openssl"] }
 
 # Authentication

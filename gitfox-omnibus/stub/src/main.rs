@@ -81,7 +81,7 @@ struct BundledDepsAssets;
 mod services;
 mod unified_config;
 
-use services::{BundledServices, BundledPostgresConfig, BundledRedisConfig};
+use services::{BundledServices, BundledPostgresConfig};
 use unified_config::{ConfigVars, GitFoxConfig, CONFIG_VERSION, generate_config_template, migrate_from_legacy};
 
 // ============================================================================
@@ -196,24 +196,30 @@ async fn main() -> Result<()> {
             // 如果 gitfox.toml 存在，检查是否需要版本升级
             if gitfox_toml.exists() {
                 println!("📂 Found existing gitfox.toml, checking version...");
-                match GitFoxConfig::load(&gitfox_toml) {
+                // 使用 load_raw 获取原始版本（不执行迁移）
+                match unified_config::GitFoxConfig::load_raw(&gitfox_toml) {
                     Ok(mut config) => {
-                        if config.version == CONFIG_VERSION {
+                        let original_version = config.version.clone();
+                        
+                        if original_version == CONFIG_VERSION {
                             println!("✅ Configuration is already at latest version ({})", CONFIG_VERSION);
                             return Ok(());
                         }
                         
-                        println!("🔄 Upgrading configuration from {} to {}...", config.version, CONFIG_VERSION);
+                        println!("🔄 Upgrading configuration from {} to {}...", original_version, CONFIG_VERSION);
                         
-                        // 备份旧配置
-                        let backup_path = cli.data_dir.join(format!("gitfox.toml.v{}.bak", config.version));
+                        // 备份旧配置（使用原始版本号）
+                        let backup_path = cli.data_dir.join(format!("gitfox.toml.v{}.bak", original_version));
                         fs::copy(&gitfox_toml, &backup_path)?;
                         println!("   Backup saved to: {}", backup_path.display());
                         
-                        // 保存升级后的配置（check_and_migrate 在 load 时已执行）
-                        config.save(&gitfox_toml)?;
+                        // 使用 load_with_migration 执行迁移
+                        let result = unified_config::GitFoxConfig::load_with_migration(&gitfox_toml)?;
                         
-                        println!("\n✅ Configuration upgraded to version {}!", CONFIG_VERSION);
+                        // 保存升级后的配置（只更新版本号和迁移修改的字段）
+                        result.config.save_migration(&gitfox_toml)?;
+                        
+                        println!("\n✅ Configuration upgraded from {} to {}!", original_version, CONFIG_VERSION);
                         println!("\n🔄 Regenerating component configuration files...");
                         reconfigure_from_toml(&cli.data_dir)?;
                         return Ok(());
@@ -308,7 +314,24 @@ async fn start_services(cli: &Cli) -> Result<()> {
         eprintln!("\nPlease run: gitfox init");
         return Err(anyhow::anyhow!("Configuration file missing: gitfox.toml"));
     }
-    let config = GitFoxConfig::load(&gitfox_toml)?;
+    
+    // 加载配置（检查是否需要迁移）
+    let load_result = unified_config::GitFoxConfig::load_with_migration(&gitfox_toml)?;
+    let mut config = load_result.config;
+    
+    // 如果发生了迁移，保存更新后的配置（避免每次启动都重复迁移）
+    // 使用 save_migration 只更新版本号和迁移修改的字段，不覆盖用户的其他配置
+    if load_result.migrated {
+        info!(
+            "Configuration migrated from {} to {}, saving...",
+            load_result.original_version, config.version
+        );
+        config.save_migration(&gitfox_toml)?;
+    }
+    
+    // 转换相对路径为绝对路径
+    config.resolve_paths(&cli.data_dir);
+    
     let services = &config.services;
 
     // 检查启用组件所需的配置文件
@@ -350,7 +373,20 @@ async fn start_services(cli: &Cli) -> Result<()> {
     let pg_conf = cli.data_dir.join("postgresql.conf");
     if pg_conf.exists() && config.bundled.postgresql.enabled && BundledServices::has_bundled_deps() {
         info!("Starting bundled PostgreSQL...");
-        bundled_services.start_postgresql_from_config(&pg_conf)?;
+        // 从统一配置构造 services 层配置
+        let pg_service_config = BundledPostgresConfig {
+            enabled: config.bundled.postgresql.enabled,
+            port: config.bundled.postgresql.port,
+            host: config.bundled.postgresql.host.clone(),
+            database: config.bundled.postgresql.database.clone(),
+            username: config.bundled.postgresql.username.clone(),
+            password: config.bundled.postgresql.password.clone(),
+            max_connections: config.bundled.postgresql.max_connections,
+            shared_buffers_mb: config.bundled.postgresql.shared_buffers,
+            work_mem_mb: config.bundled.postgresql.work_mem,
+            data_dir: cli.data_dir.join("postgresql/data"),
+        };
+        bundled_services.start_postgresql(&pg_service_config)?;
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     }
 
@@ -358,7 +394,18 @@ async fn start_services(cli: &Cli) -> Result<()> {
     let redis_conf = cli.data_dir.join("redis.conf");
     if redis_conf.exists() && config.bundled.redis.enabled && BundledServices::has_bundled_deps() {
         info!("Starting bundled Redis...");
-        bundled_services.start_redis_from_config(&redis_conf)?;
+        // 从统一配置构造 services 层配置
+        let redis_service_config = services::BundledRedisConfig {
+            enabled: config.bundled.redis.enabled,
+            port: config.bundled.redis.port,
+            host: config.bundled.redis.host.clone(),
+            maxmemory_mb: config.bundled.redis.maxmemory,
+            maxmemory_policy: config.bundled.redis.maxmemory_policy.clone(),
+            persistence: config.bundled.redis.persistence,
+            persistence_mode: config.bundled.redis.persistence_mode.clone(),
+            data_dir: cli.data_dir.join("redis/data"),
+        };
+        bundled_services.start_redis(&redis_service_config)?;
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 
@@ -853,6 +900,85 @@ fn init_config(data_dir: &Path) -> Result<()> {
         .unwrap_or_else(|_| ssh_port.to_string())
         .parse()
         .unwrap_or(ssh_port);
+
+    // 询问服务启用配置
+    println!("\n🔧 服务启用配置\n");
+    println!("   GitFox 允许只运行部分组件，适合分布式部署\n");
+    
+    let use_all_in_one = Confirm::new("使用默认 All-in-One 模式 (启用所有组件)?")
+        .with_default(true)
+        .with_help_message("推荐：单机部署时启用所有组件")
+        .prompt()
+        .unwrap_or(true);
+    
+    let (services_backend, services_gitlayer, services_shell, services_workhorse) = if use_all_in_one {
+        (true, true, true, true)
+    } else {
+        println!("\n   选择要启用的组件:\n");
+        
+        let backend = Confirm::new("启用 Backend (API + gRPC Auth)?")
+            .with_default(true)
+            .with_help_message("核心后端服务")
+            .prompt()
+            .unwrap_or(true);
+        
+        let gitlayer = Confirm::new("启用 GitLayer (Git 操作 gRPC)?")
+            .with_default(true)
+            .with_help_message("Git 仓库操作服务")
+            .prompt()
+            .unwrap_or(true);
+        
+        let shell = Confirm::new("启用 Shell (SSH 服务器)?")
+            .with_default(true)
+            .with_help_message("Git SSH 访问")
+            .prompt()
+            .unwrap_or(true);
+        
+        let workhorse = Confirm::new("启用 Workhorse (HTTP 反向代理)?")
+            .with_default(true)
+            .with_help_message("HTTP 入口、静态文件、LFS")
+            .prompt()
+            .unwrap_or(true);
+        
+        (backend, gitlayer, shell, workhorse)
+    };
+
+    // 询问内置服务配置（bundled deps）
+    println!("\n📦 内置服务配置\n");
+    println!("   GitFox 可以打包内置 PostgreSQL、Redis、Nginx");
+    println!("   如果您有自己的基础设施，可以禁用内置服务\n");
+    
+    let use_bundled = Confirm::new("使用默认集成套件 (内置 PostgreSQL/Redis)?")
+        .with_default(false)
+        .with_help_message("推荐：使用外部数据库。内置服务适合快速体验")
+        .prompt()
+        .unwrap_or(false);
+    
+    let (bundled_postgresql, bundled_redis, bundled_nginx) = if use_bundled {
+        println!("\n   选择要启用的内置服务:\n");
+        
+        let postgresql = Confirm::new("启用内置 PostgreSQL?")
+            .with_default(true)
+            .with_help_message("内置 PostgreSQL 数据库")
+            .prompt()
+            .unwrap_or(true);
+        
+        let redis = Confirm::new("启用内置 Redis?")
+            .with_default(true)
+            .with_help_message("内置 Redis 缓存服务")
+            .prompt()
+            .unwrap_or(true);
+        
+        let nginx = Confirm::new("启用内置 Nginx?")
+            .with_default(false)
+            .with_help_message("内置 Nginx 反代（用于 HTTPS/负载均衡）")
+            .prompt()
+            .unwrap_or(false);
+        
+        (postgresql, redis, nginx)
+    } else {
+        (false, false, false)
+    };
     
     let enable_smtp = Confirm::new("启用 SMTP 邮件服务?")
         .with_default(false)
@@ -1004,6 +1130,16 @@ fn init_config(data_dir: &Path) -> Result<()> {
         webauthn_rp_id: user_config.webauthn_rp_id.clone(),
         webauthn_rp_origin: user_config.base_url.clone(),
         rust_log: "info".to_string(),
+        services_backend,
+        services_gitlayer,
+        services_shell,
+        services_workhorse,
+        registry_domain: String::new(),
+        registry_storage_path: data_dir.join("registry").display().to_string(),
+        bundled_enabled: use_bundled,
+        bundled_postgresql_enabled: bundled_postgresql,
+        bundled_redis_enabled: bundled_redis,
+        bundled_nginx_enabled: bundled_nginx,
         ..Default::default()
     };
     
@@ -1068,7 +1204,18 @@ fn reconfigure_from_toml(data_dir: &Path) -> Result<()> {
     }
     
     println!("📂 Loading configuration from: {}", gitfox_toml.display());
-    let config = GitFoxConfig::load(&gitfox_toml)?;
+    
+    // 加载配置（检查是否需要迁移）
+    let load_result = unified_config::GitFoxConfig::load_with_migration(&gitfox_toml)?;
+    let config = load_result.config.clone();
+    
+    // 如果发生了迁移，保存更新后的配置（只更新版本号和迁移修改的字段）
+    if load_result.migrated {
+        println!("   ⚠️  Configuration migrated from {} to {}", 
+            load_result.original_version, config.version);
+        load_result.config.save_migration(&gitfox_toml)?;
+        println!("   ✅ Saved migrated configuration");
+    }
     
     // 验证配置
     if let Ok(warnings) = config.validate() {
@@ -1102,18 +1249,181 @@ fn reconfigure_from_toml(data_dir: &Path) -> Result<()> {
     fs::write(&workhorse_toml_path, config.to_workhorse_toml())?;
     println!("✅ Generated: {}", workhorse_toml_path.display());
     
+    // 5. postgresql.conf（如果启用内置 PostgreSQL）
+    if config.bundled.postgresql.enabled {
+        let pg_conf_path = data_dir.join("postgresql.conf");
+        let pg_data_dir = data_dir.join("postgresql").join("data");
+        let pg_conf_content = generate_postgresql_conf(&config, &pg_data_dir);
+        fs::write(&pg_conf_path, pg_conf_content)?;
+        println!("✅ Generated: {} (bundled PostgreSQL)", pg_conf_path.display());
+    }
+    
+    // 6. redis.conf（如果启用内置 Redis）
+    if config.bundled.redis.enabled {
+        let redis_conf_path = data_dir.join("redis.conf");
+        let redis_data_dir = data_dir.join("redis").join("data");
+        let redis_conf_content = generate_redis_conf(&config, &redis_data_dir);
+        fs::write(&redis_conf_path, redis_conf_content)?;
+        println!("✅ Generated: {} (bundled Redis)", redis_conf_path.display());
+    }
+
+    // 7. nginx.conf（如果启用内置 Nginx）
+    if config.bundled.nginx.enabled {
+        let nginx_conf_path = data_dir.join("nginx.conf");
+        let nginx_pid_path = data_dir.join("nginx").join("nginx.pid");
+        let nginx_conf_content = generate_nginx_conf(&config, &nginx_pid_path);
+        fs::write(&nginx_conf_path, nginx_conf_content)?;
+        println!("✅ Generated: {} (bundled Nginx)", nginx_conf_path.display());
+    }
+    
     println!("\n✨ All configuration files generated successfully!");
     println!("\n📋 Generated files:");
     println!("   - gitfox.env         (devops backend)");
     println!("   - gitlayer.env       (Git operations service)");
     println!("   - gitfox-shell.env   (SSH server)");
     println!("   - workhorse.toml     (HTTP proxy)");
+    if config.bundled.postgresql.enabled {
+        println!("   - postgresql.conf    (bundled PostgreSQL)");
+    }
+    if config.bundled.redis.enabled {
+        println!("   - redis.conf         (bundled Redis)");
+    }
+    if config.bundled.nginx.enabled {
+        println!("   - nginx.conf         (bundled Nginx)");
+    }
     println!("\n💡 These files are auto-generated from gitfox.toml");
     println!("   To update configuration:");
     println!("   1. Edit gitfox.toml");
     println!("   2. Run: gitfox reconfigure");
     
     Ok(())
+}
+
+/// 生成 PostgreSQL 配置文件内容
+fn generate_postgresql_conf(config: &GitFoxConfig, data_dir: &Path) -> String {
+    let pg = &config.bundled.postgresql;
+    let effective_cache = pg.shared_buffers * 3; // 大约 3 倍 shared_buffers
+    
+    let template = TemplateAssets::get("postgresql.conf.template")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_else(|| {
+            // 如果模板不存在，使用硬编码的默认配置
+            include_str!("../embedded/templates/postgresql.conf.template").to_string()
+        });
+    
+    template
+        .replace("{{POSTGRESQL_HOST}}", &pg.host)
+        .replace("{{POSTGRESQL_PORT}}", &pg.port.to_string())
+        .replace("{{POSTGRESQL_MAX_CONNECTIONS}}", &pg.max_connections.to_string())
+        .replace("{{POSTGRESQL_SHARED_BUFFERS}}", &pg.shared_buffers.to_string())
+        .replace("{{POSTGRESQL_WORK_MEM}}", &pg.work_mem.to_string())
+        .replace("{{POSTGRESQL_EFFECTIVE_CACHE}}", &effective_cache.to_string())
+        .replace("{{POSTGRESQL_DATA_DIR}}", &data_dir.display().to_string())
+}
+
+/// 生成 Redis 配置文件内容
+fn generate_redis_conf(config: &GitFoxConfig, data_dir: &Path) -> String {
+    let redis = &config.bundled.redis;
+    
+    // 根据持久化配置生成相应的配置段
+    let persistence_config = if redis.persistence {
+        match redis.persistence_mode.as_str() {
+            "aof" => "appendonly yes\nappendfsync everysec".to_string(),
+            "rdb+aof" => "save 900 1\nsave 300 10\nsave 60 10000\nappendonly yes\nappendfsync everysec".to_string(),
+            _ => "save 900 1\nsave 300 10\nsave 60 10000".to_string(), // rdb
+        }
+    } else {
+        "save \"\"".to_string()
+    };
+    
+    let template = TemplateAssets::get("redis.conf.template")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_else(|| {
+            include_str!("../embedded/templates/redis.conf.template").to_string()
+        });
+    
+    template
+        .replace("{{REDIS_HOST}}", &redis.host)
+        .replace("{{REDIS_PORT}}", &redis.port.to_string())
+        .replace("{{REDIS_MAXMEMORY}}", &redis.maxmemory.to_string())
+        .replace("{{REDIS_MAXMEMORY_POLICY}}", &redis.maxmemory_policy)
+        .replace("{{REDIS_DATA_DIR}}", &data_dir.display().to_string())
+        .replace("{{REDIS_PERSISTENCE_CONFIG}}", &persistence_config)
+}
+
+/// 生成 Nginx 配置文件内容
+fn generate_nginx_conf(config: &GitFoxConfig, pid_path: &Path) -> String {
+    let nginx = &config.bundled.nginx;
+    
+    // worker_processes: 0 = auto
+    let worker_processes = if nginx.worker_processes == 0 {
+        "auto".to_string()
+    } else {
+        nginx.worker_processes.to_string()
+    };
+    
+    // gzip 配置
+    let gzip_config = if nginx.gzip_enabled {
+        r#"    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_min_length 1000;
+    gzip_types text/plain text/css text/xml application/json application/javascript application/xml+rss application/atom+xml image/svg+xml;"#.to_string()
+    } else {
+        "    gzip off;".to_string()
+    };
+    
+    // SSL 重定向配置
+    let ssl_redirect = if nginx.ssl_enabled {
+        "        # HTTPS 重定向\n        return 301 https://$host$request_uri;".to_string()
+    } else {
+        String::new()
+    };
+    
+    // 构建 upstream servers 列表（支持 workhorse 集群负载均衡）
+    let upstream_servers = nginx.upstream_servers
+        .iter()
+        .map(|s| format!("        server {};", s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    
+    // HTTPS 服务器配置（从模板加载）
+    let https_server = if nginx.ssl_enabled {
+        let https_template = TemplateAssets::get("nginx-https-server.template")
+            .map(|f| String::from_utf8_lossy(&f.data).to_string())
+            .unwrap_or_else(|| {
+                include_str!("../embedded/templates/nginx-https-server.template").to_string()
+            });
+        
+        https_template
+            .replace("{{NGINX_HOST}}", &nginx.host)
+            .replace("{{NGINX_HTTPS_PORT}}", &nginx.https_port.to_string())
+            .replace("{{NGINX_SSL_CERTIFICATE}}", &nginx.ssl_certificate)
+            .replace("{{NGINX_SSL_CERTIFICATE_KEY}}", &nginx.ssl_certificate_key)
+            .replace("{{NGINX_STATIC_CACHE_TIME}}", &nginx.static_cache_time)
+    } else {
+        String::new()
+    };
+    
+    let template = TemplateAssets::get("nginx.conf.template")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_else(|| {
+            include_str!("../embedded/templates/nginx.conf.template").to_string()
+        });
+    
+    template
+        .replace("{{NGINX_WORKER_PROCESSES}}", &worker_processes)
+        .replace("{{NGINX_WORKER_CONNECTIONS}}", &nginx.worker_connections.to_string())
+        .replace("{{NGINX_PID_PATH}}", &pid_path.display().to_string())
+        .replace("{{NGINX_CLIENT_MAX_BODY_SIZE}}", &nginx.client_max_body_size)
+        .replace("{{NGINX_GZIP_CONFIG}}", &gzip_config)
+        .replace("{{NGINX_UPSTREAM_SERVERS}}", &upstream_servers)
+        .replace("{{NGINX_HOST}}", &nginx.host)
+        .replace("{{NGINX_HTTP_PORT}}", &nginx.http_port.to_string())
+        .replace("{{NGINX_SSL_REDIRECT}}", &ssl_redirect)
+        .replace("{{NGINX_STATIC_CACHE_TIME}}", &nginx.static_cache_time)
+        .replace("{{NGINX_HTTPS_SERVER}}", &https_server)
 }
 
 /// 将环境变量 HashMap 写入 .env 文件
@@ -1276,24 +1586,31 @@ fn handle_config_command(data_dir: &Path, action: ConfigAction) -> Result<()> {
             // 如果 gitfox.toml 存在，检查是否需要版本升级
             if gitfox_toml.exists() {
                 println!("📂 Found existing gitfox.toml, checking version...");
-                match GitFoxConfig::load(&gitfox_toml) {
-                    Ok(mut config) => {
-                        if config.version == CONFIG_VERSION {
+                
+                // 使用 load_raw 获取原始版本（不执行迁移）
+                match unified_config::GitFoxConfig::load_raw(&gitfox_toml) {
+                    Ok(raw_config) => {
+                        let original_version = raw_config.version.clone();
+                        
+                        if original_version == CONFIG_VERSION {
                             println!("✅ Configuration is already at latest version ({})", CONFIG_VERSION);
                             return Ok(());
                         }
                         
-                        println!("🔄 Upgrading configuration from {} to {}...", config.version, CONFIG_VERSION);
+                        println!("🔄 Upgrading configuration from {} to {}...", original_version, CONFIG_VERSION);
                         
-                        // 备份旧配置
-                        let backup_path = data_dir.join(format!("gitfox.toml.v{}.bak", config.version));
+                        // 备份旧配置（使用原始版本号）
+                        let backup_path = data_dir.join(format!("gitfox.toml.v{}.bak", original_version));
                         fs::copy(&gitfox_toml, &backup_path)?;
                         println!("   Backup saved to: {}", backup_path.display());
                         
-                        // 保存升级后的配置
-                        config.save(&gitfox_toml)?;
+                        // 使用 load_with_migration 执行迁移
+                        let result = unified_config::GitFoxConfig::load_with_migration(&gitfox_toml)?;
                         
-                        println!("\n✅ Configuration upgraded to version {}!", CONFIG_VERSION);
+                        // 保存升级后的配置（只更新版本号和迁移修改的字段）
+                        result.config.save_migration(&gitfox_toml)?;
+                        
+                        println!("\n✅ Configuration upgraded from {} to {}!", original_version, CONFIG_VERSION);
                         println!("\n🔄 Regenerating component configuration files...");
                         reconfigure_from_toml(data_dir)?;
                         return Ok(());

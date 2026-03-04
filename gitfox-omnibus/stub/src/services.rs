@@ -118,8 +118,8 @@ pub struct BundledNginxConfig {
     pub ssl_enabled: bool,
     pub ssl_certificate: String,
     pub ssl_certificate_key: String,
-    pub upstream_host: String,
-    pub upstream_port: u16,
+    /// 上游服务器列表（支持 workhorse 集群负载均衡）
+    pub upstream_servers: Vec<String>,
     pub client_max_body_size: String,
     pub worker_processes: u32,
     pub worker_connections: u32,
@@ -140,8 +140,7 @@ impl Default for BundledNginxConfig {
             ssl_enabled: false,
             ssl_certificate: String::new(),
             ssl_certificate_key: String::new(),
-            upstream_host: "127.0.0.1".to_string(),
-            upstream_port: 8080,
+            upstream_servers: vec!["127.0.0.1:8080".to_string()],
             client_max_body_size: "1g".to_string(),
             worker_processes: 0, // auto
             worker_connections: 1024,
@@ -636,6 +635,13 @@ maxmemory-policy {}
             config.worker_processes.to_string()
         };
 
+        // 构建 upstream servers 列表（支持集群负载均衡）
+        let upstream_servers = config.upstream_servers
+            .iter()
+            .map(|s| format!("        server {};", s))
+            .collect::<Vec<_>>()
+            .join("\n");
+
         let mut server_block = format!(r#"
     server {{
         listen {} default_server;
@@ -645,7 +651,7 @@ maxmemory-policy {}
         client_max_body_size {};
 
         location / {{
-            proxy_pass http://{}:{};
+            proxy_pass http://gitfox_backend;
             proxy_http_version 1.1;
             proxy_set_header Host $http_host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -656,7 +662,7 @@ maxmemory-policy {}
         }}
 
         location ~ \.git {{
-            proxy_pass http://{}:{};
+            proxy_pass http://gitfox_backend;
             proxy_http_version 1.1;
             proxy_read_timeout 300s;
             proxy_connect_timeout 75s;
@@ -666,10 +672,6 @@ maxmemory-policy {}
             config.http_port,
             config.http_port,
             config.client_max_body_size,
-            config.upstream_host,
-            config.upstream_port,
-            config.upstream_host,
-            config.upstream_port,
         );
 
         // SSL 配置
@@ -688,7 +690,7 @@ maxmemory-policy {}
         client_max_body_size {};
 
         location / {{
-            proxy_pass http://{}:{};
+            proxy_pass http://gitfox_backend;
             proxy_http_version 1.1;
             proxy_set_header Host $http_host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -704,8 +706,6 @@ maxmemory-policy {}
                 config.ssl_certificate,
                 config.ssl_certificate_key,
                 config.client_max_body_size,
-                config.upstream_host,
-                config.upstream_port,
             ));
         }
 
@@ -723,7 +723,7 @@ maxmemory-policy {}
 
         # Docker Registry V2 API
         location /v2/ {{
-            proxy_pass http://{}:{}/v2/;
+            proxy_pass http://gitfox_backend/v2/;
             proxy_http_version 1.1;
             proxy_set_header Host $http_host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -737,7 +737,7 @@ maxmemory-policy {}
 
         # npm Registry API
         location / {{
-            proxy_pass http://{}:{}/npm/;
+            proxy_pass http://gitfox_backend/npm/;
             proxy_http_version 1.1;
             proxy_set_header Host $http_host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -750,10 +750,6 @@ maxmemory-policy {}
                 config.http_port,
                 config.http_port,
                 config.registry_domain,
-                config.upstream_host,
-                config.upstream_port,
-                config.upstream_host,
-                config.upstream_port,
             ));
 
             // HTTPS server for registry domain (if SSL enabled)
@@ -774,7 +770,7 @@ maxmemory-policy {}
 
         # Docker Registry V2 API
         location /v2/ {{
-            proxy_pass http://{}:{}/v2/;
+            proxy_pass http://gitfox_backend/v2/;
             proxy_http_version 1.1;
             proxy_set_header Host $http_host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -788,7 +784,7 @@ maxmemory-policy {}
 
         # npm Registry API
         location / {{
-            proxy_pass http://{}:{}/npm/;
+            proxy_pass http://gitfox_backend/npm/;
             proxy_http_version 1.1;
             proxy_set_header Host $http_host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -803,10 +799,6 @@ maxmemory-policy {}
                     config.registry_domain,
                     config.ssl_certificate,
                     config.ssl_certificate_key,
-                    config.upstream_host,
-                    config.upstream_port,
-                    config.upstream_host,
-                    config.upstream_port,
                 ));
             }
         }
@@ -846,6 +838,12 @@ http {{
     proxy_send_timeout 60s;
     proxy_read_timeout 60s;
 
+    # 上游服务器组（Workhorse 集群）
+    upstream gitfox_backend {{
+{}
+        keepalive 32;
+    }}
+
 {}
 }}
 "#,
@@ -854,6 +852,7 @@ http {{
             self.data_dir.join("nginx").display(),
             config.worker_connections,
             config.log_dir.display(),
+            upstream_servers,
             server_block,
         );
 

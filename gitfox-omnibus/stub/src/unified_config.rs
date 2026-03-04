@@ -34,7 +34,7 @@ use std::fs;
 use std::path::Path;
 
 /// 配置文件版本
-pub const CONFIG_VERSION: &str = "1.1";
+pub const CONFIG_VERSION: &str = "1.1.1";
 
 /// 统一配置结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -783,13 +783,23 @@ pub struct BundledNginxConfig {
     #[serde(default)]
     pub ssl_certificate_key: String,
 
-    /// 上游服务地址
-    #[serde(default = "default_localhost")]
-    pub upstream_host: String,
+    /// 上游服务器列表（支持 workhorse 集群负载均衡）
+    /// 格式: ["127.0.0.1:8080", "127.0.0.1:8081", "192.168.1.10:8080"]
+    #[serde(default = "default_nginx_upstream_servers")]
+    pub upstream_servers: Vec<String>,
 
-    /// 上游服务端口
-    #[serde(default = "default_upstream_port")]
-    pub upstream_port: u16,
+    // ===== 以下字段已弃用，仅用于 v1.1.0 → v1.1.1 迁移兼容 =====
+    // 迁移后这些字段会被忽略，新配置应使用 upstream_servers
+
+    /// [DEPRECATED] 上游服务地址 - 请改用 upstream_servers
+    #[serde(default, skip_serializing)]
+    pub upstream_host: Option<String>,
+
+    /// [DEPRECATED] 上游服务端口 - 请改用 upstream_servers
+    #[serde(default, skip_serializing)]
+    pub upstream_port: Option<u16>,
+
+    // ===== 弃用字段结束 =====
 
     /// 客户端最大请求体大小
     #[serde(default = "default_nginx_client_max_body_size")]
@@ -815,7 +825,7 @@ pub struct BundledNginxConfig {
 fn default_nginx_http_port() -> u16 { 80 }
 fn default_nginx_https_port() -> u16 { 443 }
 fn default_nginx_host() -> String { "0.0.0.0".to_string() }
-fn default_upstream_port() -> u16 { 8080 }
+fn default_nginx_upstream_servers() -> Vec<String> { vec!["127.0.0.1:8080".to_string()] }
 fn default_nginx_client_max_body_size() -> String { "1g".to_string() }
 fn default_nginx_static_cache_time() -> String { "1h".to_string() }
 fn default_nginx_worker_connections() -> u32 { 1024 }
@@ -830,8 +840,10 @@ impl Default for BundledNginxConfig {
             ssl_enabled: false,
             ssl_certificate: String::new(),
             ssl_certificate_key: String::new(),
-            upstream_host: default_localhost(),
-            upstream_port: default_upstream_port(),
+            upstream_servers: default_nginx_upstream_servers(),
+            // 弃用字段
+            upstream_host: None,
+            upstream_port: None,
             client_max_body_size: default_nginx_client_max_body_size(),
             static_cache_time: default_nginx_static_cache_time(),
             gzip_enabled: true,
@@ -845,19 +857,80 @@ impl Default for BundledNginxConfig {
 // 配置加载和保存
 // ═══════════════════════════════════════════════════════════════════════
 
+/// 配置加载结果
+pub struct LoadResult {
+    /// 加载的配置
+    pub config: GitFoxConfig,
+    /// 原始版本（迁移前）
+    pub original_version: String,
+    /// 是否执行了迁移
+    pub migrated: bool,
+}
+
 impl GitFoxConfig {
-    /// 从 TOML 文件加载配置
-    pub fn load(path: &Path) -> Result<Self> {
+    /// 从 TOML 文件加载配置（不执行迁移）
+    /// 用于需要检查原始版本的场景（如 upgrade 命令）
+    pub fn load_raw(path: &Path) -> Result<Self> {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+        
+        let config: Self = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+        
+        Ok(config)
+    }
+
+    /// 从 TOML 文件加载配置并执行迁移
+    /// 返回配置和迁移状态
+    pub fn load_with_migration(path: &Path) -> Result<LoadResult> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
         
         let mut config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
         
-        // 检查配置版本，如需迁移则处理
-        config.check_and_migrate()?;
+        let original_version = config.version.clone();
         
-        Ok(config)
+        // 检查配置版本，如需迁移则处理
+        let migrated = config.check_and_migrate()?;
+        
+        Ok(LoadResult {
+            config,
+            original_version,
+            migrated,
+        })
+    }
+
+    /// 从 TOML 文件加载配置（兼容旧 API）
+    pub fn load(path: &Path) -> Result<Self> {
+        let result = Self::load_with_migration(path)?;
+        Ok(result.config)
+    }
+
+    /// 将相对路径转换为基于 base_dir 的绝对路径
+    /// 应在加载配置后调用
+    pub fn resolve_paths(&mut self, base_dir: &Path) {
+        // 解析路径的辅助函数
+        let resolve = |p: &str| -> String {
+            let path = Path::new(p);
+            if path.is_absolute() {
+                p.to_string()
+            } else {
+                // 相对路径转为绝对路径
+                let resolved = base_dir.join(path);
+                // canonicalize 可能失败（目录不存在），用 display 兜底
+                resolved.canonicalize()
+                    .unwrap_or(resolved)
+                    .display()
+                    .to_string()
+            }
+        };
+        
+        self.paths.repos = resolve(&self.paths.repos);
+        self.paths.frontend = resolve(&self.paths.frontend);
+        self.paths.webide = resolve(&self.paths.webide);
+        self.paths.assets = resolve(&self.paths.assets);
+        self.paths.ssh_host_key = resolve(&self.paths.ssh_host_key);
     }
 
     /// 保存配置到 TOML 文件
@@ -880,12 +953,69 @@ impl GitFoxConfig {
         Ok(())
     }
 
+    /// 迁移后保存配置（只更新版本号和迁移修改的字段，保留原文件其他内容）
+    /// 这样不会用默认值覆盖用户的配置
+    pub fn save_migration(&self, path: &Path) -> Result<()> {
+        use toml::Value;
+        
+        // 读取原始 TOML
+        let original_content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+        
+        let mut doc: Value = toml::from_str(&original_content)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+        
+        // 只更新版本号
+        if let Value::Table(ref mut table) = doc {
+            table.insert("version".to_string(), Value::String(self.version.clone()));
+            
+            // 如果有 bundled.nginx 配置，更新 upstream_servers 并移除废弃字段
+            if let Some(Value::Table(ref mut bundled)) = table.get_mut("bundled") {
+                if let Some(Value::Table(ref mut nginx)) = bundled.get_mut("nginx") {
+                    // 如果迁移代码修改了 upstream_servers，更新它
+                    if !self.bundled.nginx.upstream_servers.is_empty() 
+                        && self.bundled.nginx.upstream_servers != default_nginx_upstream_servers() 
+                    {
+                        let servers: Vec<Value> = self.bundled.nginx.upstream_servers
+                            .iter()
+                            .map(|s| Value::String(s.clone()))
+                            .collect();
+                        nginx.insert("upstream_servers".to_string(), Value::Array(servers));
+                    }
+                    // 移除废弃字段
+                    nginx.remove("upstream_host");
+                    nginx.remove("upstream_port");
+                }
+            }
+        }
+        
+        // 添加文件头注释
+        let header = r#"# GitFox 配置文件
+# 由 `gitfox init` 生成，`gitfox start` 读取
+# 业务配置（站点名称、注册设置等）请在 Admin -> Settings 中修改
+#
+# 文档: https://docs.gitfox.studio/configuration
+
+"#;
+        
+        let content = toml::to_string_pretty(&doc)
+            .context("Failed to serialize config")?;
+        
+        fs::write(path, format!("{}{}", header, content))
+            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
+        
+        Ok(())
+    }
+
     /// 检查配置版本并执行迁移
-    fn check_and_migrate(&mut self) -> Result<()> {
+    /// 返回 true 表示执行了迁移，需要保存配置文件
+    fn check_and_migrate(&mut self) -> Result<bool> {
         // 当前版本就是最新版本，无需迁移
         if self.version == CONFIG_VERSION {
-            return Ok(());
+            return Ok(false);
         }
+        
+        let mut migrated = false;
 
         // 从 1.0 迁移到 1.1：添加 bundled 配置
         // 如果用户已经配置了外部数据库/Redis，则默认不启用内置服务
@@ -922,10 +1052,42 @@ impl GitFoxConfig {
             
             // 更新版本号
             self.version = "1.1".to_string();
+            migrated = true;
             tracing::info!("Config migrated to version 1.1");
         }
 
-        Ok(())
+        // 从 1.1 迁移到 1.1.1：upstream_host/port → upstream_servers
+        // 安全迁移：保留旧配置数据，自动转换为新格式
+        if self.version == "1.1" {
+            tracing::info!("Migrating config from 1.1 to 1.1.1...");
+            
+            // 检查是否有旧版本的 upstream_host/upstream_port 配置
+            // 如果有，转换为 upstream_servers 格式
+            if let (Some(host), Some(port)) = (&self.bundled.nginx.upstream_host, self.bundled.nginx.upstream_port) {
+                let upstream_addr = format!("{}:{}", host, port);
+                
+                // 只有当 upstream_servers 还是默认值时才迁移
+                // 避免覆盖用户手动配置的 upstream_servers
+                if self.bundled.nginx.upstream_servers == default_nginx_upstream_servers() {
+                    tracing::info!(
+                        "Converting deprecated upstream_host:upstream_port ({}) to upstream_servers",
+                        upstream_addr
+                    );
+                    self.bundled.nginx.upstream_servers = vec![upstream_addr];
+                }
+                
+                // 清除已弃用字段（不会写入新配置）
+                self.bundled.nginx.upstream_host = None;
+                self.bundled.nginx.upstream_port = None;
+            }
+            
+            // 更新版本号
+            self.version = "1.1.1".to_string();
+            migrated = true;
+            tracing::info!("Config migrated to version 1.1.1");
+        }
+
+        Ok(migrated)
     }
 
     /// 验证配置有效性
@@ -1140,8 +1302,8 @@ listen_port = {}
     pub fn to_gitlayer_env(&self) -> HashMap<String, String> {
         let mut env = HashMap::new();
 
-        env.insert("GITLAYER_GRPC_ADDRESS".to_string(), format!("0.0.0.0:{}", self.internal.gitlayer_port));
-        env.insert("REPO_BASE_PATH".to_string(), self.paths.repos.clone());
+        env.insert("GITLAYER_LISTEN_ADDR".to_string(), format!("0.0.0.0:{}", self.internal.gitlayer_port));
+        env.insert("GITLAYER_STORAGE_PATH".to_string(), self.paths.repos.clone());
         env.insert("RUST_LOG".to_string(), self.logging.level.clone());
 
         env
@@ -1243,6 +1405,22 @@ pub struct ConfigVars {
 
     // 日志
     pub rust_log: String,
+
+    // 服务启用
+    pub services_backend: bool,
+    pub services_gitlayer: bool,
+    pub services_shell: bool,
+    pub services_workhorse: bool,
+
+    // Registry
+    pub registry_domain: String,
+    pub registry_storage_path: String,
+
+    // Bundled 内置服务
+    pub bundled_enabled: bool,
+    pub bundled_postgresql_enabled: bool,
+    pub bundled_redis_enabled: bool,
+    pub bundled_nginx_enabled: bool,
 }
 
 impl ConfigVars {
@@ -1314,6 +1492,22 @@ impl ConfigVars {
 
         // 日志
         result = result.replace("{{RUST_LOG}}", &self.rust_log);
+
+        // 服务启用
+        result = result.replace("{{SERVICES_BACKEND}}", &self.services_backend.to_string());
+        result = result.replace("{{SERVICES_GITLAYER}}", &self.services_gitlayer.to_string());
+        result = result.replace("{{SERVICES_SHELL}}", &self.services_shell.to_string());
+        result = result.replace("{{SERVICES_WORKHORSE}}", &self.services_workhorse.to_string());
+
+        // Registry
+        result = result.replace("{{REGISTRY_DOMAIN}}", &self.registry_domain);
+        result = result.replace("{{REGISTRY_STORAGE_PATH}}", &self.registry_storage_path);
+
+        // Bundled 内置服务
+        result = result.replace("{{BUNDLED_ENABLED}}", &self.bundled_enabled.to_string());
+        result = result.replace("{{BUNDLED_POSTGRESQL_ENABLED}}", &self.bundled_postgresql_enabled.to_string());
+        result = result.replace("{{BUNDLED_REDIS_ENABLED}}", &self.bundled_redis_enabled.to_string());
+        result = result.replace("{{BUNDLED_NGINX_ENABLED}}", &self.bundled_nginx_enabled.to_string());
 
         result
     }
@@ -1523,6 +1717,8 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
         },
 
         registry: RegistryConfig::default(),
+
+        services: ServicesConfig::default(),
     };
 
     Ok(config)
@@ -1609,6 +1805,7 @@ pub fn migrate_from_legacy(data_dir: &Path) -> Result<MigrationResult> {
             oauth: OAuthConfig::default(),
             logging: LoggingConfig::default(),
             registry: RegistryConfig::default(),
+            services: ServicesConfig::default(),
         }
     };
     

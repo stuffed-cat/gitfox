@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tracing::{info, warn};
+use tracing::{info, warn, debug};
 
 /// 构建配置
 pub struct BuildConfig {
@@ -60,12 +60,9 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
     let omnibus_dir = config.workspace_root.join("gitfox-omnibus");
     let build_dir = omnibus_dir.join(".build");
     
-    // 只清理 embedded 资源目录（资源可能变化），保留 stub/target 以实现增量编译
-    let stub_embedded = build_dir.join("stub").join("embedded");
-    if stub_embedded.exists() {
-        info!("Cleaning embedded resources...");
-        fs::remove_dir_all(&stub_embedded)?;
-    }
+    // 不再删除 stub/embedded 目录
+    // 智能复制（copy_dir_all）会比较 mtime，只复制更新的文件
+    // stub 的 build.rs 会监控 embedded/ 目录，自动触发 cargo 重编译
     
     info!("Build directory: {}", build_dir.display());
 
@@ -429,31 +426,76 @@ fn copy_templates(workspace: &Path, output_dir: &Path) -> Result<()> {
         ));
     }
     
+    let mut copied = 0;
+    let mut skipped = 0;
+    
     for entry in fs::read_dir(&templates_src)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_file() {
             let filename = entry.file_name();
-            fs::copy(&path, output_dir.join(&filename))?;
-            info!("Copied {}", filename.to_string_lossy());
+            let dst = output_dir.join(&filename);
+            if smart_copy_file(&path, &dst)? {
+                debug!("Copied {}", filename.to_string_lossy());
+                copied += 1;
+            } else {
+                skipped += 1;
+            }
         }
     }
     
     // 复制 .env.example (旧格式，向后兼容)
     let env_example = workspace.join(".env.example");
     if env_example.exists() {
-        fs::copy(&env_example, output_dir.join("gitfox.env.template"))?;
-        info!("Copied .env.example → gitfox.env.template");
+        let dst = output_dir.join("gitfox.env.template");
+        if smart_copy_file(&env_example, &dst)? {
+            debug!("Copied .env.example → gitfox.env.template");
+            copied += 1;
+        } else {
+            skipped += 1;
+        }
     }
     
     // 复制 config.example.toml
     let workhorse_config = workspace.join("gitfox-workhorse").join("config.example.toml");
     if workhorse_config.exists() {
-        fs::copy(&workhorse_config, output_dir.join("workhorse.toml.template"))?;
-        info!("Copied config.example.toml → workhorse.toml.template");
+        let dst = output_dir.join("workhorse.toml.template");
+        if smart_copy_file(&workhorse_config, &dst)? {
+            debug!("Copied config.example.toml → workhorse.toml.template");
+            copied += 1;
+        } else {
+            skipped += 1;
+        }
     }
     
+    info!("Templates: {} copied, {} unchanged", copied, skipped);
     Ok(())
+}
+
+/// 智能复制文件：只在源文件更新时才复制
+/// 返回 true 表示已复制，false 表示跳过
+fn smart_copy_file(src: &Path, dst: &Path) -> Result<bool> {
+    if !dst.exists() {
+        fs::copy(src, dst)?;
+        return Ok(true);
+    }
+    
+    // 比较修改时间
+    let src_mtime = fs::metadata(src)?.modified().ok();
+    let dst_mtime = fs::metadata(dst)?.modified().ok();
+    
+    match (src_mtime, dst_mtime) {
+        (Some(src_t), Some(dst_t)) if src_t > dst_t => {
+            fs::copy(src, dst)?;
+            Ok(true)
+        }
+        (Some(_), Some(_)) => Ok(false), // 源文件未更新，跳过
+        _ => {
+            // 无法比较时间，保守复制
+            fs::copy(src, dst)?;
+            Ok(true)
+        }
+    }
 }
 
 /// 复制 migrations

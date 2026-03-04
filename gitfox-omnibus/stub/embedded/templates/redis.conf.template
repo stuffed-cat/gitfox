@@ -1,0 +1,33 @@
+# ════════════════════════════════════════════════════════════════════════════
+# GitFox 内置 Redis 配置
+# ════════════════════════════════════════════════════════════════════════════
+# 由 `gitfox reconfigure` 根据 gitfox.toml 生成
+# 修改 gitfox.toml 中的 [bundled.redis] 段后重新运行 reconfigure
+
+# 网络设置
+bind {{REDIS_HOST}}
+port {{REDIS_PORT}}
+daemonize no
+protected-mode yes
+
+# 工作目录
+dir {{REDIS_DATA_DIR}}
+
+# 内存设置
+maxmemory {{REDIS_MAXMEMORY}}mb
+maxmemory-policy {{REDIS_MAXMEMORY_POLICY}}
+
+# 持久化设置
+{{REDIS_PERSISTENCE_CONFIG}}
+
+# 日志设置
+loglevel notice
+logfile ""
+
+# 连接设置
+timeout 0
+tcp-keepalive 300
+
+# 安全设置
+# 内置 Redis 仅监听本地，不设置密码
+# 如需远程连接，请使用外部 Redis

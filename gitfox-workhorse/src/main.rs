@@ -163,6 +163,29 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("Max upload size: {} bytes ({:.2} MB)", max_upload_size, max_upload_size as f64 / 1024.0 / 1024.0);
 
+    // 初始化 Auth gRPC 客户端（用于 Git HTTP 权限验证）
+    let auth_client = if config.use_grpc_auth {
+        if let Some(ref addr) = config.auth_grpc_address {
+            match auth_client::AuthClient::connect(addr, config.shell_secret.clone()).await {
+                Ok(client) => {
+                    tracing::info!("Auth gRPC client connected to {}", addr);
+                    Some(client)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to connect to Auth gRPC at {}: {}", addr, e);
+                    tracing::warn!("Git HTTP authentication will be disabled");
+                    None
+                }
+            }
+        } else {
+            tracing::warn!("use_grpc_auth=true but auth_grpc_address not configured");
+            None
+        }
+    } else {
+        tracing::info!("gRPC auth disabled, Git HTTP will allow anonymous access only");
+        None
+    };
+
     // 启动 HTTP 服务器
     HttpServer::new(move || {
         let mut app = App::new()
@@ -350,7 +373,7 @@ async fn main() -> std::io::Result<()> {
         if config_data.gitlayer_address.is_some() {
             let git_state = web::Data::new(git_http::GitHttpState::new(
                 std::sync::Arc::new(config_data.get_ref().clone()),
-                None, // TODO: auth_client
+                auth_client.clone(),
             ));
             app = app
                 .app_data(git_state.clone())

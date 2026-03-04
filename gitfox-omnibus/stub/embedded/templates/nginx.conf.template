@@ -1,0 +1,113 @@
+# ════════════════════════════════════════════════════════════════════════════
+# GitFox 内置 Nginx 配置
+# ════════════════════════════════════════════════════════════════════════════
+# 由 `gitfox reconfigure` 根据 gitfox.toml 生成
+# 修改 gitfox.toml 中的 [bundled.nginx] 段后重新运行 reconfigure
+
+worker_processes {{NGINX_WORKER_PROCESSES}};
+error_log stderr warn;
+pid {{NGINX_PID_PATH}};
+
+events {
+    worker_connections {{NGINX_WORKER_CONNECTIONS}};
+    use epoll;
+    multi_accept on;
+}
+
+http {
+    include mime.types;
+    default_type application/octet-stream;
+
+    # 日志格式
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log /dev/stdout main;
+
+    # 性能优化
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    # 客户端设置
+    client_max_body_size {{NGINX_CLIENT_MAX_BODY_SIZE}};
+    client_body_buffer_size 128k;
+    client_header_buffer_size 1k;
+    large_client_header_buffers 4 16k;
+
+    # Gzip 压缩
+{{NGINX_GZIP_CONFIG}}
+
+    # 代理缓冲设置
+    proxy_buffer_size 128k;
+    proxy_buffers 4 256k;
+    proxy_busy_buffers_size 256k;
+    proxy_temp_file_write_size 256k;
+
+    # 上游服务器组（Workhorse 集群）
+    # 支持负载均衡：配置多个 workhorse 实例实现高可用
+    upstream gitfox_backend {
+{{NGINX_UPSTREAM_SERVERS}}
+        keepalive 32;
+    }
+
+    # HTTP 服务器
+    server {
+        listen {{NGINX_HOST}}:{{NGINX_HTTP_PORT}};
+        server_name _;
+
+{{NGINX_SSL_REDIRECT}}
+
+        # 静态文件缓存
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+            proxy_pass http://gitfox_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            expires {{NGINX_STATIC_CACHE_TIME}};
+            add_header Cache-Control "public, immutable";
+        }
+
+        # WebSocket 支持（用于 CI/CD Runner、WebIDE 等）
+        location ~* ^/(api/v1/runner/ws|/-/ide/.*) {
+            proxy_pass http://gitfox_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 86400;
+        }
+
+        # Git HTTP（大文件上传）
+        location ~* \.git/ {
+            proxy_pass http://gitfox_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_request_buffering off;
+            proxy_buffering off;
+            client_max_body_size 0;
+        }
+
+        # 其他所有请求
+        location / {
+            proxy_pass http://gitfox_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+    }
+
+{{NGINX_HTTPS_SERVER}}
+}
