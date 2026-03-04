@@ -54,12 +54,13 @@ const NGINX_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/nginx.git";
 const POSTGRESQL_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/postgresql.git";
 const REDIS_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/redis.git";
 
-// PostgreSQL 依赖镜像
+// 共享依赖镜像（PostgreSQL、Redis、Nginx 通用）
 const ZLIB_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/zlib.git";
 const NCURSES_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/ncurses.git";
 const READLINE_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/readline.git";
 const OPENSSL_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/openssl.git";
 const ICU_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/icu.git";
+const PCRE_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/pcre2.git";
 
 // systemd（用于 Redis）
 const SYSTEMD_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/systemd.git";
@@ -287,8 +288,9 @@ pub fn build_deps(config: &DepsConfig) -> Result<DepsOutput> {
     let mut output = DepsOutput::default();
     
     // 记录依赖库 lib 目录（包含 .so 文件）
-    let deps_install_dir = config.work_dir.join("deps-install");
-    output.deps_lib_dir = Some(deps_install_dir.join("lib"));
+    // 注意：现在使用 shared-deps 而不是 postgresql-deps
+    let shared_deps_dir = config.output_dir.join("shared-deps");
+    output.deps_lib_dir = Some(shared_deps_dir.join("lib"));
 
     // 计算并行任务数
     let jobs = if config.jobs == 0 {
@@ -458,8 +460,9 @@ fn clone_or_update(url: &str, dest: &Path) -> Result<()> {
 }
 
 /// 构建 PostgreSQL 静态依赖
-fn build_postgresql_deps(config: &DepsConfig, jobs: usize) -> Result<PathBuf> {
-    let deps_dir = config.output_dir.join("postgresql-deps");
+/// 构建所有共享依赖（PostgreSQL、Redis、Nginx 通用）
+fn build_shared_deps(config: &DepsConfig, jobs: usize) -> Result<PathBuf> {
+    let deps_dir = config.output_dir.join("shared-deps");
     
     fs::create_dir_all(&deps_dir)?;
     let deps_include = deps_dir.join("include");
@@ -468,11 +471,15 @@ fn build_postgresql_deps(config: &DepsConfig, jobs: usize) -> Result<PathBuf> {
     fs::create_dir_all(&deps_lib)?;
     
     // 所有依赖同时生成 .a 和 .so
-    // PostgreSQL 会静态链接 .a，我们只打包 .so 供运行时使用
+    // 编译时静态链接 .a，运行时我们只打包 .so
     
     // 构建 zlib
     info!("Building zlib (static + shared)...");
     build_zlib(config, jobs, &deps_dir)?;
+    
+    // 构建 PCRE2（Nginx rewrite 模块需要）
+    info!("Building PCRE2 (static + shared)...");
+    build_pcre2(config, jobs, &deps_dir)?;
     
     // 构建 ncurses (readline 依赖)
     info!("Building ncurses (static + shared)...");
@@ -649,6 +656,84 @@ fn build_zlib(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 构建 PCRE2（同时生成 .a 和 .so）
+fn build_pcre2(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
+    let src_dir = config.work_dir.join("pcre2");
+    clone_or_update(PCRE_MIRROR, &src_dir)?;
+    
+    // PCRE2 使用 git submodule (sljit)，需要初始化
+    if src_dir.join(".gitmodules").exists() {
+        info!("Initializing PCRE2 submodules (sljit)...");
+        let status = Command::new("git")
+            .args(["submodule", "update", "--init", "--recursive"])
+            .current_dir(&src_dir)
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("Failed to initialize PCRE2 submodules"));
+        }
+    }
+    
+    let build_script = src_dir.join("build-musl.sh");
+    if build_script.exists() {
+        let status = Command::new("bash")
+            .arg(&build_script)
+            .env("INSTALL_DIR", deps_dir)
+            .env("JOBS", jobs.to_string())
+            .current_dir(&src_dir)
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("PCRE2 build script failed"));
+        }
+    } else {
+        // PCRE2 需要先运行 autogen.sh 生成 configure 脚本
+        let autogen = src_dir.join("autogen.sh");
+        if autogen.exists() && !src_dir.join("configure").exists() {
+            info!("Generating configure script for PCRE2...");
+            let status = Command::new("bash")
+                .arg("./autogen.sh")
+                .current_dir(&src_dir)
+                .status()?;
+            if !status.success() {
+                return Err(anyhow::anyhow!("PCRE2 autogen.sh failed"));
+            }
+        }
+        
+        // PCRE2 配置：--enable-shared 同时生成 .a 和 .so
+        let status = Command::new("./configure")
+            .arg(&format!("--prefix={}", deps_dir.display()))
+            .arg("--enable-shared")
+            .arg("--enable-static")
+            .arg("--enable-pcre2-16")
+            .arg("--enable-pcre2-32")
+            .arg("--enable-jit")
+            .arg("--disable-dependency-tracking")
+            .env("CC", get_musl_gcc())
+            .env("CFLAGS", "-Os -fPIC")
+            .current_dir(&src_dir)
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("PCRE2 configure failed"));
+        }
+        
+        let status = Command::new("make")
+            .args(["-j", &jobs.to_string()])
+            .current_dir(&src_dir)
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("PCRE2 make failed"));
+        }
+        
+        let status = Command::new("make")
+            .arg("install")
+            .current_dir(&src_dir)
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("PCRE2 install failed"));
+        }
+    }
+    Ok(())
+}
+
 /// 构建 ncurses（同时生成 .a 和 .so）
 fn build_ncurses(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     let src_dir = config.work_dir.join("ncurses");
@@ -757,6 +842,25 @@ fn build_readline(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<(
 fn build_openssl(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     let src_dir = config.work_dir.join("openssl");
     clone_or_update(OPENSSL_MIRROR, &src_dir)?;
+    
+    // 切换到稳定分支（master 是 4.0.0-dev，API 不稳定）
+    info!("Checking out OpenSSL stable branch...");
+    // 先 fetch 确保有远程分支
+    Command::new("git")
+        .args(["fetch", "--all"])
+        .current_dir(&src_dir)
+        .status()?;
+    let status = Command::new("git")
+        .args(["checkout", "openssl-3.6"])
+        .current_dir(&src_dir)
+        .status()?;
+    if !status.success() {
+        warn!("Failed to checkout openssl-3.6, trying openssl-3.5...");
+        Command::new("git")
+            .args(["checkout", "openssl-3.5"])
+            .current_dir(&src_dir)
+            .status()?;
+    }
     
     let build_script = src_dir.join("build-musl.sh");
     if build_script.exists() {
@@ -890,7 +994,7 @@ fn build_postgresql(config: &DepsConfig, jobs: usize) -> Result<PostgresqlOutput
     } else {
         // 先构建依赖
         info!("Building PostgreSQL static dependencies...");
-        let deps_dir = build_postgresql_deps(config, jobs)?;
+        let deps_dir = build_shared_deps(config, jobs)?;
         
         // 手动构建
         fs::create_dir_all(&build_dir)?;
@@ -1170,7 +1274,7 @@ fn build_redis(config: &DepsConfig, jobs: usize) -> Result<RedisOutput> {
     } else {
         // 复用 PostgreSQL 的依赖（OpenSSL, zlib 等）
         info!("Building shared dependencies (OpenSSL, zlib, etc.)...");
-        let deps_dir = build_postgresql_deps(config, jobs)?;
+        let deps_dir = build_shared_deps(config, jobs)?;
         
         // Redis 使用简单的 Makefile，参考 PostgreSQL 的方式使用动态链接
         info!("Compiling Redis with musl (all features enabled)...");
@@ -1319,24 +1423,53 @@ fn build_nginx(config: &DepsConfig, jobs: usize) -> Result<NginxOutput> {
             return Err(anyhow::anyhow!("Nginx build script failed"));
         }
     } else {
-        // 手动构建
-        // Nginx 需要 PCRE 和 zlib，我们假设镜像仓库已包含这些
-        info!("Configuring Nginx...");
-        let status = Command::new("./configure")
+        // 复用依赖（OpenSSL, zlib, PCRE 等）
+        info!("Building shared dependencies...");
+        let deps_dir = build_shared_deps(config, jobs)?;
+        
+        // Nginx 配置需要 PCRE（用于 rewrite 模块）
+        info!("Configuring Nginx with musl...");
+        
+        let cflags = format!("-O2 -I{}/include", deps_dir.display());
+        let ldflags = format!("-L{}/lib -L{}/lib64 -Wl,-rpath,'$ORIGIN/../lib'", 
+            deps_dir.display(), deps_dir.display());
+        
+        // Nginx 使用 auto/configure 而不是 ./configure
+        let configure = src_dir.join("auto/configure");
+        let status = Command::new(&configure)
             .args([
                 &format!("--prefix={}", install_dir.display()),
-                "--with-cc=musl-gcc",
-                "--with-cc-opt=-static -Os",
-                "--with-ld-opt=-static",
-                "--without-http_rewrite_module",  // 需要 PCRE
-                "--without-http_gzip_module",     // 需要 zlib
-                "--without-http_ssl_module",      // 需要 OpenSSL
-                "--without-stream_ssl_module",
-                "--without-mail_ssl_module",
-                "--http-log-path=/var/log/nginx/access.log",
-                "--error-log-path=/var/log/nginx/error.log",
-                "--pid-path=/var/run/nginx.pid",
+                &format!("--with-cc={}", get_musl_gcc()),
+                &format!("--with-cc-opt={}", cflags),
+                &format!("--with-ld-opt={}", ldflags),
+                "--with-pcre",                    // 使用 PCRE2（从 pkg-config）
+                "--with-pcre-jit",                // 启用 JIT
+                "--with-http_ssl_module",         // 启用 SSL（使用 OpenSSL）
+                "--with-http_v2_module",          // 启用 HTTP/2
+                "--with-http_realip_module",
+                "--with-http_addition_module",
+                "--with-http_sub_module",
+                "--with-http_dav_module",
+                "--with-http_flv_module",
+                "--with-http_mp4_module",
+                "--with-http_gunzip_module",
+                "--with-http_gzip_static_module",
+                "--with-http_random_index_module",
+                "--with-http_secure_link_module",
+                "--with-http_stub_status_module",
+                "--with-http_auth_request_module",
+                "--with-threads",
+                "--with-stream",
+                "--with-stream_ssl_module",
+                "--with-stream_realip_module",
+                // 所有路径都放在 prefix 下，避免安装时创建系统目录
+                &format!("--http-log-path={}/logs/access.log", install_dir.display()),
+                &format!("--error-log-path={}/logs/error.log", install_dir.display()),
+                &format!("--pid-path={}/logs/nginx.pid", install_dir.display()),
+                &format!("--lock-path={}/logs/nginx.lock", install_dir.display()),
             ])
+            .env("PKG_CONFIG_PATH", format!("{}/lib/pkgconfig:{}/lib64/pkgconfig", 
+                deps_dir.display(), deps_dir.display()))
             .current_dir(&src_dir)
             .status()?;
         if !status.success() {
@@ -1528,6 +1661,28 @@ fn num_cpus() -> usize {
 pub fn copy_deps_to_output(output: &DepsOutput, target_dir: &Path) -> Result<()> {
     let deps_dir = target_dir.join("deps");
     fs::create_dir_all(&deps_dir)?;
+    
+    // 创建统一的共享库目录（PostgreSQL、Redis、Nginx 共用）
+    let shared_lib_dir = deps_dir.join("shared/lib");
+    fs::create_dir_all(&shared_lib_dir)?;
+    
+    // 复制共享依赖库到统一位置
+    if let Some(ref deps_lib) = output.deps_lib_dir {
+        if deps_lib.exists() {
+            for entry in fs::read_dir(deps_lib)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().to_string();
+                // 只复制 .so 文件（包括 .so.N 和 .so.N.N.N 等）
+                if name.contains(".so") {
+                    let dest = shared_lib_dir.join(&name);
+                    if !dest.exists() {
+                        fs::copy(entry.path(), &dest)?;
+                        info!("Copied {} to shared lib", name);
+                    }
+                }
+            }
+        }
+    }
 
     if let Some(ref pg) = output.postgresql {
         let pg_dir = deps_dir.join("postgresql");
@@ -1547,32 +1702,12 @@ pub fn copy_deps_to_output(output: &DepsOutput, target_dir: &Path) -> Result<()>
             }
         }
         
-        // 复制 lib 和 share
+        // 复制 lib 和 share（PostgreSQL 自己的库）
         if pg.lib_dir.exists() {
             copy_dir_recursive(&pg.lib_dir, &pg_dir.join("lib"))?;
         }
         if pg.share_dir.exists() {
             copy_dir_recursive(&pg.share_dir, &pg_dir.join("share"))?;
-        }
-        
-        // 复制依赖库的 .so 文件到 PostgreSQL lib 目录
-        // 这样运行时 ld-musl 可以通过 LD_LIBRARY_PATH 找到所有动态库
-        if let Some(ref deps_lib) = output.deps_lib_dir {
-            if deps_lib.exists() {
-                let pg_lib = pg_dir.join("lib");
-                for entry in fs::read_dir(deps_lib)? {
-                    let entry = entry?;
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    // 只复制 .so 文件（包括 .so.N 和 .so.N.N.N 等）
-                    if name.contains(".so") {
-                        let dest = pg_lib.join(&name);
-                        if !dest.exists() {
-                            fs::copy(entry.path(), &dest)?;
-                            info!("Copied {} to PostgreSQL lib", name);
-                        }
-                    }
-                }
-            }
         }
         
         // 复制配置

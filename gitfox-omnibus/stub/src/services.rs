@@ -249,7 +249,7 @@ impl BundledServices {
             let deps_dir = self.data_dir.join("deps/postgresql");
             let postgres_bin = deps_dir.join("bin/postgres");
             let initdb_bin = deps_dir.join("bin/initdb");
-            let lib_dir = deps_dir.join("lib");
+            let lib_dir = self.data_dir.join("deps/shared/lib"); // 使用统一的共享库目录
 
             if !postgres_bin.exists() {
                 return Err(anyhow::anyhow!(
@@ -402,7 +402,7 @@ host    all             all             ::1/128                 md5
     #[cfg(feature = "bundled-deps")]
     fn setup_postgresql_database(&self, config: &BundledPostgresConfig) -> Result<()> {
         let deps_dir = self.data_dir.join("deps/postgresql");
-        let lib_dir = deps_dir.join("lib");
+        let lib_dir = self.data_dir.join("deps/shared/lib"); // 使用统一的共享库目录
         let psql_bin = deps_dir.join("bin/psql");
         
         // 使用 musl loader 执行 psql
@@ -471,7 +471,7 @@ host    all             all             ::1/128                 md5
 
             let deps_dir = self.data_dir.join("deps/redis");
             let redis_bin = deps_dir.join("bin/redis-server");
-            let lib_dir = deps_dir.parent().unwrap().join("postgresql/lib"); // 共享 PostgreSQL 的 lib
+            let lib_dir = self.data_dir.join("deps/shared/lib"); // 使用统一的共享库目录
 
             if !redis_bin.exists() {
                 return Err(anyhow::anyhow!(
@@ -581,6 +581,7 @@ maxmemory-policy {}
 
             let deps_dir = self.data_dir.join("deps/nginx");
             let nginx_bin = deps_dir.join("sbin/nginx");
+            let lib_dir = self.data_dir.join("deps/shared/lib"); // 使用统一的共享库目录
 
             if !nginx_bin.exists() {
                 return Err(anyhow::anyhow!(
@@ -589,6 +590,13 @@ maxmemory-policy {}
                 ));
             }
 
+            // 查找 musl 动态链接器（Nginx 也是用 musl 动态链接编译的）
+            let ld_musl = self.find_musl_loader(&lib_dir)?;
+            info!("Using musl loader for Nginx: {}", ld_musl.display());
+
+            // 设置 LD_LIBRARY_PATH
+            let ld_library_path = lib_dir.to_string_lossy().to_string();
+
             // 创建目录
             fs::create_dir_all(&config.conf_dir)?;
             fs::create_dir_all(&config.log_dir)?;
@@ -596,12 +604,15 @@ maxmemory-policy {}
             // 生成配置文件
             self.write_nginx_config(config)?;
 
-            // 启动 Nginx
-            let child = Command::new(&nginx_bin)
+            // 通过 ld-musl 启动 Nginx
+            // 命令格式: /path/to/ld-musl-x86_64.so.1 /path/to/nginx -c config -p prefix
+            let child = Command::new(&ld_musl)
+                .arg(&nginx_bin)
                 .args([
                     "-c", &config.conf_dir.join("nginx.conf").to_string_lossy(),
                     "-p", &self.data_dir.join("nginx").to_string_lossy(),
                 ])
+                .env("LD_LIBRARY_PATH", &ld_library_path)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
