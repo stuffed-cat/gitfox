@@ -27,7 +27,6 @@ pub struct BuildConfig {
     pub skip_webide: bool,
     pub skip_rust: bool,
     pub release: bool,
-    pub keep_temp: bool,
     /// 跳过依赖构建（使用缓存）
     pub skip_deps_build: bool,
 }
@@ -186,13 +185,8 @@ pub async fn run_build(config: BuildConfig) -> Result<()> {
     info!("Size: {} bytes ({:.2} MB)", size, size as f64 / 1024.0 / 1024.0);
     info!("SHA256: {}", hash);
 
-    // 清理或保留构建目录
-    if config.keep_temp {
-        info!("Build files kept at: {}", build_dir.display());
-    } else {
-        info!("Cleaning up build directory...");
-        fs::remove_dir_all(&build_dir)?;
-    }
+    // .build 目录永远保留，只有 `gitfox-omnibus clean` 命令才会删除
+    info!("Build files at: {}", build_dir.display());
 
     Ok(())
 }
@@ -424,23 +418,32 @@ fn copy_binary(manifest_dir: &Path, bin_name: &str, target: &str, profile: &str,
 fn copy_templates(workspace: &Path, output_dir: &Path) -> Result<()> {
     info!("Copying configuration templates...");
     
+    // 从 stub/embedded/templates/ 复制所有模板文件
+    let omnibus_dir = workspace.join("gitfox-omnibus");
+    let templates_src = omnibus_dir.join("stub/embedded/templates");
+    
+    if !templates_src.exists() {
+        return Err(anyhow::anyhow!(
+            "Templates directory not found: {}",
+            templates_src.display()
+        ));
+    }
+    
+    for entry in fs::read_dir(&templates_src)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            let filename = entry.file_name();
+            fs::copy(&path, output_dir.join(&filename))?;
+            info!("Copied {}", filename.to_string_lossy());
+        }
+    }
+    
     // 复制 .env.example (旧格式，向后兼容)
     let env_example = workspace.join(".env.example");
     if env_example.exists() {
         fs::copy(&env_example, output_dir.join("gitfox.env.template"))?;
         info!("Copied .env.example → gitfox.env.template");
-    } else {
-        warn!(".env.example not found");
-    }
-    
-    // 复制 gitfox.toml.example (新统一配置格式) - 从 gitfox-omnibus 目录
-    let omnibus_dir = workspace.join("gitfox-omnibus");
-    let toml_example = omnibus_dir.join("gitfox.toml.example");
-    if toml_example.exists() {
-        fs::copy(&toml_example, output_dir.join("gitfox.toml.template"))?;
-        info!("Copied gitfox-omnibus/gitfox.toml.example → gitfox.toml.template");
-    } else {
-        return Err(anyhow::anyhow!("gitfox-omnibus/gitfox.toml.example not found - this file is required"));
     }
     
     // 复制 config.example.toml
@@ -448,8 +451,6 @@ fn copy_templates(workspace: &Path, output_dir: &Path) -> Result<()> {
     if workhorse_config.exists() {
         fs::copy(&workhorse_config, output_dir.join("workhorse.toml.template"))?;
         info!("Copied config.example.toml → workhorse.toml.template");
-    } else {
-        warn!("gitfox-workhorse/config.example.toml not found");
     }
     
     Ok(())

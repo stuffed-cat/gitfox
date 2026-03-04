@@ -884,43 +884,69 @@ pub async fn handle_verify_locks(
 // ============ 辅助函数 ============
 
 /// 认证 LFS 请求
+/// 
+/// 通过 gRPC Auth 服务验证权限，实现三层权限交集：
+/// Token Scopes ∩ User Permission ∩ Project Membership
 async fn authenticate_lfs_request(
     req: &HttpRequest,
     repo_path: &str,
     action: &str,
     state: &LfsState,
 ) -> Result<LfsAuthInfo, String> {
-    // 目前使用简化的认证逻辑
-    // TODO: 完整实现应通过 gRPC 调用 Auth 服务
-    
+    let auth_client = match &state.auth_client {
+        Some(c) => c.clone(),
+        None => {
+            // 没有 Auth 客户端配置 - 只允许公开仓库的读取
+            if action == "download" {
+                return Ok(LfsAuthInfo {
+                    user_id: 0,
+                    username: "anonymous".to_string(),
+                    project_id: 0,
+                    can_write: false,
+                });
+            }
+            return Err("Authentication service not configured".to_string());
+        }
+    };
+
+    let mut auth_client = auth_client;
     let auth_header = extract_auth_info(req);
-    
-    // 如果没有认证信息，检查是否是公开仓库的下载请求
-    if auth_header.is_none() && action == "download" {
-        // 允许公开仓库的匿名下载
-        // 注意：这里需要根据实际业务逻辑判断仓库是否公开
-        return Ok(LfsAuthInfo {
-            user_id: 0,
-            username: "anonymous".to_string(),
-            project_id: 0,  // 需要从仓库路径解析
-            can_write: false,
-        });
-    }
-    
-    // 需要认证
-    match auth_header {
+
+    // 调用 gRPC Auth 服务
+    let access_result = match auth_header {
         Some((username, password)) => {
-            // TODO: 调用 Auth gRPC 服务验证
-            // 目前返回假数据，实际应该验证 token/password
-            Ok(LfsAuthInfo {
-                user_id: 1,
-                username,
-                project_id: 1,
-                can_write: action == "upload",
-            })
+            // 有认证信息：Basic auth 或 Bearer token
+            // password 可能是密码、PAT 或 OAuth2 token
+            if username.is_empty() {
+                // Bearer token - 作为 JWT 或 OAuth2 token
+                auth_client.check_http_access_jwt(repo_path, action, &password).await
+            } else {
+                // Basic auth - password 可能是密码、PAT 或 OAuth2 token
+                auth_client.check_http_access_basic(repo_path, action, &username, &password).await
+            }
         }
         None => {
-            Err("Authentication required".to_string())
+            // 无认证 - 匿名访问
+            auth_client.check_http_access_anonymous(repo_path, action).await
+        }
+    };
+
+    match access_result {
+        Ok(result) => {
+            if result.allowed {
+                Ok(LfsAuthInfo {
+                    user_id: result.user_id,
+                    username: result.username,
+                    project_id: result.project_id,
+                    can_write: result.can_write,
+                })
+            } else {
+                Err(result.message)
+            }
+        }
+        Err(e) => {
+            tracing::error!("Auth gRPC error: {}", e);
+            Err("Authentication service unavailable".to_string())
         }
     }
 }

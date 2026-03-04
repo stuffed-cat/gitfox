@@ -37,6 +37,7 @@ mod stub;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
@@ -85,10 +86,6 @@ enum Commands {
         #[arg(long, default_value = "true")]
         release: bool,
 
-        /// 保留临时文件 (调试用)
-        #[arg(long)]
-        keep_temp: bool,
-
         /// 跳过内置依赖构建（使用已缓存的 PostgreSQL/Redis/Nginx）
         #[arg(long)]
         skip_deps_build: bool,
@@ -134,6 +131,17 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
+
+    /// 清理构建目录 (.build)
+    Clean {
+        /// 工作区根目录
+        #[arg(short, long)]
+        workspace: Option<PathBuf>,
+
+        /// 保留依赖缓存（只删除编译产物）
+        #[arg(long)]
+        keep_deps: bool,
+    },
 }
 
 #[tokio::main]
@@ -159,7 +167,6 @@ async fn main() -> Result<()> {
             skip_webide,
             skip_rust,
             release,
-            keep_temp,
             skip_deps_build,
         } => {
             let workspace = workspace.unwrap_or_else(|| find_workspace_root());
@@ -175,7 +182,6 @@ async fn main() -> Result<()> {
                 skip_webide,
                 skip_rust,
                 release,
-                keep_temp,
                 skip_deps_build,
             };
 
@@ -232,6 +238,35 @@ async fn main() -> Result<()> {
             }
             if result.nginx.is_some() {
                 println!("  ✓ Nginx");
+            }
+        }
+
+        Commands::Clean { workspace, keep_deps } => {
+            let workspace = workspace.unwrap_or_else(|| find_workspace_root());
+            let omnibus_dir = workspace.join("gitfox-omnibus");
+            let build_dir = omnibus_dir.join(".build");
+
+            if !build_dir.exists() {
+                println!("Build directory does not exist: {}", build_dir.display());
+                return Ok(());
+            }
+
+            if keep_deps {
+                // 只删除编译产物，保留依赖缓存
+                let dirs_to_clean = ["stub", "frontend", "webide", "rust"];
+                for dir_name in &dirs_to_clean {
+                    let dir = build_dir.join(dir_name);
+                    if dir.exists() {
+                        info!("Removing: {}", dir.display());
+                        std::fs::remove_dir_all(&dir)?;
+                    }
+                }
+                println!("✓ Cleaned build artifacts (deps cache preserved)");
+            } else {
+                // 删除整个 .build 目录
+                info!("Removing: {}", build_dir.display());
+                std::fs::remove_dir_all(&build_dir)?;
+                println!("✓ Cleaned entire .build directory");
             }
         }
     }

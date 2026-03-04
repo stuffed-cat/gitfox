@@ -75,6 +75,9 @@ pub async fn handle_v2_check(
 
 /// GET /v2/auth - Token 认证端点
 /// Docker 客户端用此端点获取访问 token
+/// 
+/// **三层权限交集**:
+/// 最终权限 = Token Scopes ∩ User Role ∩ Project Membership
 pub async fn handle_token_auth(
     req: HttpRequest,
     query: web::Query<TokenAuthQuery>,
@@ -83,7 +86,7 @@ pub async fn handle_token_auth(
     debug!("Docker token auth: {:?}", query);
     
     let scope = query.scope.as_deref().unwrap_or("");
-    let service = query.service.as_deref().unwrap_or("registry");
+    let _service = query.service.as_deref().unwrap_or("registry");
     
     // 解析 scope: repository:namespace/project:pull,push
     let (repository, actions) = if !scope.is_empty() {
@@ -99,22 +102,50 @@ pub async fn handle_token_auth(
         ("", vec![])
     };
 
-    // 验证凭据
-    let (username, can_write) = if let Some((user, pass)) = extract_basic_auth(&req) {
-        // 使用 Basic Auth 凭据验证
-        // 这里简化处理，实际应该调用 auth_client 验证
-        if !repository.is_empty() {
-            // TODO: 实际验证
-            (user, true)
-        } else {
-            (user, false)
+    // 确定需要的操作类型
+    let needs_write = actions.iter().any(|a| *a == "push");
+    let grpc_action = if needs_write { "git-receive-pack" } else { "git-upload-pack" };
+
+    // 通过 gRPC Auth 服务验证权限
+    let (username, can_write) = match &state.auth_client {
+        Some(auth_mutex) => {
+            let mut auth_client = auth_mutex.lock().await;
+            let repo_path = repository.to_string();
+
+            // 尝试认证
+            let result = if let Some((user, pass)) = extract_basic_auth(&req) {
+                // Basic Auth - password 可能是密码、PAT 或 OAuth2 token
+                auth_client.check_http_access_basic(&repo_path, grpc_action, &user, &pass).await
+            } else if let Some(token) = extract_bearer_token(&req) {
+                // Bearer token
+                auth_client.check_http_access_jwt(&repo_path, grpc_action, &token).await
+            } else {
+                // 匿名访问
+                auth_client.check_http_access_anonymous(&repo_path, grpc_action).await
+            };
+
+            match result {
+                Ok(access_result) if access_result.allowed => {
+                    (access_result.username, access_result.can_write)
+                }
+                Ok(access_result) => {
+                    warn!("Docker auth denied: {}", access_result.message);
+                    ("anonymous".to_string(), false)
+                }
+                Err(e) => {
+                    error!("Auth service error: {}", e);
+                    ("anonymous".to_string(), false)
+                }
+            }
         }
-    } else {
-        // 匿名用户
-        ("anonymous".to_string(), false)
+        None => {
+            // 没有 Auth 客户端 - 只允许匿名 pull
+            warn!("Auth client not configured for Docker registry");
+            ("anonymous".to_string(), false)
+        }
     };
 
-    // 生成 token
+    // 生成 token - 根据实际权限过滤允许的操作
     let allowed_actions: Vec<&str> = if can_write {
         actions
     } else {

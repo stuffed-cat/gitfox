@@ -83,6 +83,10 @@ pub struct GitFoxConfig {
     #[serde(default)]
     pub registry: RegistryConfig,
 
+    /// 服务启用配置（控制哪些组件启动）
+    #[serde(default)]
+    pub services: ServicesConfig,
+
     /// 内置服务配置（GitLab Omnibus 风格）
     #[serde(default)]
     pub bundled: BundledConfig,
@@ -555,6 +559,45 @@ impl Default for RegistryConfig {
             storage_path: default_registry_storage_path(),
             max_package_size: default_registry_max_size(),
             jwt_secret: String::new(),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 服务启用配置（控制哪些组件启动）
+// ═══════════════════════════════════════════════════════════════════════
+
+/// 服务启用配置
+/// 
+/// 控制哪些 GitFox 核心组件应该启动。
+/// 允许用户只运行部分组件，而不是 all-in-one 模式。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServicesConfig {
+    /// 是否启动 devops 后端（API + gRPC Auth）
+    #[serde(default = "default_true")]
+    pub backend: bool,
+
+    /// 是否启动 GitLayer（Git 操作 gRPC 服务）
+    #[serde(default = "default_true")]
+    pub gitlayer: bool,
+
+    /// 是否启动 gitfox-shell（SSH 服务器）
+    /// 注意：也需要 server.ssh.enabled = true
+    #[serde(default = "default_true")]
+    pub shell: bool,
+
+    /// 是否启动 workhorse（HTTP 反向代理）
+    #[serde(default = "default_true")]
+    pub workhorse: bool,
+}
+
+impl Default for ServicesConfig {
+    fn default() -> Self {
+        Self {
+            backend: true,
+            gitlayer: true,
+            shell: true,
+            workhorse: true,
         }
     }
 }
@@ -1110,8 +1153,15 @@ listen_port = {}
 
         env.insert("SSH_LISTEN_ADDR".to_string(), format!("{}:{}", self.server.ssh.host, self.server.ssh.port));
         env.insert("SSH_HOST_KEY_PATH".to_string(), self.paths.ssh_host_key.clone());
-        env.insert("GITLAYER_GRPC_ADDRESS".to_string(), format!("http://127.0.0.1:{}", self.internal.gitlayer_port));
-        env.insert("GITFOX_SHELL_SECRET".to_string(), self.secrets.internal.clone());
+        
+        // GitLayer gRPC (用于 Git 操作)
+        env.insert("GITLAYER_ADDRESS".to_string(), format!("http://127.0.0.1:{}", self.internal.gitlayer_port));
+        
+        // 内部 API 认证密钥
+        env.insert("GITFOX_API_SECRET".to_string(), self.secrets.internal.clone());
+        
+        // 仓库路径
+        env.insert("GITFOX_REPOS_PATH".to_string(), self.paths.repos.clone());
 
         // Auth gRPC (用于权限验证)
         env.insert("AUTH_GRPC_ADDRESS".to_string(), format!("http://[::1]:{}", self.internal.auth_grpc_port));
@@ -1471,6 +1521,8 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
         logging: LoggingConfig {
             level: get("RUST_LOG", "info"),
         },
+
+        registry: RegistryConfig::default(),
     };
 
     Ok(config)
@@ -1556,6 +1608,7 @@ pub fn migrate_from_legacy(data_dir: &Path) -> Result<MigrationResult> {
             smtp: SmtpConfig::default(),
             oauth: OAuthConfig::default(),
             logging: LoggingConfig::default(),
+            registry: RegistryConfig::default(),
         }
     };
     

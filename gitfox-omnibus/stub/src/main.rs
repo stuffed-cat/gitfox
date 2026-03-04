@@ -82,7 +82,7 @@ mod services;
 mod unified_config;
 
 use services::{BundledServices, BundledPostgresConfig, BundledRedisConfig};
-use unified_config::{ConfigVars, GitFoxConfig, generate_config_template, migrate_from_legacy};
+use unified_config::{ConfigVars, GitFoxConfig, CONFIG_VERSION, generate_config_template, migrate_from_legacy};
 
 // ============================================================================
 // CLI
@@ -193,15 +193,41 @@ async fn main() -> Result<()> {
             let gitfox_env = cli.data_dir.join("gitfox.env");
             let workhorse_toml = cli.data_dir.join("workhorse.toml");
             
+            // 如果 gitfox.toml 存在，检查是否需要版本升级
+            if gitfox_toml.exists() {
+                println!("📂 Found existing gitfox.toml, checking version...");
+                match GitFoxConfig::load(&gitfox_toml) {
+                    Ok(mut config) => {
+                        if config.version == CONFIG_VERSION {
+                            println!("✅ Configuration is already at latest version ({})", CONFIG_VERSION);
+                            return Ok(());
+                        }
+                        
+                        println!("🔄 Upgrading configuration from {} to {}...", config.version, CONFIG_VERSION);
+                        
+                        // 备份旧配置
+                        let backup_path = cli.data_dir.join(format!("gitfox.toml.v{}.bak", config.version));
+                        fs::copy(&gitfox_toml, &backup_path)?;
+                        println!("   Backup saved to: {}", backup_path.display());
+                        
+                        // 保存升级后的配置（check_and_migrate 在 load 时已执行）
+                        config.save(&gitfox_toml)?;
+                        
+                        println!("\n✅ Configuration upgraded to version {}!", CONFIG_VERSION);
+                        println!("\n🔄 Regenerating component configuration files...");
+                        reconfigure_from_toml(&cli.data_dir)?;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("⚠️  Failed to load existing gitfox.toml: {}", e);
+                        println!("   Will attempt migration from legacy files...");
+                    }
+                }
+            }
+            
             if !gitfox_env.exists() && !workhorse_toml.exists() {
                 println!("❌ No configuration files found to migrate");
                 println!("   Expected: gitfox.env and/or workhorse.toml in {}", cli.data_dir.display());
-                return Ok(());
-            }
-            
-            if gitfox_toml.exists() {
-                println!("⚠️  gitfox.toml already exists at: {}", gitfox_toml.display());
-                println!("   To re-migrate, please remove or rename the existing file first.");
                 return Ok(());
             }
             
@@ -228,6 +254,10 @@ async fn main() -> Result<()> {
                             println!("   - {}", warning);
                         }
                     }
+                    
+                    // 自动执行 reconfigure 生成各组件配置
+                    println!("\n🔄 Regenerating component configuration files...");
+                    reconfigure_from_toml(&cli.data_dir)?;
                     
                     println!("\n📋 Next steps:");
                     println!("1. Review the generated gitfox.toml");
@@ -268,120 +298,42 @@ fn init_logging(verbose: bool) {
 
 async fn start_services(cli: &Cli) -> Result<()> {
     info!("GitFox starting...");
+    info!("Data directory: {}", cli.data_dir.display());
 
-    // 尝试加载 gitfox.toml（新格式）或 gitfox.env（旧格式）
-    let toml_file = cli.data_dir.join("gitfox.toml");
-    let env_file = cli.data_dir.join("gitfox.env");
-    let workhorse_config = cli.data_dir.join("workhorse.toml");
-    
-    // 初始化内置服务管理器
-    let mut bundled_services = BundledServices::new(&cli.data_dir);
-    
-    // 用于存储实际使用的数据库和 Redis URL
-    let database_url: String;
-    let redis_url: String;
-    let http_port: u16;
-    
-    if toml_file.exists() {
-        // 使用新的 TOML 配置格式
-        info!("Loading configuration from: {}", toml_file.display());
-        let config = GitFoxConfig::load(&toml_file)?;
-        
-        // 检查是否启用内置服务
-        if config.bundled.enabled && BundledServices::has_bundled_deps() {
-            info!("Bundled dependencies available, checking configuration...");
-            
-            // 解压内置依赖
-            bundled_services.extract_deps()?;
-            
-            // 启动内置 PostgreSQL（如果启用）
-            if config.bundled.postgresql.enabled {
-                let pg_config = BundledPostgresConfig {
-                    enabled: true,
-                    port: config.bundled.postgresql.port,
-                    host: config.bundled.postgresql.host.clone(),
-                    database: config.bundled.postgresql.database.clone(),
-                    username: config.bundled.postgresql.username.clone(),
-                    password: config.bundled.postgresql.password.clone(),
-                    max_connections: config.bundled.postgresql.max_connections,
-                    shared_buffers_mb: config.bundled.postgresql.shared_buffers,
-                    work_mem_mb: config.bundled.postgresql.work_mem,
-                    data_dir: cli.data_dir.join("postgresql/data"),
-                };
-                database_url = bundled_services.start_postgresql(&pg_config)?;
-                info!("Using bundled PostgreSQL: {}", database_url);
-            } else {
-                database_url = config.database.url.clone();
-            }
-            
-            // 启动内置 Redis（如果启用）
-            if config.bundled.redis.enabled {
-                let redis_config = BundledRedisConfig {
-                    enabled: true,
-                    port: config.bundled.redis.port,
-                    host: config.bundled.redis.host.clone(),
-                    maxmemory_mb: config.bundled.redis.maxmemory,
-                    maxmemory_policy: config.bundled.redis.maxmemory_policy.clone(),
-                    persistence: config.bundled.redis.persistence,
-                    persistence_mode: config.bundled.redis.persistence_mode.clone(),
-                    data_dir: cli.data_dir.join("redis/data"),
-                };
-                redis_url = bundled_services.start_redis(&redis_config)?;
-                info!("Using bundled Redis: {}", redis_url);
-            } else {
-                redis_url = config.redis.url.clone();
-            }
-        } else {
-            // 使用外部服务
-            database_url = config.database.url.clone();
-            redis_url = config.redis.url.clone();
-        }
-        
-        http_port = config.server.http_port;
-        
-        // 设置环境变量供组件使用
-        env::set_var("DATABASE_URL", &database_url);
-        env::set_var("REDIS_URL", &redis_url);
-        env::set_var("JWT_SECRET", &config.secrets.jwt);
-        env::set_var("GITFOX_SHELL_SECRET", &config.secrets.internal);
-        env::set_var("GITFOX_BASE_URL", &config.server.base_url);
-        env::set_var("HTTP_PORT", http_port.to_string());
-        env::set_var("SSH_ENABLED", config.server.ssh.enabled.to_string());
-        env::set_var("SSH_PORT", config.server.ssh.port.to_string());
-        env::set_var("SSH_HOST", &config.server.ssh.host);
-        env::set_var("RUST_LOG", &config.logging.level);
-        
-    } else if env_file.exists() {
-        // 使用旧的 env 配置格式
-        info!("Loading configuration from: {}", env_file.display());
-        load_env_file(&env_file)?;
-
-        database_url = env::var("DATABASE_URL")
-            .context("DATABASE_URL not set in gitfox.env")?;
-        
-        redis_url = env::var("REDIS_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        
-        http_port = env::var("GITFOX_PORT")
-            .ok()
-            .or_else(|| {
-                if workhorse_config.exists() {
-                    fs::read_to_string(&workhorse_config)
-                        .ok()
-                        .and_then(|content| toml::from_str::<toml::Value>(&content).ok())
-                        .and_then(|config| config.get("listen_port")?.as_integer().map(|v| v.to_string()))
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "8080".to_string())
-            .parse()
-            .context("Invalid GITFOX_PORT")?;
-    } else {
-        eprintln!("❌ Configuration file not found.");
-        eprintln!("   Expected: {} or {}", toml_file.display(), env_file.display());
+    // 加载 gitfox.toml 获取启用配置
+    let gitfox_toml = cli.data_dir.join("gitfox.toml");
+    if !gitfox_toml.exists() {
+        eprintln!("❌ Missing configuration: gitfox.toml");
+        eprintln!("   Expected at: {}", gitfox_toml.display());
         eprintln!("\nPlease run: gitfox init");
-        return Err(anyhow::anyhow!("Configuration file missing"));
+        return Err(anyhow::anyhow!("Configuration file missing: gitfox.toml"));
+    }
+    let config = GitFoxConfig::load(&gitfox_toml)?;
+    let services = &config.services;
+
+    // 检查启用组件所需的配置文件
+    let mut required_configs: Vec<(&str, &str)> = Vec::new();
+    if services.backend {
+        required_configs.push(("gitfox.env", "devops backend"));
+    }
+    if services.gitlayer {
+        required_configs.push(("gitlayer.env", "GitLayer"));
+    }
+    if services.shell && config.server.ssh.enabled {
+        required_configs.push(("gitfox-shell.env", "SSH server"));
+    }
+    if services.workhorse {
+        required_configs.push(("workhorse.toml", "HTTP proxy"));
+    }
+
+    for (file, desc) in &required_configs {
+        let path = cli.data_dir.join(file);
+        if !path.exists() {
+            eprintln!("❌ Missing configuration: {} ({})", file, desc);
+            eprintln!("   Expected at: {}", path.display());
+            eprintln!("\nPlease run: gitfox reconfigure");
+            return Err(anyhow::anyhow!("Configuration file missing: {}", file));
+        }
     }
 
     // 解压资源到 data_dir
@@ -391,106 +343,71 @@ async fn start_services(cli: &Cli) -> Result<()> {
     let paths = ServicePaths::new(&cli.data_dir);
     paths.ensure_dirs()?;
 
-    // 后端内部端口 (从配置读取或默认)
-    let backend_port: u16 = env::var("SERVER_PORT")
-        .unwrap_or_else(|_| "8081".to_string())
-        .parse()
-        .unwrap_or(8081);
+    // 初始化内置服务管理器
+    let mut bundled_services = BundledServices::new(&cli.data_dir);
 
-    // GitLayer 端口 (Git 操作 RPC 服务)
-    let gitlayer_port: u16 = env::var("GITLAYER_PORT")
-        .unwrap_or_else(|_| "50052".to_string())
-        .parse()
-        .unwrap_or(50052);
+    // 启动内置 PostgreSQL（如果配置存在且启用）
+    let pg_conf = cli.data_dir.join("postgresql.conf");
+    if pg_conf.exists() && config.bundled.postgresql.enabled && BundledServices::has_bundled_deps() {
+        info!("Starting bundled PostgreSQL...");
+        bundled_services.start_postgresql_from_config(&pg_conf)?;
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
 
-    // gRPC Auth 端口 (主应用提供)
-    let grpc_auth_port: u16 = env::var("GRPC_PORT")
-        .unwrap_or_else(|_| "50051".to_string())
-        .parse()
-        .unwrap_or(50051);
+    // 启动内置 Redis（如果配置存在且启用）
+    let redis_conf = cli.data_dir.join("redis.conf");
+    if redis_conf.exists() && config.bundled.redis.enabled && BundledServices::has_bundled_deps() {
+        info!("Starting bundled Redis...");
+        bundled_services.start_redis_from_config(&redis_conf)?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
 
-    // 是否启用 GitLayer
-    let gitlayer_enabled = env::var("GITLAYER_ENABLED")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(true);
-
-    // 启动 GitLayer (在后端之前，因为后端可能需要它)
+    // 根据配置启动组件
     let mut gitlayer: Option<Child> = None;
-    if gitlayer_enabled {
-        info!("Starting GitLayer on port {}...", gitlayer_port);
-        gitlayer = Some(start_gitlayer(&paths, gitlayer_port, cli.verbose)?);
-        // 等待 GitLayer 启动
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    }
-
-    // 启动 gitfox-shell (SSH 服务器)
-    let ssh_enabled = env::var("SSH_ENABLED")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(true);
-    
-    let ssh_port = env::var("SSH_PORT")
-        .or_else(|_| env::var("SSH_PUBLIC_PORT"))
-        .unwrap_or_else(|_| "2222".to_string());
-    
     let mut shell: Option<Child> = None;
-    if ssh_enabled {
-        info!("Starting gitfox-shell SSH server on port {}...", ssh_port);
-        shell = Some(start_shell(&paths, cli.verbose)?);
-        // 等待 SSH 服务器启动
+    let mut backend: Option<Child> = None;
+    let mut workhorse: Option<Child> = None;
+
+    if services.gitlayer {
+        info!("Starting GitLayer...");
+        gitlayer = Some(start_gitlayer(&paths)?);
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 
-    // 启动后端
-    info!("Starting backend on internal port {}...", backend_port);
-    let mut backend = start_backend_from_env(&paths, database_url, redis_url, grpc_auth_port, cli.verbose)?;
+    if services.shell && config.server.ssh.enabled {
+        info!("Starting gitfox-shell...");
+        shell = Some(start_shell(&paths)?);
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
 
-    // 等待后端启动
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    if services.backend {
+        info!("Starting backend...");
+        backend = Some(start_backend_from_env(&paths)?);
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
 
-    // 启动 Workhorse
-    info!("Starting workhorse on port {}...", http_port);
-    let mut workhorse = if workhorse_config.exists() {
-        start_workhorse_from_config(&paths, &workhorse_config, cli.verbose)?
-    } else {
-        // 使用默认配置
-        warn!("workhorse.toml not found, using defaults");
-        start_workhorse(&WorkhorseConfig {
-            binary: paths.bin_dir.join("gitfox-workhorse"),
-            listen_port: http_port,
-            backend_port,
-            frontend_dir: paths.frontend_dir.clone(),
-            webide_dir: paths.webide_dir.clone(),
-            assets_dir: paths.assets_dir.clone(),
-            repos_dir: paths.repos_dir.clone(),
-            verbose: cli.verbose,
-        })?
-    };
+    if services.workhorse {
+        info!("Starting workhorse...");
+        workhorse = Some(start_workhorse(&paths)?);
+    }
 
     info!("GitFox is running!");
-    info!("  HTTP:      http://0.0.0.0:{}", http_port);
-    info!("  gRPC Auth: [::1]:{}", grpc_auth_port);
-    if gitlayer_enabled {
-        info!("  GitLayer:  [::1]:{}", gitlayer_port);
-    }
-    if ssh_enabled {
-        info!("  SSH:       ssh -p {} git@localhost", ssh_port);
-    }
+    info!("  Config dir: {}", cli.data_dir.display());
+    info!("  Enabled services: backend={}, gitlayer={}, shell={}, workhorse={}",
+          services.backend, services.gitlayer, 
+          services.shell && config.server.ssh.enabled, services.workhorse);
 
     // 等待关闭信号
     let shutdown = Arc::new(AtomicBool::new(false));
     wait_for_shutdown(shutdown.clone()).await;
 
-    // 优雅关闭服务
+    // 优雅关闭服务（只关闭已启动的）
     info!("Shutting down...");
-    shutdown_process(&mut workhorse, "workhorse");
-    shutdown_process(&mut backend, "backend");
-    if let Some(ref mut gl) = gitlayer {
-        shutdown_process(gl, "gitlayer");
-    }
-    if let Some(ref mut sh) = shell {
-        shutdown_process(sh, "gitfox-shell");
-    }
-    
+    if let Some(ref mut p) = workhorse { shutdown_process(p, "workhorse"); }
+    if let Some(ref mut p) = backend { shutdown_process(p, "backend"); }
+    if let Some(ref mut p) = gitlayer { shutdown_process(p, "gitlayer"); }
+    if let Some(ref mut p) = shell { shutdown_process(p, "gitfox-shell"); }
+
     // 停止内置服务（如果有）
     bundled_services.stop_all();
 
@@ -578,38 +495,24 @@ fn start_backend(config: &BackendConfig) -> Result<Child> {
 /// 从环境变量启动后端（已通过 load_env_file 设置）
 fn start_backend_from_env(
     paths: &ServicePaths,
-    database_url: String,
-    redis_url: String,
-    grpc_port: u16,
-    verbose: bool,
 ) -> Result<Child> {
     let binary = paths.bin_dir.join("devops");
+    let env_file = paths.data_dir.join("gitfox.env");
     
-    // 打印准备启动的环境变量（调试用）
-    if verbose {
-        info!("Backend environment:");
-        if let Ok(v) = env::var("SERVER_PORT") {
-            info!("  SERVER_PORT={}", v);
-        }
-        info!("  GRPC_ADDRESS=[::1]:{}", grpc_port);
+    if !env_file.exists() {
+        return Err(anyhow::anyhow!("gitfox.env not found at: {}", env_file.display()));
     }
     
-    // 后端直接从环境变量读取所有配置，我们只需要启动并继承环境
-    let mut cmd = Command::new(&binary);
-    cmd.env("DATABASE_URL", database_url)
-        .env("REDIS_URL", redis_url)
-        .env("GIT_REPOS_PATH", &paths.repos_dir)
-        // gRPC Auth 服务配置
-        .env("GRPC_ENABLED", "true")
-        .env("GRPC_ADDRESS", format!("[::1]:{}", grpc_port))
-        .env("RUST_LOG", if verbose { "debug" } else { "info" });
+    info!("Starting backend with config: {}", env_file.display());
     
-    // 如果环境变量中设置了 MAX_UPLOAD_SIZE，就传递给后端
-    if let Ok(max_size) = env::var("MAX_UPLOAD_SIZE") {
-        cmd.env("MAX_UPLOAD_SIZE", max_size);
-    }
-    
-    let child = cmd
+    // 使用 bash source 加载配置文件，ctl 不控制任何配置
+    let child = Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            "set -a; source '{}'; set +a; exec '{}'",
+            env_file.display(),
+            binary.display()
+        ))
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
@@ -619,25 +522,23 @@ fn start_backend_from_env(
 }
 
 /// 启动 GitLayer (Git 操作 RPC 服务)
-fn start_gitlayer(paths: &ServicePaths, port: u16, verbose: bool) -> Result<Child> {
+fn start_gitlayer(paths: &ServicePaths) -> Result<Child> {
     let binary = paths.bin_dir.join("gitlayer");
+    let env_file = paths.data_dir.join("gitlayer.env");
     
-    // 加载 gitlayer.env（如果存在）
-    let gitlayer_env = paths.data_dir.join("gitlayer.env");
-    let mut cmd = Command::new(&binary);
-    
-    if gitlayer_env.exists() {
-        info!("Loading GitLayer configuration from: {}", gitlayer_env.display());
-        load_env_to_command(&gitlayer_env, &mut cmd)?;
-    } else {
-        // 使用默认配置
-        cmd.env("GITLAYER_GRPC_ADDRESS", format!("0.0.0.0:{}", port));
-        cmd.env("REPO_BASE_PATH", &paths.repos_dir);
+    if !env_file.exists() {
+        return Err(anyhow::anyhow!("gitlayer.env not found at: {}", env_file.display()));
     }
     
-    cmd.env("RUST_LOG", if verbose { "debug" } else { "info" });
+    info!("Starting GitLayer with config: {}", env_file.display());
     
-    let child = cmd
+    let child = Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            "set -a; source '{}'; set +a; exec '{}'",
+            env_file.display(),
+            binary.display()
+        ))
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
@@ -646,26 +547,23 @@ fn start_gitlayer(paths: &ServicePaths, port: u16, verbose: bool) -> Result<Chil
     Ok(child)
 }
 
-fn start_shell(paths: &ServicePaths, verbose: bool) -> Result<Child> {
+fn start_shell(paths: &ServicePaths) -> Result<Child> {
     let binary = paths.bin_dir.join("gitfox-shell");
+    let env_file = paths.data_dir.join("gitfox-shell.env");
     
-    // 加载 gitfox-shell.env（如果存在）
-    let shell_env = paths.data_dir.join("gitfox-shell.env");
-    let mut cmd = Command::new(&binary);
-    
-    if shell_env.exists() {
-        info!("Loading gitfox-shell configuration from: {}", shell_env.display());
-        load_env_to_command(&shell_env, &mut cmd)?;
-    } else {
-        warn!("gitfox-shell.env not found, using defaults");
-        // 基本的默认配置
-        cmd.env("SSH_PORT", "2222");
-        cmd.env("GRPC_SERVER", "http://127.0.0.1:50051");
+    if !env_file.exists() {
+        return Err(anyhow::anyhow!("gitfox-shell.env not found at: {}", env_file.display()));
     }
     
-    cmd.env("RUST_LOG", if verbose { "debug" } else { "info" });
+    info!("Starting gitfox-shell with config: {}", env_file.display());
     
-    let child = cmd
+    let child = Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            "set -a; source '{}'; set +a; exec '{}'",
+            env_file.display(),
+            binary.display()
+        ))
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
@@ -678,93 +576,22 @@ fn start_shell(paths: &ServicePaths, verbose: bool) -> Result<Child> {
 // Workhorse 配置与启动
 // ============================================================================
 
-struct WorkhorseConfig {
-    binary: PathBuf,
-    listen_port: u16,
-    backend_port: u16,
-    frontend_dir: PathBuf,
-    webide_dir: PathBuf,
-    assets_dir: PathBuf,
-    repos_dir: PathBuf,
-    verbose: bool,
-}
-
-fn start_workhorse(config: &WorkhorseConfig) -> Result<Child> {
-    // 从环境变量读取 MAX_UPLOAD_SIZE，默认 1GB
-    let max_upload_size = env::var("MAX_UPLOAD_SIZE")
-        .unwrap_or_else(|_| "1073741824".to_string());
+fn start_workhorse(paths: &ServicePaths) -> Result<Child> {
+    let binary = paths.bin_dir.join("gitfox-workhorse");
+    let config_path = paths.data_dir.join("workhorse.toml");
     
-    let child = Command::new(&config.binary)
-        .env("WORKHORSE_LISTEN_ADDR", "0.0.0.0")
-        .env("WORKHORSE_LISTEN_PORT", config.listen_port.to_string())
-        .env(
-            "WORKHORSE_BACKEND_URL",
-            format!("http://127.0.0.1:{}", config.backend_port),
-        )
-        .env("WORKHORSE_FRONTEND_DIST", &config.frontend_dir)
-        .env("WORKHORSE_WEBIDE_DIST", &config.webide_dir)
-        .env("WORKHORSE_ASSETS_PATH", &config.assets_dir)
-        .env("WORKHORSE_GIT_REPOS_PATH", &config.repos_dir)
-        .env("WORKHORSE_MAX_UPLOAD_SIZE", max_upload_size)
-        .env("RUST_LOG", if config.verbose { "debug" } else { "info" })
+    if !config_path.exists() {
+        return Err(anyhow::anyhow!("workhorse.toml not found at: {}", config_path.display()));
+    }
+    
+    info!("Starting workhorse with config: {}", config_path.display());
+    
+    // workhorse 内部会解析 TOML 并设置所有配置
+    let child = Command::new(&binary)
+        .env("WORKHORSE_CONFIG", &config_path)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
-        .context("Failed to start workhorse")?;
-
-    Ok(child)
-}
-
-/// 从 TOML 配置文件启动 Workhorse
-fn start_workhorse_from_config(
-    paths: &ServicePaths,
-    config_path: &Path,
-    verbose: bool,
-) -> Result<Child> {
-    let binary = paths.bin_dir.join("gitfox-workhorse");
-    
-    // 读取 TOML 配置文件
-    let config_content = fs::read_to_string(config_path)
-        .context("Failed to read workhorse.toml")?;
-    let config: toml::Value = toml::from_str(&config_content)
-        .context("Failed to parse workhorse.toml")?;
-    
-    // 准备环境变量，使 TOML 配置优先于默认值
-    let mut cmd = Command::new(&binary);
-    cmd.env("RUST_LOG", if verbose { "debug" } else { "info" })
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    
-    // 读取并设置配置项
-    if let Some(listen_addr) = config.get("listen_addr").and_then(|v| v.as_str()) {
-        cmd.env("WORKHORSE_LISTEN_ADDR", listen_addr);
-    }
-    if let Some(listen_port) = config.get("listen_port").and_then(|v| v.as_integer()) {
-        cmd.env("WORKHORSE_LISTEN_PORT", listen_port.to_string());
-    }
-    if let Some(backend_url) = config.get("backend_url").and_then(|v| v.as_str()) {
-        cmd.env("WORKHORSE_BACKEND_URL", backend_url);
-    }
-    if let Some(backend_socket) = config.get("backend_socket").and_then(|v| v.as_str()) {
-        cmd.env("WORKHORSE_BACKEND_SOCKET", backend_socket);
-    }
-    if let Some(frontend_dist) = config.get("frontend_dist_path").and_then(|v| v.as_str()) {
-        cmd.env("WORKHORSE_FRONTEND_DIST", frontend_dist);
-    }
-    if let Some(webide_dist) = config.get("webide_dist_path").and_then(|v| v.as_str()) {
-        cmd.env("WORKHORSE_WEBIDE_DIST", webide_dist);
-    }
-    if let Some(assets_path) = config.get("assets_path").and_then(|v| v.as_str()) {
-        cmd.env("WORKHORSE_ASSETS_PATH", assets_path);
-    }
-    if let Some(git_repos_path) = config.get("git_repos_path").and_then(|v| v.as_str()) {
-        cmd.env("WORKHORSE_GIT_REPOS_PATH", git_repos_path);
-    }
-    if let Some(max_upload_size) = config.get("max_upload_size").and_then(|v| v.as_integer()) {
-        cmd.env("WORKHORSE_MAX_UPLOAD_SIZE", max_upload_size.to_string());
-    }
-    
-    let child = cmd.spawn()
         .context("Failed to start workhorse")?;
 
     Ok(child)
@@ -939,8 +766,15 @@ fn list_first_n<E: RustEmbed>(n: usize) {
 fn init_config(data_dir: &Path) -> Result<()> {
     fs::create_dir_all(data_dir)?;
     
-    let gitfox_env = data_dir.join("gitfox.env");
-    let workhorse_toml = data_dir.join("workhorse.toml");
+    let gitfox_toml = data_dir.join("gitfox.toml");
+    
+    // 如果已存在，提示用户
+    if gitfox_toml.exists() {
+        println!("⚠️  gitfox.toml already exists at: {}", gitfox_toml.display());
+        println!("   Run 'gitfox reconfigure' to regenerate component configs.");
+        println!("   Or delete gitfox.toml to re-initialize.");
+        return Ok(());
+    }
     
     println!("\n🚀 GitFox Configuration Wizard\n");
     
@@ -1120,26 +954,65 @@ fn init_config(data_dir: &Path) -> Result<()> {
         admin_password: admin_password.clone(),
     };
     
-    // 生成 gitfox.env 配置
-    if gitfox_env.exists() {
-        warn!("{} already exists, skipping", gitfox_env.display());
-    } else {
-        let env_template = generate_gitfox_env_template(data_dir, &secrets, &user_config);
-        fs::write(&gitfox_env, env_template)?;
-        info!("Created: {}", gitfox_env.display());
-    }
+    // 计算各目录路径
+    let repos_dir = data_dir.join("repos");
+    let assets_dir = data_dir.join("assets");
+    let ssh_dir = data_dir.join("ssh");
+    let shell_path = data_dir.join("bin").join("gitfox-shell");
     
-    // 生成 workhorse.toml 配置（自动协调内部通信）
-    if workhorse_toml.exists() {
-        warn!("{} already exists, skipping", workhorse_toml.display());
-    } else {
-        let toml_template = generate_workhorse_toml_template(data_dir, &user_config);
-        fs::write(&workhorse_toml, toml_template)?;
-        info!("Created: {}", workhorse_toml.display());
-    }
+    // 从模板生成配置（模板必须存在）
+    let template = TemplateAssets::get("gitfox.toml.template")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .expect("gitfox.toml.template not found in embedded assets - build is corrupted");
+    
+    // 构建配置变量
+    let vars = ConfigVars {
+        database_url: "postgres://gitfox:password@localhost/gitfox".to_string(),
+        redis_url: "redis://127.0.0.1:6379".to_string(),
+        jwt_secret: secrets.jwt_secret.clone(),
+        gitfox_shell_secret: secrets.shell_secret.clone(),
+        gitfox_base_url: user_config.base_url.clone(),
+        http_port: user_config.http_port,
+        max_upload_size: 1073741824, // 1GB
+        ssh_enabled: true,
+        ssh_host: user_config.ssh_host.clone(),
+        ssh_port: user_config.ssh_port,
+        ssh_public_host: user_config.ssh_public_host.clone(),
+        ssh_public_port: user_config.ssh_public_port,
+        server_connection_type: if user_config.use_unix_socket { "unix_socket".to_string() } else { "tcp".to_string() },
+        server_socket_path: user_config.server_socket_path.clone(),
+        server_host: user_config.server_host.clone(),
+        server_port: user_config.server_port,
+        git_repos_path: repos_dir.display().to_string(),
+        assets_path: assets_dir.display().to_string(),
+        frontend_path: data_dir.join("frontend").display().to_string(),
+        webide_path: data_dir.join("webide").display().to_string(),
+        ssh_host_key_path: ssh_dir.join("host_key").display().to_string(),
+        gitfox_shell_path: shell_path.display().to_string(),
+        initial_admin_username: secrets.admin_username.clone(),
+        initial_admin_email: secrets.admin_email.clone(),
+        initial_admin_password: secrets.admin_password.clone(),
+        smtp_enabled: user_config.smtp_config.is_some(),
+        smtp_host: user_config.smtp_config.as_ref().map(|c| c.host.clone()).unwrap_or_default(),
+        smtp_port: user_config.smtp_config.as_ref().map(|c| c.port).unwrap_or(587),
+        smtp_username: user_config.smtp_config.as_ref().map(|c| c.username.clone()).unwrap_or_default(),
+        smtp_password: user_config.smtp_config.as_ref().map(|c| c.password.clone()).unwrap_or_default(),
+        smtp_from_email: user_config.smtp_config.as_ref().map(|c| c.from_email.clone()).unwrap_or_default(),
+        smtp_from_name: user_config.smtp_config.as_ref().map(|c| c.from_name.clone()).unwrap_or_default(),
+        smtp_use_tls: user_config.smtp_config.as_ref().map(|c| c.use_tls).unwrap_or(true),
+        smtp_use_ssl: user_config.smtp_config.as_ref().map(|c| c.use_ssl).unwrap_or(false),
+        webauthn_rp_id: user_config.webauthn_rp_id.clone(),
+        webauthn_rp_origin: user_config.base_url.clone(),
+        rust_log: "info".to_string(),
+        ..Default::default()
+    };
+    
+    let toml_content = generate_config_template(&template, &vars);
+    fs::write(&gitfox_toml, toml_content)?;
+    info!("Created: {}", gitfox_toml.display());
     
     // 打印配置信息
-    println!("\n✅ Configuration files created!");
+    println!("\n✅ gitfox.toml created!");
     println!("\n{}", "=".repeat(60));
     println!("  Initial Admin User (auto-generated)");
     println!("{}", "=".repeat(60));
@@ -1167,81 +1040,15 @@ fn init_config(data_dir: &Path) -> Result<()> {
         println!("   SMTP:       Disabled");
     }
     println!("   WebAuthn:   {}", user_config.webauthn_rp_id);
-    println!("\nNext steps:");
-    println!("1. Edit {} with your PostgreSQL and Redis settings", gitfox_env.display());
-    if user_config.smtp_config.is_some() {
-        println!("2. Review SMTP settings in {}", gitfox_env.display());
-        println!("3. Run: gitfox start");
-    } else {
-        println!("2. Run: gitfox start");
-    }
     
-    // 同时生成新的 gitfox.toml（统一配置格式）
-    let gitfox_toml = data_dir.join("gitfox.toml");
-    if !gitfox_toml.exists() {
-        // 计算各目录路径
-        let repos_dir = data_dir.join("repos");
-        let assets_dir = data_dir.join("assets");
-        let ssh_dir = data_dir.join("ssh");
-        let shell_path = data_dir.join("bin").join("gitfox-shell");
-        
-        // 从模板生成配置（模板必须存在）
-        let template = TemplateAssets::get("gitfox.toml.template")
-            .map(|f| String::from_utf8_lossy(&f.data).to_string())
-            .expect("gitfox.toml.template not found in embedded assets - build is corrupted");
-        
-        // 构建配置变量
-        let vars = ConfigVars {
-            database_url: "postgres://gitfox:password@localhost/gitfox".to_string(),
-            redis_url: "redis://127.0.0.1:6379".to_string(),
-            jwt_secret: secrets.jwt_secret.clone(),
-            gitfox_shell_secret: secrets.shell_secret.clone(),
-            gitfox_base_url: user_config.base_url.clone(),
-            http_port: user_config.http_port,
-            max_upload_size: 1073741824, // 1GB
-            ssh_enabled: true,
-            ssh_host: user_config.ssh_host.clone(),
-            ssh_port: user_config.ssh_port,
-            ssh_public_host: user_config.ssh_public_host.clone(),
-            ssh_public_port: user_config.ssh_public_port,
-            server_connection_type: if user_config.use_unix_socket { "unix_socket".to_string() } else { "tcp".to_string() },
-            server_socket_path: user_config.server_socket_path.clone(),
-            server_host: user_config.server_host.clone(),
-            server_port: user_config.server_port,
-            git_repos_path: repos_dir.display().to_string(),
-            assets_path: assets_dir.display().to_string(),
-            frontend_path: data_dir.join("frontend").display().to_string(),
-            webide_path: data_dir.join("webide").display().to_string(),
-            ssh_host_key_path: ssh_dir.join("host_key").display().to_string(),
-            gitfox_shell_path: shell_path.display().to_string(),
-            initial_admin_username: secrets.admin_username.clone(),
-            initial_admin_email: secrets.admin_email.clone(),
-            initial_admin_password: secrets.admin_password.clone(),
-            smtp_enabled: user_config.smtp_config.is_some(),
-            smtp_host: user_config.smtp_config.as_ref().map(|c| c.host.clone()).unwrap_or_default(),
-            smtp_port: user_config.smtp_config.as_ref().map(|c| c.port).unwrap_or(587),
-            smtp_username: user_config.smtp_config.as_ref().map(|c| c.username.clone()).unwrap_or_default(),
-            smtp_password: user_config.smtp_config.as_ref().map(|c| c.password.clone()).unwrap_or_default(),
-            smtp_from_email: user_config.smtp_config.as_ref().map(|c| c.from_email.clone()).unwrap_or_default(),
-            smtp_from_name: user_config.smtp_config.as_ref().map(|c| c.from_name.clone()).unwrap_or_default(),
-            smtp_use_tls: user_config.smtp_config.as_ref().map(|c| c.use_tls).unwrap_or(true),
-            smtp_use_ssl: user_config.smtp_config.as_ref().map(|c| c.use_ssl).unwrap_or(false),
-            webauthn_rp_id: user_config.webauthn_rp_id.clone(),
-            webauthn_rp_origin: user_config.base_url.clone(),
-            rust_log: "info".to_string(),
-            ..Default::default()
-        };
-        
-        let toml_content = generate_config_template(&template, &vars);
-        fs::write(&gitfox_toml, toml_content)?;
-        info!("Created: {} (新统一配置格式)", gitfox_toml.display());
-        println!("\n📋 NEW: gitfox.toml created (unified config format)");
-        println!("   Future versions will use gitfox.toml as primary config.");
-        
-        // 从 gitfox.toml 生成各组件配置文件
-        println!("\n🔄 Generating component configuration files...");
-        reconfigure_from_toml(data_dir)?;
-    }
+    // 从 gitfox.toml 生成各组件配置文件
+    println!("\n🔄 Generating component configuration files...");
+    reconfigure_from_toml(data_dir)?;
+    
+    println!("\nNext steps:");
+    println!("1. Edit {} with your PostgreSQL and Redis settings", gitfox_toml.display());
+    println!("2. Run 'gitfox reconfigure' after editing");
+    println!("3. Run: gitfox start");
     
     Ok(())
 }
@@ -1466,15 +1273,41 @@ fn handle_config_command(data_dir: &Path, action: ConfigAction) -> Result<()> {
             let gitfox_env = data_dir.join("gitfox.env");
             let workhorse_toml = data_dir.join("workhorse.toml");
             
+            // 如果 gitfox.toml 存在，检查是否需要版本升级
+            if gitfox_toml.exists() {
+                println!("📂 Found existing gitfox.toml, checking version...");
+                match GitFoxConfig::load(&gitfox_toml) {
+                    Ok(mut config) => {
+                        if config.version == CONFIG_VERSION {
+                            println!("✅ Configuration is already at latest version ({})", CONFIG_VERSION);
+                            return Ok(());
+                        }
+                        
+                        println!("🔄 Upgrading configuration from {} to {}...", config.version, CONFIG_VERSION);
+                        
+                        // 备份旧配置
+                        let backup_path = data_dir.join(format!("gitfox.toml.v{}.bak", config.version));
+                        fs::copy(&gitfox_toml, &backup_path)?;
+                        println!("   Backup saved to: {}", backup_path.display());
+                        
+                        // 保存升级后的配置
+                        config.save(&gitfox_toml)?;
+                        
+                        println!("\n✅ Configuration upgraded to version {}!", CONFIG_VERSION);
+                        println!("\n🔄 Regenerating component configuration files...");
+                        reconfigure_from_toml(data_dir)?;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("⚠️  Failed to load existing gitfox.toml: {}", e);
+                        println!("   Will attempt migration from legacy files...");
+                    }
+                }
+            }
+            
             if !gitfox_env.exists() && !workhorse_toml.exists() {
                 println!("❌ No configuration files found to migrate");
                 println!("   Expected: gitfox.env and/or workhorse.toml in {}", data_dir.display());
-                return Ok(());
-            }
-            
-            if gitfox_toml.exists() {
-                println!("⚠️  gitfox.toml already exists at: {}", gitfox_toml.display());
-                println!("   To re-migrate, please remove or rename the existing file first.");
                 return Ok(());
             }
             
@@ -1501,6 +1334,10 @@ fn handle_config_command(data_dir: &Path, action: ConfigAction) -> Result<()> {
                             println!("   - {}", warning);
                         }
                     }
+                    
+                    // 自动执行 reconfigure 生成各组件配置
+                    println!("\n🔄 Regenerating component configuration files...");
+                    reconfigure_from_toml(data_dir)?;
                     
                     println!("\n📋 Next steps:");
                     println!("1. Review the generated gitfox.toml");
@@ -1579,158 +1416,6 @@ fn extract_domain(url: &str) -> String {
         .next()
         .unwrap_or("localhost")
         .to_string()
-}
-
-/// 生成 SMTP 配置部分
-fn generate_smtp_config_section(smtp_config: &Option<SmtpConfig>) -> String {
-    if let Some(smtp) = smtp_config {
-        format!(r#"# SMTP 服务器
-SMTP_HOST={}
-SMTP_PORT={}
-SMTP_USERNAME={}
-SMTP_PASSWORD={}
-
-# 发件人信息
-SMTP_FROM_EMAIL={}
-SMTP_FROM_NAME={}
-
-# TLS/SSL 配置
-SMTP_USE_TLS={}   # STARTTLS (端口 587)
-SMTP_USE_SSL={}   # SSL (端口 465)"#,
-            smtp.host,
-            smtp.port,
-            smtp.username,
-            smtp.password,
-            smtp.from_email,
-            smtp.from_name,
-            if smtp.use_tls { "true" } else { "false" },
-            if smtp.use_ssl { "true" } else { "false" }
-        )
-    } else {
-        r#"# SMTP 服务器（未配置，如需启用请取消注释并填写）
-# SMTP_HOST=smtp.gmail.com
-# SMTP_PORT=587
-# SMTP_USERNAME=your-email@gmail.com
-# SMTP_PASSWORD=your-app-password
-
-# 发件人信息
-# SMTP_FROM_EMAIL=noreply@gitfox.local
-# SMTP_FROM_NAME=GitFox
-
-# TLS/SSL 配置
-# SMTP_USE_TLS=true   # STARTTLS (端口 587)
-# SMTP_USE_SSL=false  # SSL (端口 465)"#.to_string()
-    }
-}
-
-fn generate_gitfox_env_template(data_dir: &Path, secrets: &GeneratedSecrets, user_config: &UserConfig) -> String {
-    // 从嵌入的模板文件加载
-    let template_file = TemplateAssets::get("gitfox.env.template")
-        .expect("gitfox.env.template not found in embedded assets");
-    let mut template = String::from_utf8_lossy(&template_file.data).to_string();
-    
-    // 计算路径
-    let repos_dir = data_dir.join("repos");
-    let assets_dir = data_dir.join("assets");
-    let ssh_dir = data_dir.join("ssh");
-    let shell_path = data_dir.join("bin").join("gitfox-shell");
-    
-    // 替换所有模板变量
-    template = template.replace("{{JWT_SECRET}}", &secrets.jwt_secret);
-    template = template.replace("{{GIT_REPOS_PATH}}", &repos_dir.display().to_string());
-    template = template.replace("{{ASSETS_PATH}}", &assets_dir.display().to_string());
-    
-    // Server 配置
-    if user_config.use_unix_socket {
-        template = template.replace("{{SERVER_CONNECTION_TYPE}}", "unix_socket");
-        template = template.replace("{{SERVER_SOCKET_PATH}}", &user_config.server_socket_path);
-        template = template.replace("{{SERVER_HOST}}", "127.0.0.1");
-        template = template.replace("{{SERVER_PORT}}", "8081");
-    } else {
-        template = template.replace("{{SERVER_CONNECTION_TYPE}}", "tcp");
-        template = template.replace("{{SERVER_SOCKET_PATH}}", "");
-        template = template.replace("{{SERVER_HOST}}", &user_config.server_host);
-        template = template.replace("{{SERVER_PORT}}", &user_config.server_port.to_string());
-    }
-    
-    // SSH 配置
-    template = template.replace("{{SSH_HOST}}", &user_config.ssh_host);
-    template = template.replace("{{SSH_PORT}}", &user_config.ssh_port.to_string());
-    template = template.replace("{{SSH_HOST_KEY_PATH}}", &ssh_dir.join("host_key").display().to_string());
-    template = template.replace("{{SSH_PUBLIC_HOST}}", &user_config.ssh_public_host);
-    template = template.replace("{{SSH_PUBLIC_PORT}}", &user_config.ssh_public_port.to_string());
-    template = template.replace("{{GITFOX_BASE_URL}}", &user_config.base_url);
-    template = template.replace("{{GITFOX_SHELL_PATH}}", &shell_path.display().to_string());
-    template = template.replace("{{GITFOX_SHELL_SECRET}}", &secrets.shell_secret);
-    template = template.replace("{{INITIAL_ADMIN_USERNAME}}", &secrets.admin_username);
-    template = template.replace("{{INITIAL_ADMIN_EMAIL}}", &secrets.admin_email);
-    template = template.replace("{{INITIAL_ADMIN_PASSWORD}}", &secrets.admin_password);
-    template = template.replace("{{SMTP_ENABLED}}", if user_config.smtp_config.is_some() { "true" } else { "false" });
-    
-    // SMTP 配置 - 逐字段替换
-    if let Some(smtp) = &user_config.smtp_config {
-        template = template.replace("{{SMTP_HOST}}", &smtp.host);
-        template = template.replace("{{SMTP_PORT}}", &smtp.port.to_string());
-        template = template.replace("{{SMTP_USERNAME}}", &smtp.username);
-        template = template.replace("{{SMTP_PASSWORD}}", &smtp.password);
-        template = template.replace("{{SMTP_FROM_EMAIL}}", &smtp.from_email);
-        template = template.replace("{{SMTP_FROM_NAME}}", &smtp.from_name);
-        template = template.replace("{{SMTP_USE_TLS}}", if smtp.use_tls { "true" } else { "false" });
-        template = template.replace("{{SMTP_USE_SSL}}", if smtp.use_ssl { "true" } else { "false" });
-    } else {
-        // 未配置 SMTP 时使用默认示例值
-        template = template.replace("{{SMTP_HOST}}", "smtp.example.com");
-        template = template.replace("{{SMTP_PORT}}", "587");
-        template = template.replace("{{SMTP_USERNAME}}", "your-email@example.com");
-        template = template.replace("{{SMTP_PASSWORD}}", "your-password");
-        template = template.replace("{{SMTP_FROM_EMAIL}}", "noreply@example.com");
-        template = template.replace("{{SMTP_FROM_NAME}}", "GitFox");
-        template = template.replace("{{SMTP_USE_TLS}}", "true");
-        template = template.replace("{{SMTP_USE_SSL}}", "false");
-    }
-    
-    template = template.replace("{{WEBAUTHN_RP_ID}}", &user_config.webauthn_rp_id);
-    
-    // MAX_UPLOAD_SIZE 默认 1GB
-    template = template.replace("{{MAX_UPLOAD_SIZE}}", "1073741824");
-    
-    template
-}
-
-fn generate_workhorse_toml_template(data_dir: &Path, user_config: &UserConfig) -> String {
-    // 从嵌入的模板文件加载
-    let template_file = TemplateAssets::get("workhorse.toml.template")
-        .expect("workhorse.toml.template not found in embedded assets");
-    let mut template = String::from_utf8_lossy(&template_file.data).to_string();
-    
-    // 计算路径
-    let frontend_dir = data_dir.join("frontend");
-    let webide_dir = data_dir.join("webide");
-    let assets_dir = data_dir.join("assets");
-    let repos_dir = data_dir.join("repos");
-    
-    // 替换所有模板变量
-    template = template.replace("{{LISTEN_PORT}}", &user_config.http_port.to_string());
-    
-    // 后端连接配置
-    if user_config.use_unix_socket {
-        template = template.replace("{{BACKEND_SOCKET}}", &user_config.server_socket_path);
-        template = template.replace("{{BACKEND_URL}}", "");
-    } else {
-        template = template.replace("{{BACKEND_SOCKET}}", "");
-        template = template.replace("{{BACKEND_URL}}", &format!("http://{}:{}", user_config.server_host, user_config.server_port));
-    }
-    
-    template = template.replace("{{FRONTEND_DIST_PATH}}", &frontend_dir.display().to_string());
-    template = template.replace("{{WEBIDE_DIST_PATH}}", &webide_dir.display().to_string());
-    template = template.replace("{{ASSETS_PATH}}", &assets_dir.display().to_string());
-    template = template.replace("{{GIT_REPOS_PATH}}", &repos_dir.display().to_string());
-    
-    // MAX_UPLOAD_SIZE 默认 1GB
-    let max_upload_size = env::var("MAX_UPLOAD_SIZE").unwrap_or_else(|_| "1073741824".to_string());
-    template = template.replace("{{MAX_UPLOAD_SIZE}}", &max_upload_size);
-    
-    template
 }
 
 /// 从 .env 文件读取配置到环境变量

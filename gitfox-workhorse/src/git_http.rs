@@ -25,6 +25,109 @@ use crate::gitlayer_client::proto::{
     Repository, InfoRefsRequest, UploadPackRequest, ReceivePackRequest,
 };
 
+/// 认证类型
+#[derive(Debug)]
+enum AuthType {
+    /// Bearer token (JWT 或 OAuth2 access token)
+    Bearer(String),
+    /// Basic auth (username, password/PAT/OAuth2 token)
+    Basic { username: String, password: String },
+    /// 无认证
+    None,
+}
+
+/// 从 HTTP 请求中提取认证信息
+fn extract_auth(req: &HttpRequest) -> AuthType {
+    let auth_header = match req.headers().get("Authorization") {
+        Some(h) => match h.to_str() {
+            Ok(s) => s,
+            Err(_) => return AuthType::None,
+        },
+        None => return AuthType::None,
+    };
+
+    if let Some(token) = auth_header.strip_prefix("Bearer ") {
+        return AuthType::Bearer(token.to_string());
+    }
+
+    if let Some(basic) = auth_header.strip_prefix("Basic ") {
+        if let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, basic) {
+            if let Ok(credentials) = String::from_utf8(decoded) {
+                if let Some((username, password)) = credentials.split_once(':') {
+                    return AuthType::Basic {
+                        username: username.to_string(),
+                        password: password.to_string(),
+                    };
+                }
+            }
+        }
+    }
+
+    AuthType::None
+}
+
+/// 验证访问权限
+/// 
+/// 返回 (user_id, username, can_write)，或返回拒绝访问的 HttpResponse
+async fn verify_access(
+    req: &HttpRequest,
+    state: &web::Data<GitHttpState>,
+    namespace: &str,
+    project: &str,
+    action: &str,
+) -> Result<(i64, String, bool), HttpResponse> {
+    let auth_client = match &state.auth_client {
+        Some(c) => c.clone(),
+        None => {
+            warn!("Auth client not configured, allowing anonymous access");
+            return Ok((0, "anonymous".to_string(), false));
+        }
+    };
+
+    let mut auth_client = auth_client;
+    let repo_path = build_repo_relative_path(namespace, project);
+    let auth = extract_auth(req);
+
+    let result = match auth {
+        AuthType::Bearer(token) => {
+            // Bearer token - 可能是 JWT 或 OAuth2 access token
+            // 如果是 JWT 则直接验证，否则作为 Basic 中的 password 处理
+            auth_client.check_http_access_jwt(&repo_path, action, &token).await
+        }
+        AuthType::Basic { username, password } => {
+            // Basic auth - password 可能是密码、PAT 或 OAuth2 token
+            auth_client.check_http_access_basic(&repo_path, action, &username, &password).await
+        }
+        AuthType::None => {
+            // 无认证 - 匿名访问
+            auth_client.check_http_access_anonymous(&repo_path, action).await
+        }
+    };
+
+    match result {
+        Ok(access_result) => {
+            if access_result.allowed {
+                Ok((access_result.user_id, access_result.username, access_result.can_write))
+            } else {
+                let needs_auth = access_result.user_id == 0;
+                if needs_auth {
+                    // 需要认证 - 返回 401 让 Git 客户端弹出凭据输入
+                    Err(HttpResponse::Unauthorized()
+                        .insert_header(("WWW-Authenticate", r#"Basic realm="GitFox", charset="UTF-8""#))
+                        .body(access_result.message))
+                } else {
+                    // 已认证但无权限 - 返回 403
+                    Err(HttpResponse::Forbidden().body(access_result.message))
+                }
+            }
+        }
+        Err(e) => {
+            error!("Auth service error: {}", e);
+            Err(HttpResponse::InternalServerError().body("Authentication service unavailable"))
+        }
+    }
+}
+
 /// Git HTTP handler 状态
 pub struct GitHttpState {
     pub config: Arc<Config>,
@@ -122,10 +225,26 @@ pub async fn handle_info_refs(
 
     info!("Git info/refs: {}/{} service={}", namespace, project, service);
 
-    // TODO: 认证检查（对于 receive-pack 需要写权限）
-    // if service == "git-receive-pack" {
-    //     verify_write_access(&req, &state, &namespace, &project).await?;
-    // }
+    // 认证检查 - receive-pack 需要写权限，upload-pack 需要读权限
+    let (user_id, username, can_write) = match verify_access(&req, &state, &namespace, &project, service).await {
+        Ok(r) => r,
+        Err(response) => return Ok(response),
+    };
+
+    // receive-pack 需要写权限
+    if service == "git-receive-pack" && !can_write {
+        return Ok(HttpResponse::Forbidden().body("You don't have write access to this repository"));
+    }
+
+    info!(
+        "Git info/refs access granted: user={} (id={}), repo={}/{}, service={}, can_write={}",
+        if user_id > 0 { &username } else { "anonymous" },
+        user_id,
+        namespace,
+        project,
+        service,
+        can_write
+    );
 
     let channel = state.get_channel().await
         .map_err(actix_web::error::ErrorServiceUnavailable)?;
@@ -172,6 +291,20 @@ pub async fn handle_upload_pack(
 
     info!("Git upload-pack: {}/{}", namespace, project);
 
+    // 认证检查 - upload-pack 只需要读权限（公开仓库允许匿名）
+    let (user_id, username, _can_write) = match verify_access(&req, &state, &namespace, &project, "git-upload-pack").await {
+        Ok(r) => r,
+        Err(response) => return Ok(response),
+    };
+
+    info!(
+        "Git upload-pack access granted: user={} (id={}), repo={}/{}",
+        if user_id > 0 { &username } else { "anonymous" },
+        user_id,
+        namespace,
+        project
+    );
+
     let channel = state.get_channel().await
         .map_err(actix_web::error::ErrorServiceUnavailable)?;
 
@@ -213,7 +346,11 @@ pub async fn handle_upload_pack(
                     }
                 }
                 Err(e) => {
-                    error!("Error reading HTTP payload: {}", e);
+                    // EOF 错误是正常的流结束，不需要记录
+                    let error_msg = e.to_string();
+                    if !error_msg.contains("EOF") && !error_msg.contains("Connection reset") {
+                        error!("Error reading HTTP payload: {}", e);
+                    }
                     break;
                 }
             }
@@ -267,10 +404,16 @@ pub async fn handle_receive_pack(
 
     info!("Git receive-pack: {}/{}", namespace, project);
 
-    // TODO: 认证检查
-    // let (user_id, username) = verify_write_access(&req, &state, &namespace, &project).await?;
-    let user_id: i64 = 0; // 临时：需要从认证中获取
-    let username = "anonymous".to_string();
+    // 认证检查 - 三层权限交集在 gRPC Auth 服务中实现
+    let (user_id, username, can_write) = match verify_access(&req, &state, &namespace, &project, "git-receive-pack").await {
+        Ok(r) => r,
+        Err(response) => return Ok(response),
+    };
+
+    // 写操作必须有写权限
+    if !can_write {
+        return Ok(HttpResponse::Forbidden().body("You don't have write access to this repository"));
+    }
 
     let channel = state.get_channel().await
         .map_err(actix_web::error::ErrorServiceUnavailable)?;
@@ -341,7 +484,11 @@ pub async fn handle_receive_pack(
                     }
                 }
                 Err(e) => {
-                    error!("Error reading push payload: {}", e);
+                    // EOF 错误是正常的流结束，不需要记录
+                    let error_msg = e.to_string();
+                    if !error_msg.contains("EOF") && !error_msg.contains("Connection reset") {
+                        error!("Error reading push payload: {}", e);
+                    }
                     break;
                 }
             }

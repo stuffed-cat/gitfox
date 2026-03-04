@@ -56,16 +56,25 @@ pub fn generate_stub_project(
     Ok(())
 }
 
-/// 递归复制目录
+/// 递归复制目录（支持符号链接）
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;
+        let dst_path = dst.join(entry.file_name());
         if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+            copy_dir_all(&entry.path(), &dst_path)?;
+        } else if ty.is_symlink() {
+            // 复制符号链接
+            let target = fs::read_link(entry.path())?;
+            // 如果目标已存在，先删除
+            if dst_path.exists() || dst_path.is_symlink() {
+                fs::remove_file(&dst_path).ok();
+            }
+            std::os::unix::fs::symlink(&target, &dst_path)?;
         } else {
-            fs::copy(entry.path(), dst.join(entry.file_name()))?;
+            fs::copy(entry.path(), &dst_path)?;
         }
     }
     Ok(())
@@ -77,18 +86,13 @@ fn generate_cargo_toml(stub_dir: &Path, template_dir: &Path, has_deps: bool) -> 
     let mut content = fs::read_to_string(&template_path)
         .with_context(|| format!("Failed to read {}", template_path.display()))?;
 
-    // 如果有内置依赖，启用 bundled-deps feature
+    // 如果有内置依赖，启用 bundled-deps feature 作为默认
     if has_deps {
-        // 在 [features] 部分添加 default feature
-        if content.contains("[features]") {
-            content = content.replace(
-                "[features]",
-                "[features]\ndefault = [\"bundled-deps\"]\nbundled-deps = []"
-            );
-        } else {
-            // 如果没有 [features] 部分，添加一个
-            content.push_str("\n[features]\ndefault = [\"bundled-deps\"]\nbundled-deps = []\n");
-        }
+        // 模板已有 bundled-deps = []，只需添加 default
+        content = content.replace(
+            "bundled-deps = []",
+            "default = [\"bundled-deps\"]\nbundled-deps = []"
+        );
     }
 
     let dest = stub_dir.join("Cargo.toml");

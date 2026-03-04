@@ -656,10 +656,32 @@ fn build_zlib(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// sljit 原始 GitHub URL
+const SLJIT_GITHUB_URL: &str = "https://github.com/zherczeg/sljit";
+/// sljit GitFox mirror URL
+const SLJIT_MIRROR: &str = "https://gitfox.studio/gitfox/mirror/sljit.git";
+
 /// 构建 PCRE2（同时生成 .a 和 .so）
 fn build_pcre2(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
     let src_dir = config.work_dir.join("pcre2");
     clone_or_update(PCRE_MIRROR, &src_dir)?;
+    
+    // 将 sljit submodule URL 指向 gitfox mirror（避免访问 GitHub）
+    let gitmodules_path = src_dir.join(".gitmodules");
+    if gitmodules_path.exists() {
+        let content = fs::read_to_string(&gitmodules_path)?;
+        if content.contains(SLJIT_GITHUB_URL) {
+            info!("Patching .gitmodules: sljit URL -> gitfox mirror");
+            let patched = content.replace(SLJIT_GITHUB_URL, SLJIT_MIRROR);
+            fs::write(&gitmodules_path, patched)?;
+            
+            // 同步 git config
+            let _ = Command::new("git")
+                .args(["submodule", "sync"])
+                .current_dir(&src_dir)
+                .status();
+        }
+    }
     
     // PCRE2 使用 git submodule (sljit)，需要初始化
     if src_dir.join(".gitmodules").exists() {
@@ -933,34 +955,78 @@ fn build_icu(config: &DepsConfig, jobs: usize, deps_dir: &Path) -> Result<()> {
             if alt_dir.exists() { alt_dir } else { src_dir.clone() }
         };
         
-        // 同时生成 .a 和 .so
-        let status = Command::new("./configure")
+        // ICU 交叉编译需要先构建 native 版本
+        // 步骤 1: 构建 host 版本（用于生成工具）
+        let host_build_dir = config.work_dir.join("icu-host-build");
+        fs::create_dir_all(&host_build_dir)?;
+        
+        info!("Building ICU host tools (native)...");
+        let status = Command::new(actual_dir.join("configure"))
+            .arg(&format!("--prefix={}", host_build_dir.display()))
+            .arg("--enable-static")
+            .arg("--disable-shared")
+            .arg("--disable-samples")
+            .arg("--disable-tests")
+            .arg("--disable-extras")
+            .arg("--disable-icuio")
+            .arg("--disable-layout")
+            .env("CFLAGS", "-O2")
+            .env("CXXFLAGS", "-O2")
+            .current_dir(&host_build_dir)
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("ICU host configure failed"));
+        }
+        
+        let status = Command::new("make")
+            .args(["-j", &jobs.to_string()])
+            .current_dir(&host_build_dir)
+            .status()?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("ICU host build failed"));
+        }
+        
+        // 步骤 2: 使用 host 工具进行交叉编译
+        info!("Cross-compiling ICU with musl...");
+        let cross_build_dir = config.work_dir.join("icu-cross-build");
+        fs::create_dir_all(&cross_build_dir)?;
+        
+        let musl_gxx = get_musl_gxx();
+        let status = Command::new(actual_dir.join("configure"))
             .arg(&format!("--prefix={}", deps_dir.display()))
             .arg("--enable-shared")
             .arg("--enable-static")
             .arg("--disable-samples")
             .arg("--disable-tests")
+            // 交叉编译参数
+            .arg("--host=x86_64-linux-musl")
+            .arg("--build=x86_64-pc-linux-gnu")
+            .arg(&format!("--with-cross-build={}", host_build_dir.display()))
             .env("CC", get_musl_gcc())
-            .env("CXX", get_musl_gxx())
+            .env("CXX", &musl_gxx)
+            .env("LD", &musl_gxx)
             .env("CFLAGS", "-Os -fPIC")
             .env("CXXFLAGS", "-Os -fPIC")
-            .current_dir(&actual_dir)
+            .env("LDFLAGS", "-lstdc++ -static-libstdc++")
+            .current_dir(&cross_build_dir)
             .status()?;
         if !status.success() {
-            return Err(anyhow::anyhow!("ICU configure failed"));
+            return Err(anyhow::anyhow!("ICU cross configure failed"));
         }
         
         let status = Command::new("make")
             .args(["-j", &jobs.to_string()])
-            .current_dir(&actual_dir)
+            .env("LD", &musl_gxx)
+            .env("LDFLAGS", "-lstdc++ -static-libstdc++")
+            .current_dir(&cross_build_dir)
             .status()?;
         if !status.success() {
-            return Err(anyhow::anyhow!("ICU make failed"));
+            return Err(anyhow::anyhow!("ICU cross make failed"));
         }
         
         let status = Command::new("make")
             .arg("install")
-            .current_dir(&actual_dir)
+            .current_dir(&cross_build_dir)
             .status()?;
         if !status.success() {
             return Err(anyhow::anyhow!("ICU install failed"));
@@ -1014,9 +1080,10 @@ fn build_postgresql(config: &DepsConfig, jobs: usize) -> Result<PostgresqlOutput
         // 构建 LDFLAGS：
         // - 不用 -static，使用动态链接
         // - 设置 RPATH 为 $ORIGIN/../lib 让二进制在相对路径找 .so
+        // - 添加 -rpath-link 让链接器找到 ICU 依赖的共享库
         let mut ldflags = format!(
-            "-L{}/lib -L{}/lib64 -Wl,-rpath,'$ORIGIN/../lib'",
-            deps_dir.display(), deps_dir.display()
+            "-L{}/lib -L{}/lib64 -Wl,-rpath,'$ORIGIN/../lib' -Wl,-rpath-link,{}/lib -Wl,-rpath-link,{}/lib64",
+            deps_dir.display(), deps_dir.display(), deps_dir.display(), deps_dir.display()
         );
         
         // 如果使用下载的 musl-toolchain，添加其 C++ 标准库路径
@@ -1062,7 +1129,7 @@ fn build_postgresql(config: &DepsConfig, jobs: usize) -> Result<PostgresqlOutput
             .env("CXXFLAGS", format!("-Os -I{}/include -I{}/include/ncursesw", 
                 deps_dir.display(), deps_dir.display()))
             .env("LDFLAGS", &ldflags)
-            .env("LIBS", "-lreadline -lncursesw -lstdc++ -lpthread -lm")
+            .env("LIBS", "-lreadline -lncursesw -lstdc++ -lpthread -lm -licuuc -licui18n -licudata")
             .env("CPPFLAGS", format!("-I{}/include -I{}/include/ncursesw", 
                 deps_dir.display(), deps_dir.display()))
             .env("PKG_CONFIG_PATH", format!("{}/lib/pkgconfig:{}/lib64/pkgconfig", 
@@ -1080,6 +1147,7 @@ fn build_postgresql(config: &DepsConfig, jobs: usize) -> Result<PostgresqlOutput
         let status = Command::new("make")
             .args(["-j", &jobs.to_string()])
             .arg(format!("LD={}", cxx))  // 使用 C++ 链接器（ICU 需要）
+            .env("LDFLAGS", &ldflags)    // 确保 LDFLAGS 在 make 时也可用
             .current_dir(&build_dir)
             .status()?;
         if !status.success() {
@@ -1314,6 +1382,7 @@ fn build_redis(config: &DepsConfig, jobs: usize) -> Result<RedisOutput> {
                 &format!("LDFLAGS={}", ldflags),  // 动态链接 + RPATH
                 "MALLOC=libc",  // musl 不兼容 jemalloc
                 "BUILD_TLS=yes",  // 启用 TLS（使用 OpenSSL）
+                "USE_SYSTEMD=no",  // Redis 6.0+ 支持 systemd notify 功能
             ])
             .current_dir(&src_dir.join("src"))
             .status()?;

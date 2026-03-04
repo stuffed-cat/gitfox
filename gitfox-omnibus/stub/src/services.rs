@@ -867,8 +867,10 @@ http {{
             if mime_types_src.exists() {
                 fs::copy(&mime_types_src, &mime_types_dest)?;
             } else {
-                // 使用内置的基本 mime.types
-                fs::write(&mime_types_dest, include_str!("mime.types.default"))?;
+                return Err(anyhow::anyhow!(
+                    "mime.types not found at {}. Bundled nginx is corrupted.",
+                    mime_types_src.display()
+                ));
             }
         }
 

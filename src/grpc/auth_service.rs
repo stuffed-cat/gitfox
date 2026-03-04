@@ -2,6 +2,25 @@
 //! 
 //! 主应用作为 gRPC 服务端，为 Workhorse 和 Shell 提供权限认证服务。
 //! 这符合 GitLab 的架构模式：主应用只负责权限管理，不直接操作 Git。
+//!
+//! ## 权限验证三层交集
+//! 
+//! 最终权限 = Token Scopes ∩ User Role ∩ Project Membership
+//! 
+//! 1. **Token Scopes** - Token 本身的权限上限
+//!    - JWT: 完全访问 (Full)
+//!    - PAT: 创建时指定的 scopes
+//!    - OAuth2: 授权时指定的 scopes
+//! 
+//! 2. **User Role** - 用户账户层面的权限
+//!    - 用户是否激活
+//!    - 用户是否为管理员
+//! 
+//! 3. **Project Membership** - 项目层面的权限
+//!    - Owner: 完全控制
+//!    - Maintainer/Developer: 可读写
+//!    - Reporter/Guest: 只读
+//!    - 非成员: 取决于项目可见性
 
 use tonic::{Request, Response, Status};
 use sqlx::PgPool;
@@ -17,6 +36,89 @@ pub mod auth_proto {
 
 use auth_proto::auth_service_server::{AuthService, AuthServiceServer};
 use auth_proto::*;
+
+/// 认证结果，包含用户信息和 token 权限范围
+/// 
+/// 用于统一处理三种认证方式：JWT、PAT、OAuth2
+#[derive(Debug, Clone)]
+struct TokenInfo {
+    user_id: i64,
+    username: String,
+    /// Token 的权限范围
+    /// - None = Full 完全访问（JWT）
+    /// - Some(scopes) = Limited 受限访问（PAT/OAuth2）
+    scopes: Option<Vec<String>>,
+}
+
+impl TokenInfo {
+    /// 匿名用户（未认证）
+    fn anonymous() -> Self {
+        Self {
+            user_id: 0,
+            username: String::new(),
+            scopes: None,
+        }
+    }
+    
+    /// 完全访问（JWT）
+    fn full_access(user_id: i64, username: String) -> Self {
+        Self {
+            user_id,
+            username,
+            scopes: None,
+        }
+    }
+    
+    /// 受限访问（PAT/OAuth2）
+    fn limited_access(user_id: i64, username: String, scopes: Vec<String>) -> Self {
+        Self {
+            user_id,
+            username,
+            scopes: Some(scopes),
+        }
+    }
+    
+    /// 检查 token 是否有 repository:write 权限（push）
+    fn can_write_repo(&self) -> bool {
+        match &self.scopes {
+            None => true, // Full access (JWT with no scope restrictions)
+            Some(scopes) => {
+                scopes.iter().any(|s| {
+                    // 新格式
+                    s == "repository:write" ||
+                    // 旧格式（兼容）
+                    s == "write_repository" ||
+                    // Admin 权限包含所有
+                    s == "admin"
+                })
+            }
+        }
+    }
+    
+    /// 检查 token 是否有 repository:read 权限（clone/fetch）
+    fn can_read_repo(&self) -> bool {
+        match &self.scopes {
+            None => true, // Full access
+            Some(scopes) => {
+                scopes.iter().any(|s| {
+                    // read 权限
+                    s == "repository:read" ||
+                    s == "read_repository" ||
+                    // write 隐含 read
+                    s == "repository:write" ||
+                    s == "write_repository" ||
+                    // Admin 权限包含所有
+                    s == "admin"
+                })
+            }
+        }
+    }
+    
+    /// 是否已认证
+    fn is_authenticated(&self) -> bool {
+        self.user_id != 0
+    }
+}
 
 /// Auth gRPC 服务实现
 pub struct AuthServiceImpl {
@@ -54,6 +156,12 @@ impl AuthServiceImpl {
 #[tonic::async_trait]
 impl AuthService for AuthServiceImpl {
     /// 检查 SSH 访问权限
+    /// 
+    /// **三层权限交集** (与 HTTP 认证保持一致):
+    /// 最终权限 = SSH Key (Full Access) ∩ User Role ∩ Project Membership
+    /// 
+    /// SSH 密钥代表用户的完全访问权限（等同于 JWT），但用户在项目上的权限
+    /// 仍然受限于项目成员角色 (owner/maintainer/developer/reporter/guest)
     async fn check_ssh_access(
         &self,
         request: Request<SshAccessRequest>,
@@ -167,6 +275,13 @@ impl AuthService for AuthServiceImpl {
     }
 
     /// 检查 HTTP 访问权限
+    /// 
+    /// **三层权限交集**：
+    /// 最终权限 = Token Scopes ∩ User Role ∩ Project Membership
+    /// 
+    /// 1. Token Scopes: JWT (full) / PAT (limited) / OAuth2 (limited)
+    /// 2. User Role: 用户是否激活
+    /// 3. Project Membership: owner/maintainer/developer/reporter/guest/非成员
     async fn check_http_access(
         &self,
         request: Request<HttpAccessRequest>,
@@ -179,34 +294,68 @@ impl AuthService for AuthServiceImpl {
             req.repo_path, req.action
         );
 
-        // 验证用户身份
-        let (user_id, username) = match req.auth {
+        let needs_write = req.action == "git-receive-pack";
+
+        // ========================================
+        // 第一层：Token 认证（获取 token scopes）
+        // ========================================
+        let token_info = match req.auth {
             Some(http_access_request::Auth::JwtAuth(jwt)) => {
-                self.verify_jwt(&jwt.token).await?
+                self.authenticate_jwt(&jwt.token).await?
             }
             Some(http_access_request::Auth::BasicAuth(basic)) => {
-                self.verify_basic_auth(&basic.username, &basic.password).await?
+                // Basic auth 可能是密码、PAT 或 OAuth2 token
+                self.authenticate_basic(&basic.username, &basic.password).await?
             }
             None => {
-                // 未认证 - 可能是公开仓库的读取
-                (0, String::new())
+                // 未认证 - 匿名访问
+                TokenInfo::anonymous()
             }
         };
 
-        // 检查仓库访问权限
-        let (can_access, can_write, project_id, repo_path) = 
-            self.check_repo_access(user_id, &req.repo_path, &req.action).await?;
-
-        let needs_write = req.action == "git-receive-pack";
-
         // 写操作必须认证
-        if needs_write && user_id == 0 {
+        if needs_write && !token_info.is_authenticated() {
             return Ok(Response::new(HttpAccessResponse {
                 status: false,
                 message: "Authentication required for push".to_string(),
                 ..Default::default()
             }));
         }
+
+        // ========================================
+        // 第二层：Token Scope 检查
+        // ========================================
+        if token_info.is_authenticated() {
+            if needs_write && !token_info.can_write_repo() {
+                warn!(
+                    "Token scope insufficient for push: user={}, scopes={:?}",
+                    token_info.username, token_info.scopes
+                );
+                return Ok(Response::new(HttpAccessResponse {
+                    status: false,
+                    message: "Token scope insufficient for push (need repository:write or write_repository)".to_string(),
+                    ..Default::default()
+                }));
+            }
+            
+            if !needs_write && !token_info.can_read_repo() {
+                warn!(
+                    "Token scope insufficient for read: user={}, scopes={:?}",
+                    token_info.username, token_info.scopes
+                );
+                return Ok(Response::new(HttpAccessResponse {
+                    status: false,
+                    message: "Token scope insufficient for clone/fetch (need repository:read or read_repository)".to_string(),
+                    ..Default::default()
+                }));
+            }
+        }
+
+        // ========================================
+        // 第三层：项目权限检查（User × Project Membership）
+        // ========================================
+        let (can_access, can_write, project_id, repo_path) = 
+            self.check_repo_access(token_info.user_id, &req.repo_path, &req.action).await?;
 
         if !can_access {
             return Ok(Response::new(HttpAccessResponse {
@@ -224,18 +373,23 @@ impl AuthService for AuthServiceImpl {
             }));
         }
 
+        // ========================================
+        // 权限检查通过！
+        // ========================================
         info!(
-            "HTTP access granted for user {} on repo {} (write: {})",
-            if user_id == 0 { "anonymous" } else { &username },
+            "HTTP access granted: user={} (id={}), repo={}, write={}, scopes={:?}",
+            if token_info.is_authenticated() { &token_info.username } else { "anonymous" },
+            token_info.user_id,
             req.repo_path,
-            can_write
+            can_write,
+            token_info.scopes
         );
 
         Ok(Response::new(HttpAccessResponse {
             status: true,
             message: String::new(),
-            user_id,
-            username,
+            user_id: token_info.user_id,
+            username: token_info.username,
             can_write,
             project_id,
             repository_path: repo_path,
@@ -575,7 +729,165 @@ impl AuthServiceImpl {
         }
     }
 
-    /// 验证 JWT token
+    // ========================================
+    // 统一认证方法（返回 TokenInfo）
+    // ========================================
+
+    /// 验证 JWT token 并返回 TokenInfo
+    /// 
+    /// JWT 是通过 /auth/login 获取的，代表用户会话，享有完全访问权限
+    async fn authenticate_jwt(&self, token: &str) -> Result<TokenInfo, Status> {
+        use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+        
+        #[derive(serde::Deserialize)]
+        struct Claims {
+            sub: String,
+            exp: usize,
+        }
+
+        let token_data = decode::<Claims>(
+            token,
+            &DecodingKey::from_secret(self.config.jwt_secret.as_bytes()),
+            &Validation::new(Algorithm::HS256),
+        )
+        .map_err(|e| Status::unauthenticated(format!("Invalid JWT: {}", e)))?;
+
+        let user_id: i64 = token_data
+            .claims
+            .sub
+            .parse()
+            .map_err(|_| Status::unauthenticated("Invalid user ID in token"))?;
+
+        let username = sqlx::query_scalar::<_, String>(
+            "SELECT username FROM users WHERE id = $1 AND is_active = true"
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?
+        .ok_or_else(|| Status::unauthenticated("User not found or inactive"))?;
+
+        // JWT = 完全访问权限
+        Ok(TokenInfo::full_access(user_id, username))
+    }
+
+    /// 验证 Basic Auth 并返回 TokenInfo
+    /// 
+    /// Basic Auth 可能是：
+    /// 1. PAT (gitfox-pat_ 前缀) → 受限访问
+    /// 2. OAuth2 token → 受限访问
+    /// 3. 用户名/密码 → 完全访问
+    async fn authenticate_basic(&self, username: &str, password: &str) -> Result<TokenInfo, Status> {
+        // 1. 首先尝试作为 PAT 验证
+        if let Some(token_info) = self.authenticate_pat(password).await? {
+            return Ok(token_info);
+        }
+
+        // 2. 尝试作为 OAuth2 token 验证
+        if let Some(token_info) = self.authenticate_oauth(password).await? {
+            return Ok(token_info);
+        }
+
+        // 3. 最后尝试密码验证
+        let user = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT id, username, password_hash FROM users WHERE username = $1 AND is_active = true"
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?
+        .ok_or_else(|| Status::unauthenticated("Invalid credentials"))?;
+
+        let (user_id, username, password_hash) = user;
+
+        if bcrypt::verify(password, &password_hash).unwrap_or(false) {
+            // 密码登录 = 完全访问权限
+            Ok(TokenInfo::full_access(user_id, username))
+        } else {
+            Err(Status::unauthenticated("Invalid credentials"))
+        }
+    }
+
+    /// 验证 Personal Access Token 并返回 TokenInfo
+    /// 
+    /// PAT 格式: gitfox-pat_xxxx 或 glpat-xxxx (兼容旧格式)
+    async fn authenticate_pat(&self, token: &str) -> Result<Option<TokenInfo>, Status> {
+        // PAT 格式检查
+        if !token.starts_with("gitfox-pat_") && !token.starts_with("glpat-") {
+            return Ok(None);
+        }
+
+        // 计算 token hash
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        let token_hash = hex::encode(hasher.finalize());
+
+        // 查询 PAT 及其 scopes
+        let result = sqlx::query_as::<_, (i64, String, Vec<String>)>(
+            r#"
+            SELECT p.user_id, u.username, p.scopes
+            FROM personal_access_tokens p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.token_hash = $1
+              AND p.is_active = true
+              AND (p.expires_at IS NULL OR p.expires_at > NOW())
+              AND u.is_active = true
+            "#,
+        )
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
+
+        match result {
+            Some((user_id, username, scopes)) => {
+                Ok(Some(TokenInfo::limited_access(user_id, username, scopes)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// 验证 OAuth2 access token 并返回 TokenInfo
+    /// 
+    /// OAuth2 token 存储在 oauth_access_tokens 表中
+    async fn authenticate_oauth(&self, token: &str) -> Result<Option<TokenInfo>, Status> {
+        // OAuth2 token 通常是 URL-safe base64 编码的随机字符串
+        // 我们通过 hash 查找来验证
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(token.as_bytes());
+        let token_hash = hex::encode(hasher.finalize());
+
+        let result = sqlx::query_as::<_, (i64, String, Vec<String>)>(
+            r#"
+            SELECT t.user_id, u.username, t.scopes
+            FROM oauth_access_tokens t
+            JOIN users u ON t.user_id = u.id
+            WHERE t.token_hash = $1
+              AND t.revoked_at IS NULL
+              AND (t.expires_at IS NULL OR t.expires_at > NOW())
+              AND u.is_active = true
+            "#,
+        )
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
+
+        match result {
+            Some((user_id, username, scopes)) => {
+                Ok(Some(TokenInfo::limited_access(user_id, username, scopes)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    // ========================================
+    // 遗留方法（为兼容性保留）
+    // ========================================
+
+    /// 验证 JWT token (旧实现，为兼容性保留)
     async fn verify_jwt(&self, token: &str) -> Result<(i64, String), Status> {
         use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
         
