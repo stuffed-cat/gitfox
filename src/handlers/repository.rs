@@ -61,8 +61,7 @@ pub async fn get_repository_info(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    let info = GitService::get_repository_info(&repo)?;
+    let info = GitService::get_repository_info(config.get_ref(), &project.owner_name, &project.name).await?;
     Ok(HttpResponse::Ok().json(info))
 }
 
@@ -79,16 +78,15 @@ pub async fn browse_tree(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
     // 如果没指定分支或为空字符串，从 git 仓库获取默认分支
     let ref_name = match query.ref_name.as_deref() {
         Some(r) if !r.is_empty() => r.to_string(),
-        _ => GitService::get_default_branch(&repo)?
+        _ => GitService::get_default_branch(config.get_ref(), &project.owner_name, &project.name).await?
             .ok_or_else(|| crate::error::AppError::NotFound("Repository is empty".to_string()))?
     };
     
-    let entries = GitService::browse_tree(&repo, &ref_name, query.path.as_deref())?;
+    let entries = GitService::browse_tree(config.get_ref(), &project.owner_name, &project.name, &ref_name, query.path.as_deref()).await?;
     
     Ok(HttpResponse::Ok().json(entries))
 }
@@ -106,16 +104,15 @@ pub async fn get_file(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
     // 如果没指定分支或为空字符串，从 git 仓库获取默认分支
     let ref_name = match query.ref_name.as_deref() {
         Some(r) if !r.is_empty() => r.to_string(),
-        _ => GitService::get_default_branch(&repo)?
+        _ => GitService::get_default_branch(config.get_ref(), &project.owner_name, &project.name).await?
             .ok_or_else(|| crate::error::AppError::NotFound("Repository is empty".to_string()))?
     };
     
-    let content = GitService::get_file_content(&repo, &ref_name, &path.filepath)?;
+    let content = GitService::get_file_content(config.get_ref(), &project.owner_name, &project.name, &ref_name, &path.filepath).await?;
     
     // 如果请求原始内容，直接返回文件内容
     if query.raw {
@@ -165,9 +162,8 @@ pub async fn get_blob(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
-    let blob = GitService::get_blob(&repo, &path.sha)?;
+    let blob = GitService::get_blob(config.get_ref(), &project.owner_name, &project.name, &path.sha).await?;
     
     Ok(HttpResponse::Ok().json(blob))
 }

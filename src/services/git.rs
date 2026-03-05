@@ -1,128 +1,241 @@
-use git2::{
-    BranchType, Commit, DiffOptions, ObjectType, Oid, Repository, Signature, Sort, Tree,
-};
-use std::path::Path;
+//! Git service using GitLayer gRPC
+//! 所有 Git 操作通过 GitLayer gRPC 服务完成
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    BlobContent, BranchInfo, CommitDetail, CommitInfo, CommitStats, DiffInfo, DiffStatus, FileContent,
-    FileEntry, FileEntryType, RepositoryInfo, TagInfo,
+    BlobContent, BranchInfo, CommitDetail, CommitInfo, CommitStats, DiffInfo, DiffStatus,
+    FileContent, FileEntry, FileEntryType, RepositoryInfo, TagInfo,
 };
+use crate::services::gitlayer::{
+    self, BlobServiceClient, CommitServiceClient, DiffServiceClient, OperationServiceClient,
+    RefServiceClient, RepositoryServiceClient, TreeServiceClient,
+};
+
+/// Helper to create a gRPC Repository message
+fn make_repository(config: &AppConfig, owner_name: &str, project_name: &str) -> gitlayer::Repository {
+    let relative_path = format!("{}/{}.git", owner_name, project_name);
+    let storage_path = format!("{}/{}", config.git_repos_path, relative_path);
+    gitlayer::Repository {
+        storage_path,
+        relative_path,
+    }
+}
+
+/// Get GitLayer address from config or environment
+fn get_gitlayer_address(config: &AppConfig) -> String {
+    config
+        .gitlayer_address
+        .clone()
+        .or_else(|| std::env::var("GITLAYER_URL").ok())
+        .unwrap_or_else(|| "http://[::1]:50052".to_string())
+}
+
+/// Helper to create a gRPC Signature with current timestamp
+fn make_signature(name: &str, email: &str) -> gitlayer::Signature {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    gitlayer::Signature {
+        name: name.to_string(),
+        email: email.to_string(),
+        timestamp,
+        timezone: "+0000".to_string(),
+    }
+}
 
 pub struct GitService;
 
 impl GitService {
-    /// Git仓库路径: {repos_path}/{owner_name}/{project_name}.git
-    fn get_repo_path(config: &AppConfig, owner_name: &str, project_name: &str) -> String {
-        format!("{}/{}/{}.git", config.git_repos_path, owner_name, project_name)
-    }
+    /// 初始化一个新的空仓库
+    pub async fn init_repository(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+    ) -> AppResult<()> {
+        let addr = get_gitlayer_address(config);
+        let mut client = RepositoryServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-    /// 获取仓库的默认分支（从HEAD引用读取）
-    pub fn get_default_branch(repo: &Repository) -> AppResult<Option<String>> {
-        // 先检查是否有任何分支
-        let branches: Vec<String> = repo
-            .branches(Some(BranchType::Local))?
-            .filter_map(|b| b.ok())
-            .filter_map(|(branch, _)| branch.name().ok().flatten().map(String::from))
-            .collect();
-        
-        if branches.is_empty() {
-            return Ok(None); // 空仓库
-        }
-        
-        // 尝试从HEAD获取默认分支
-        if let Ok(head) = repo.head() {
-            if let Some(name) = head.shorthand() {
-                return Ok(Some(name.to_string()));
-            }
-        }
-        
-        // 如果HEAD没设置，返回第一个分支
-        Ok(branches.into_iter().next())
-    }
+        let request = gitlayer::CreateRepositoryRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            default_branch: "main".to_string(),
+            initialize: false,
+        };
 
-    pub fn init_repository(config: &AppConfig, owner_name: &str, project_name: &str) -> AppResult<()> {
-        let path = Self::get_repo_path(config, owner_name, project_name);
-        // 确保父目录存在
-        if let Some(parent) = std::path::Path::new(&path).parent() {
-            std::fs::create_dir_all(parent)?;
+        let response = client
+            .create_repository(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to create repository: {}", e)))?;
+
+        if !response.into_inner().success {
+            return Err(AppError::InternalError(
+                "Failed to create repository".to_string(),
+            ));
         }
-        Repository::init_bare(&path)?;
-        
+
         Ok(())
     }
 
     /// Fork a repository by cloning it to a new location
-    pub fn fork_repository(
+    pub async fn fork_repository(
         config: &AppConfig,
         source_owner: &str,
         source_name: &str,
         target_owner: &str,
         target_name: &str,
-        only_default_branch: bool,
+        _only_default_branch: bool,
     ) -> AppResult<()> {
-        let source_path = Self::get_repo_path(config, source_owner, source_name);
-        let target_path = Self::get_repo_path(config, target_owner, target_name);
-        
-        // Ensure target directory parent exists
-        if let Some(parent) = std::path::Path::new(&target_path).parent() {
-            std::fs::create_dir_all(parent)?;
+        let addr = get_gitlayer_address(config);
+        let mut client = RepositoryServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::ForkRepositoryRequest {
+            source: Some(make_repository(config, source_owner, source_name)),
+            destination: Some(make_repository(config, target_owner, target_name)),
+        };
+
+        let response = client
+            .fork_repository(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to fork repository: {}", e)))?;
+
+        if !response.into_inner().success {
+            return Err(AppError::InternalError(
+                "Failed to fork repository".to_string(),
+            ));
         }
-        
-        if only_default_branch {
-            // Clone only the default branch
-            let source_repo = Repository::open_bare(&source_path)?;
-            let default_branch = Self::get_default_branch(&source_repo)?.unwrap_or_else(|| "main".to_string());
-            
-            // Create target bare repo
-            let target_repo = Repository::init_bare(&target_path)?;
-            
-            // Add source as remote
-            let mut remote = target_repo.remote("origin", &source_path)?;
-            
-            // Fetch only the default branch
-            let refspec = format!("+refs/heads/{0}:refs/heads/{0}", default_branch);
-            remote.fetch(&[&refspec], None, None)?;
-            
-            // Set HEAD to the default branch
-            target_repo.set_head(&format!("refs/heads/{}", default_branch))?;
-            
-            // Remove the remote after fetching
-            target_repo.remote_delete("origin")?;
-        } else {
-            // Clone as a bare repository using git2's RepoBuilder (all branches)
-            let mut builder = git2::build::RepoBuilder::new();
-            builder.bare(true);
-            builder.clone(&source_path, Path::new(&target_path))?;
-        }
-        
+
         Ok(())
     }
 
-    pub fn open_repository(config: &AppConfig, owner_name: &str, project_name: &str) -> AppResult<Repository> {
-        let path = Self::get_repo_path(config, owner_name, project_name);
-        let repo = Repository::open_bare(&path)?;
-        Ok(repo)
+    /// 获取仓库的默认分支
+    pub async fn get_default_branch(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+    ) -> AppResult<Option<String>> {
+        let addr = get_gitlayer_address(config);
+        let mut client = RepositoryServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::GetDefaultBranchRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+        };
+
+        let response = client
+            .get_default_branch(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to get default branch: {}", e)))?;
+
+        let branch = response.into_inner().branch;
+        if branch.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(branch))
+        }
     }
 
-    pub fn get_repository_info(repo: &Repository) -> AppResult<RepositoryInfo> {
-        let default_branch = Self::get_default_branch(repo)?;
-        
-        let branches: Vec<String> = repo
-            .branches(Some(BranchType::Local))?
-            .filter_map(|b| b.ok())
-            .filter_map(|(branch, _)| branch.name().ok().flatten().map(String::from))
+    /// 获取仓库信息
+    pub async fn get_repository_info(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+    ) -> AppResult<RepositoryInfo> {
+        let addr = get_gitlayer_address(config);
+
+        // Get repository info
+        let mut repo_client = RepositoryServiceClient::connect(addr.clone())
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let repo_info_request = gitlayer::GetRepositoryInfoRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+        };
+
+        let repo_info = repo_client
+            .get_repository_info(repo_info_request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to get repository info: {}", e)))?
+            .into_inner();
+
+        // Get branches
+        let mut ref_client = RefServiceClient::connect(addr.clone())
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let branches_request = gitlayer::ListBranchesRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            pattern: String::new(),
+            limit: 0,
+            offset: 0,
+        };
+
+        let branches_response = ref_client
+            .list_branches(branches_request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to list branches: {}", e)))?
+            .into_inner();
+
+        let branches: Vec<String> = branches_response
+            .branches
+            .iter()
+            .map(|b| b.name.clone())
             .collect();
 
-        let tags: Vec<String> = repo
-            .tag_names(None)?
-            .iter()
-            .filter_map(|t| t.map(String::from))
-            .collect();
+        // Get tags
+        let tags_request = gitlayer::ListTagsRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            pattern: String::new(),
+            limit: 0,
+            offset: 0,
+        };
+
+        let tags_response = ref_client
+            .list_tags(tags_request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to list tags: {}", e)))?
+            .into_inner();
+
+        let tags: Vec<String> = tags_response.tags.iter().map(|t| t.name.clone()).collect();
+
+        // Get last commit on default branch
+        let default_branch = if repo_info.default_branch.is_empty() {
+            None
+        } else {
+            Some(repo_info.default_branch.clone())
+        };
 
         let last_commit = if let Some(ref branch) = default_branch {
-            Self::get_commit_by_ref(repo, branch).ok()
+            let mut commit_client = CommitServiceClient::connect(addr)
+                .await
+                .map_err(|e| {
+                    AppError::InternalError(format!("Failed to connect to GitLayer: {}", e))
+                })?;
+
+            let commit_request = gitlayer::ListCommitsRequest {
+                repository: Some(make_repository(config, owner_name, project_name)),
+                revision: branch.clone(),
+                path: String::new(),
+                limit: 1,
+                offset: 0,
+                include_merges: true,
+                order: "date".to_string(),
+                after: 0,
+                before: 0,
+            };
+
+            commit_client
+                .list_commits(commit_request)
+                .await
+                .ok()
+                .and_then(|r| r.into_inner().commits.into_iter().next())
+                .map(|c| grpc_commit_to_info(&c))
         } else {
             None
         };
@@ -131,29 +244,66 @@ impl GitService {
             default_branch,
             branches,
             tags,
-            size_kb: 0,
+            size_kb: repo_info.size_bytes / 1024,
             last_commit,
         })
     }
 
-    pub fn get_branches(repo: &Repository) -> AppResult<Vec<BranchInfo>> {
-        let default_branch = Self::get_default_branch(repo)?;
-        let mut branches = Vec::new();
+    /// 获取分支列表
+    pub async fn get_branches(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+    ) -> AppResult<Vec<BranchInfo>> {
+        let addr = get_gitlayer_address(config);
+        let mut client = RefServiceClient::connect(addr.clone())
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-        for branch_result in repo.branches(Some(BranchType::Local))? {
-            let (branch, _) = branch_result?;
-            let name = branch.name()?.unwrap_or("").to_string();
-            let reference = branch.get();
-            
-            if let Some(target) = reference.target() {
-                let commit = repo.find_commit(target)?;
-                let commit_info = Self::commit_to_info(&commit);
-                
+        let request = gitlayer::ListBranchesRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            pattern: String::new(),
+            limit: 0,
+            offset: 0,
+        };
+
+        let response = client
+            .list_branches(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to list branches: {}", e)))?
+            .into_inner();
+
+        // Get commit info for each branch
+        let mut commit_client = CommitServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let mut branches = Vec::new();
+        for branch in response.branches {
+            let commit_request = gitlayer::GetCommitRequest {
+                repository: Some(make_repository(config, owner_name, project_name)),
+                revision: branch.commit_id.clone(),
+            };
+
+            let commit_info = commit_client
+                .get_commit(commit_request)
+                .await
+                .ok()
+                .and_then(|r| {
+                    let inner = r.into_inner();
+                    if inner.found {
+                        inner.commit.map(|c| grpc_commit_to_info(&c))
+                    } else {
+                        None
+                    }
+                });
+
+            if let Some(commit) = commit_info {
                 branches.push(BranchInfo {
-                    name: name.clone(),
-                    commit: commit_info,
-                    is_protected: false,
-                    is_default: Some(&name) == default_branch.as_ref(),
+                    name: branch.name,
+                    commit,
+                    is_protected: branch.is_protected,
+                    is_default: branch.is_default,
                 });
             }
         }
@@ -161,210 +311,421 @@ impl GitService {
         Ok(branches)
     }
 
-    pub fn create_branch(repo: &Repository, name: &str, ref_name: &str) -> AppResult<()> {
-        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
-        repo.branch(name, &commit, false)?;
+    /// 创建分支
+    pub async fn create_branch(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        name: &str,
+        ref_name: &str,
+    ) -> AppResult<()> {
+        let addr = get_gitlayer_address(config);
+        let mut client = RefServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::CreateBranchRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            name: name.to_string(),
+            start_point: ref_name.to_string(),
+        };
+
+        let response = client
+            .create_branch(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to create branch: {}", e)))?;
+
+        if !response.into_inner().success {
+            return Err(AppError::InternalError(
+                "Failed to create branch".to_string(),
+            ));
+        }
+
         Ok(())
     }
 
-    pub fn delete_branch(repo: &Repository, name: &str) -> AppResult<()> {
-        let mut branch = repo.find_branch(name, BranchType::Local)?;
-        branch.delete()?;
+    /// 删除分支
+    pub async fn delete_branch(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        name: &str,
+    ) -> AppResult<()> {
+        let addr = get_gitlayer_address(config);
+        let mut client = RefServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::DeleteBranchRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            name: name.to_string(),
+            force: false,
+        };
+
+        let response = client
+            .delete_branch(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to delete branch: {}", e)))?;
+
+        if !response.into_inner().success {
+            return Err(AppError::InternalError(
+                "Failed to delete branch".to_string(),
+            ));
+        }
+
         Ok(())
     }
 
-    pub fn get_tags(repo: &Repository) -> AppResult<Vec<TagInfo>> {
+    /// 获取标签列表
+    pub async fn get_tags(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+    ) -> AppResult<Vec<TagInfo>> {
+        let addr = get_gitlayer_address(config);
+        let mut client = RefServiceClient::connect(addr.clone())
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::ListTagsRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            pattern: String::new(),
+            limit: 0,
+            offset: 0,
+        };
+
+        let response = client
+            .list_tags(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to list tags: {}", e)))?
+            .into_inner();
+
+        // Get commit info for each tag
+        let mut commit_client = CommitServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
         let mut tags = Vec::new();
-
-        for tag_name in repo.tag_names(None)?.iter().flatten() {
-            let reference = repo.find_reference(&format!("refs/tags/{}", tag_name))?;
-            let target = reference.peel(ObjectType::Commit)?;
-            let commit = target.peel_to_commit()?;
-            let commit_info = Self::commit_to_info(&commit);
-
-            // Try to get annotated tag info
-            let (message, tagger_name, tagger_email) = if let Ok(tag) = reference.peel_to_tag() {
-                (
-                    tag.message().map(String::from),
-                    tag.tagger().map(|t| t.name().unwrap_or("").to_string()),
-                    tag.tagger().map(|t| t.email().unwrap_or("").to_string()),
-                )
-            } else {
-                (None, None, None)
+        for tag in response.tags {
+            let commit_request = gitlayer::GetCommitRequest {
+                repository: Some(make_repository(config, owner_name, project_name)),
+                revision: tag.target_id.clone(),
             };
 
-            tags.push(TagInfo {
-                name: tag_name.to_string(),
-                commit: commit_info,
-                message,
-                tagger_name,
-                tagger_email,
-                created_at: chrono::Utc::now(),
-            });
+            let commit_info = commit_client
+                .get_commit(commit_request)
+                .await
+                .ok()
+                .and_then(|r| {
+                    let inner = r.into_inner();
+                    if inner.found {
+                        inner.commit.map(|c| grpc_commit_to_info(&c))
+                    } else {
+                        None
+                    }
+                });
+
+            if let Some(commit) = commit_info {
+                tags.push(TagInfo {
+                    name: tag.name,
+                    commit,
+                    message: if tag.message.is_empty() {
+                        None
+                    } else {
+                        Some(tag.message)
+                    },
+                    tagger_name: if tag.tagger_name.is_empty() {
+                        None
+                    } else {
+                        Some(tag.tagger_name)
+                    },
+                    tagger_email: if tag.tagger_email.is_empty() {
+                        None
+                    } else {
+                        Some(tag.tagger_email)
+                    },
+                    created_at: chrono::DateTime::from_timestamp(tag.tagger_date, 0)
+                        .unwrap_or_else(chrono::Utc::now),
+                });
+            }
         }
 
         Ok(tags)
     }
 
-    pub fn create_tag(
-        repo: &Repository,
+    /// 创建标签
+    pub async fn create_tag(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
         name: &str,
         ref_name: &str,
         message: Option<&str>,
         tagger_name: &str,
         tagger_email: &str,
     ) -> AppResult<()> {
-        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
-        let object = commit.as_object();
+        let addr = get_gitlayer_address(config);
+        let mut client = RefServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-        if let Some(msg) = message {
-            let signature = Signature::now(tagger_name, tagger_email)?;
-            repo.tag(name, object, &signature, msg, false)?;
-        } else {
-            repo.tag_lightweight(name, object, false)?;
+        let request = gitlayer::CreateTagRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            name: name.to_string(),
+            target: ref_name.to_string(),
+            message: message.unwrap_or("").to_string(),
+            tagger_name: tagger_name.to_string(),
+            tagger_email: tagger_email.to_string(),
+        };
+
+        let response = client
+            .create_tag(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to create tag: {}", e)))?;
+
+        if !response.into_inner().success {
+            return Err(AppError::InternalError("Failed to create tag".to_string()));
         }
 
         Ok(())
     }
 
-    pub fn delete_tag(repo: &Repository, name: &str) -> AppResult<()> {
-        repo.tag_delete(name)?;
+    /// 删除标签
+    pub async fn delete_tag(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        name: &str,
+    ) -> AppResult<()> {
+        let addr = get_gitlayer_address(config);
+        let mut client = RefServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::DeleteTagRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            name: name.to_string(),
+        };
+
+        let response = client
+            .delete_tag(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to delete tag: {}", e)))?;
+
+        if !response.into_inner().success {
+            return Err(AppError::InternalError("Failed to delete tag".to_string()));
+        }
+
         Ok(())
     }
 
-    pub fn get_commits(
-        repo: &Repository,
+    /// 获取提交列表
+    pub async fn get_commits(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
         ref_name: &str,
         path: Option<&str>,
         page: u32,
         per_page: u32,
     ) -> AppResult<Vec<CommitInfo>> {
-        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
-        let mut revwalk = repo.revwalk()?;
-        revwalk.push(commit.id())?;
-        revwalk.set_sorting(Sort::TIME)?;
+        let addr = get_gitlayer_address(config);
+        let mut client = CommitServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-        let skip = ((page.saturating_sub(1)) * per_page) as usize;
-        let mut commits = Vec::new();
+        let offset = (page.saturating_sub(1)) * per_page;
+        let request = gitlayer::ListCommitsRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            revision: ref_name.to_string(),
+            path: path.unwrap_or("").to_string(),
+            limit: per_page as i32,
+            offset: offset as i32,
+            include_merges: true,
+            order: "date".to_string(),
+            after: 0,
+            before: 0,
+        };
 
-        for oid_result in revwalk.skip(skip).take(per_page as usize) {
-            let oid = oid_result?;
-            let commit = repo.find_commit(oid)?;
+        let response = client
+            .list_commits(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to list commits: {}", e)))?
+            .into_inner();
 
-            if let Some(p) = path {
-                // Filter commits that affect the given path
-                if !Self::commit_affects_path(repo, &commit, p)? {
-                    continue;
-                }
-            }
-
-            commits.push(Self::commit_to_info(&commit));
-        }
-
-        Ok(commits)
+        Ok(response.commits.iter().map(grpc_commit_to_info).collect())
     }
 
-    pub fn get_commit_detail(repo: &Repository, sha: &str) -> AppResult<CommitDetail> {
-        let oid = Oid::from_str(sha)?;
-        let commit = repo.find_commit(oid)?;
-        
-        let parent = commit.parent(0).ok();
-        let diffs = Self::get_commit_diffs(repo, &commit, parent.as_ref())?;
-        
-        let (additions, deletions) = diffs.iter().fold((0u32, 0u32), |acc, d| {
-            (acc.0 + d.additions, acc.1 + d.deletions)
-        });
+    /// 获取提交详情
+    pub async fn get_commit_detail(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        sha: &str,
+    ) -> AppResult<CommitDetail> {
+        let addr = get_gitlayer_address(config);
 
-        let parent_shas: Vec<String> = commit.parent_ids().map(|id| id.to_string()).collect();
-        
-        // Extract values before building the result to avoid lifetime issues
-        let sha_str = commit.id().to_string();
-        let message = commit.message().unwrap_or("").to_string();
-        let author = commit.author();
-        let author_name = author.name().unwrap_or("").to_string();
-        let author_email = author.email().unwrap_or("").to_string();
-        let authored_date = author.when().seconds();
-        let committer = commit.committer();
-        let committer_name = committer.name().unwrap_or("").to_string();
-        let committer_email = committer.email().unwrap_or("").to_string();
-        let committed_date = committer.when().seconds();
+        // Get commit info
+        let mut commit_client = CommitServiceClient::connect(addr.clone())
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let commit_request = gitlayer::GetCommitRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            revision: sha.to_string(),
+        };
+
+        let commit_response = commit_client
+            .get_commit(commit_request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to get commit: {}", e)))?
+            .into_inner();
+
+        if !commit_response.found {
+            return Err(AppError::NotFound(format!("Commit '{}' not found", sha)));
+        }
+
+        let commit = commit_response.commit.ok_or_else(|| {
+            AppError::InternalError("Commit data missing from response".to_string())
+        })?;
+
+        // Get diff for this commit
+        let mut diff_client = DiffServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let diff_request = gitlayer::CommitDiffRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            old_revision: String::new(), // Empty = diff with parent
+            new_revision: sha.to_string(),
+            paths: vec![],
+            context_lines: 3,
+        };
+
+        let diff_response = diff_client
+            .commit_diff(diff_request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to get commit diff: {}", e)))?
+            .into_inner();
+
+        let diffs: Vec<DiffInfo> = diff_response
+            .files
+            .iter()
+            .map(|f| grpc_diff_file_to_info(f))
+            .collect();
 
         Ok(CommitDetail {
-            sha: sha_str,
-            message,
-            author_name,
-            author_email,
-            authored_date,
-            committer_name,
-            committer_email,
-            committed_date,
-            parent_shas,
+            sha: commit.id,
+            message: commit.message,
+            author_name: commit.author.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
+            author_email: commit.author.as_ref().map(|a| a.email.clone()).unwrap_or_default(),
+            authored_date: commit.author.as_ref().map(|a| a.timestamp).unwrap_or(0),
+            committer_name: commit.committer.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
+            committer_email: commit.committer.as_ref().map(|c| c.email.clone()).unwrap_or_default(),
+            committed_date: commit.committer.as_ref().map(|c| c.timestamp).unwrap_or(0),
+            parent_shas: commit.parent_ids,
             stats: CommitStats {
-                additions,
-                deletions,
-                files_changed: diffs.len() as u32,
+                additions: diff_response.total_additions as u32,
+                deletions: diff_response.total_deletions as u32,
+                files_changed: diff_response.files_changed as u32,
             },
             diffs,
-            gpg_verification: None, // Will be populated by verification service if needed
+            gpg_verification: None,
         })
     }
 
-    pub fn get_full_file_diff(
-        repo: &Repository,
+    /// 获取完整文件 diff（用于 Monaco Editor）
+    pub async fn get_full_file_diff(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
         sha: &str,
         file_path: &str,
     ) -> AppResult<crate::handlers::commit::FullFileDiff> {
-        let oid = Oid::from_str(sha)?;
-        let commit = repo.find_commit(oid)?;
-        let parent = commit.parent(0).ok();
-        
-        let tree = commit.tree()?;
-        let parent_tree = parent.as_ref().map(|p| p.tree()).transpose()?;
-        
-        // 读取原始文件内容（完整版）
-        let original_content = if let Some(parent_tree) = &parent_tree {
-            if let Ok(entry) = parent_tree.get_path(Path::new(file_path)) {
-                if let Ok(object) = entry.to_object(repo) {
-                    if let Some(blob) = object.as_blob() {
-                        std::str::from_utf8(blob.content())
-                            .ok()
-                            .map(|s| s.to_string())
+        let addr = get_gitlayer_address(config);
+
+        // Get parent commit
+        let mut commit_client = CommitServiceClient::connect(addr.clone())
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let commit_request = gitlayer::GetCommitRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            revision: sha.to_string(),
+        };
+
+        let commit_response = commit_client
+            .get_commit(commit_request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to get commit: {}", e)))?
+            .into_inner();
+
+        if !commit_response.found {
+            return Err(AppError::NotFound(format!("Commit '{}' not found", sha)));
+        }
+
+        let commit = commit_response.commit.ok_or_else(|| {
+            AppError::InternalError("Commit data missing from response".to_string())
+        })?;
+
+        let parent_sha = commit.parent_ids.first().cloned();
+
+        // Get file content at current commit
+        let mut blob_client = BlobServiceClient::connect(addr.clone())
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let modified_content = {
+            let request = gitlayer::GetFileContentRequest {
+                repository: Some(make_repository(config, owner_name, project_name)),
+                revision: sha.to_string(),
+                path: file_path.to_string(),
+            };
+
+            blob_client
+                .get_file_content(request)
+                .await
+                .ok()
+                .and_then(|r| {
+                    let inner = r.into_inner();
+                    if inner.found && !inner.is_binary {
+                        String::from_utf8(inner.data).ok()
                     } else {
                         None
                     }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+                })
+        };
+
+        // Get file content at parent commit
+        let original_content = if let Some(ref parent) = parent_sha {
+            let request = gitlayer::GetFileContentRequest {
+                repository: Some(make_repository(config, owner_name, project_name)),
+                revision: parent.clone(),
+                path: file_path.to_string(),
+            };
+
+            blob_client
+                .get_file_content(request)
+                .await
+                .ok()
+                .and_then(|r| {
+                    let inner = r.into_inner();
+                    if inner.found && !inner.is_binary {
+                        String::from_utf8(inner.data).ok()
+                    } else {
+                        None
+                    }
+                })
         } else {
             None
         };
-        
-        // 读取修改后文件内容（完整版）
-        let modified_content = if let Ok(entry) = tree.get_path(Path::new(file_path)) {
-            if let Ok(object) = entry.to_object(repo) {
-                if let Some(blob) = object.as_blob() {
-                    std::str::from_utf8(blob.content())
-                        .ok()
-                        .map(|s| s.to_string())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        
+
         let total_lines = modified_content
             .as_ref()
             .or(original_content.as_ref())
             .map(|c| c.lines().count() as u32)
             .unwrap_or(0);
-        
+
         Ok(crate::handlers::commit::FullFileDiff {
             original_content,
             modified_content,
@@ -372,507 +733,346 @@ impl GitService {
         })
     }
 
-    pub fn browse_tree(
-        repo: &Repository,
+    /// 浏览目录树
+    pub async fn browse_tree(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
         ref_name: &str,
         path: Option<&str>,
     ) -> AppResult<Vec<FileEntry>> {
-        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
-        let root_tree = commit.tree()?;
+        let addr = get_gitlayer_address(config);
+        let mut client = TreeServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-        // Handle nested paths by splitting and traversing step by step
-        let tree = if let Some(p) = path {
-            let mut tree_oid = root_tree.id();
-            for component in p.split('/').filter(|s| !s.is_empty()) {
-                let current = repo.find_tree(tree_oid)?;
-                let entry = current.get_name(component)
-                    .ok_or_else(|| AppError::NotFound(format!("Path component '{}' not found in tree", component)))?;
-                tree_oid = entry.id();
-            }
-            repo.find_tree(tree_oid)?
-        } else {
-            root_tree
+        let request = gitlayer::GetTreeRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            revision: ref_name.to_string(),
+            path: path.unwrap_or("").to_string(),
+            include_sizes: true,
         };
 
-        let mut entries = Vec::new();
+        let response = client
+            .get_tree(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to get tree: {}", e)))?
+            .into_inner();
 
-        for entry in tree.iter() {
-            let name = entry.name().unwrap_or("").to_string();
-            let entry_path = if let Some(p) = path {
-                format!("{}/{}", p, name)
-            } else {
-                name.clone()
-            };
-
-            let entry_type = match entry.kind() {
-                Some(ObjectType::Tree) => FileEntryType::Directory,
-                Some(ObjectType::Blob) => FileEntryType::File,
-                Some(ObjectType::Commit) => FileEntryType::Submodule,
-                _ => continue,
-            };
-
-            let size = if entry_type == FileEntryType::File {
-                repo.find_blob(entry.id()).ok().map(|b| b.size() as u64)
-            } else {
-                None
-            };
-
-            entries.push(FileEntry {
-                name,
-                path: entry_path,
-                entry_type,
-                size,
-                mode: entry.filemode() as u32,
-            });
+        if !response.found {
+            return Err(AppError::NotFound(format!(
+                "Path '{}' not found",
+                path.unwrap_or("")
+            )));
         }
 
+        let mut entries: Vec<FileEntry> = response
+            .entries
+            .iter()
+            .map(|e| {
+                let entry_type = match e.r#type.as_str() {
+                    "tree" => FileEntryType::Directory,
+                    "commit" => FileEntryType::Submodule,
+                    _ => FileEntryType::File,
+                };
+                FileEntry {
+                    name: e.name.clone(),
+                    path: e.path.clone(),
+                    entry_type,
+                    size: if e.size > 0 { Some(e.size as u64) } else { None },
+                    mode: e.mode as u32,
+                }
+            })
+            .collect();
+
         // Sort: directories first, then files
-        entries.sort_by(|a, b| {
-            match (&a.entry_type, &b.entry_type) {
-                (FileEntryType::Directory, FileEntryType::File) => std::cmp::Ordering::Less,
-                (FileEntryType::File, FileEntryType::Directory) => std::cmp::Ordering::Greater,
-                _ => a.name.cmp(&b.name),
-            }
+        entries.sort_by(|a, b| match (&a.entry_type, &b.entry_type) {
+            (FileEntryType::Directory, FileEntryType::File) => std::cmp::Ordering::Less,
+            (FileEntryType::File, FileEntryType::Directory) => std::cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
         });
 
         Ok(entries)
     }
 
-    pub fn get_file_content(repo: &Repository, ref_name: &str, path: &str) -> AppResult<FileContent> {
-        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
-        let root_tree = commit.tree()?;
-        
-        // Handle nested paths by splitting and traversing step by step
-        let mut tree_oid = root_tree.id();
-        let path_components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        
-        for (i, component) in path_components.iter().enumerate() {
-            let current = repo.find_tree(tree_oid)?;
-            let entry = current.get_name(component)
-                .ok_or_else(|| AppError::NotFound(format!("Path component '{}' not found", component)))?;
-            
-            // If this is the last component, it should be a blob (file)
-            if i == path_components.len() - 1 {
-                let blob = repo.find_blob(entry.id())?;
-                
-                let is_binary = blob.is_binary();
-                let content = if is_binary {
-                    use base64::Engine;
-                    base64::engine::general_purpose::STANDARD.encode(blob.content())
-                } else {
-                    String::from_utf8_lossy(blob.content()).to_string()
-                };
+    /// 获取文件内容
+    pub async fn get_file_content(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        ref_name: &str,
+        path: &str,
+    ) -> AppResult<FileContent> {
+        let addr = get_gitlayer_address(config);
+        let mut client = BlobServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-                return Ok(FileContent {
-                    path: path.to_string(),
-                    content,
-                    size: blob.size() as u64,
-                    encoding: if is_binary { "base64" } else { "utf-8" }.to_string(),
-                    is_binary,
-                });
-            }
-            
-            // Otherwise, continue traversing
-            tree_oid = entry.id();
-        }
-        
-        Err(AppError::NotFound(format!("Path '{}' not found", path)))
-    }
-
-    pub fn compare_refs(repo: &Repository, from: &str, to: &str) -> AppResult<Vec<CommitInfo>> {
-        let from_commit = Self::resolve_ref_to_commit(repo, from)?;
-        let to_commit = Self::resolve_ref_to_commit(repo, to)?;
-
-        let mut revwalk = repo.revwalk()?;
-        revwalk.push(to_commit.id())?;
-        revwalk.hide(from_commit.id())?;
-        revwalk.set_sorting(Sort::REVERSE | Sort::TIME)?;
-
-        let mut commits = Vec::new();
-        for oid_result in revwalk {
-            let oid = oid_result?;
-            let commit = repo.find_commit(oid)?;
-            commits.push(Self::commit_to_info(&commit));
-        }
-
-        Ok(commits)
-    }
-
-    /// Calculate commits ahead and behind between two refs (e.g., fork vs upstream)
-    /// Returns (ahead, behind) tuple
-    pub fn calculate_divergence(repo: &Repository, local_ref: &str, upstream_ref: &str) -> AppResult<(usize, usize)> {
-        let local_commit = Self::resolve_ref_to_commit(repo, local_ref)?;
-        let upstream_commit = Self::resolve_ref_to_commit(repo, upstream_ref)?;
-
-        // Calculate commits ahead (local has but upstream doesn't)
-        let mut ahead_walk = repo.revwalk()?;
-        ahead_walk.push(local_commit.id())?;
-        ahead_walk.hide(upstream_commit.id())?;
-        let ahead = ahead_walk.count();
-
-        // Calculate commits behind (upstream has but local doesn't)
-        let mut behind_walk = repo.revwalk()?;
-        behind_walk.push(upstream_commit.id())?;
-        behind_walk.hide(local_commit.id())?;
-        let behind = behind_walk.count();
-
-        Ok((ahead, behind))
-    }
-
-    pub fn get_blob(repo: &Repository, sha: &str) -> AppResult<BlobContent> {
-        let oid = Oid::from_str(sha)
-            .map_err(|_| AppError::BadRequest(format!("Invalid blob SHA: {}", sha)))?;
-        let blob = repo.find_blob(oid)
-            .map_err(|_| AppError::NotFound(format!("Blob not found: {}", sha)))?;
-
-        let is_binary = blob.is_binary();
-        let content = if is_binary {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD.encode(blob.content())
-        } else {
-            String::from_utf8_lossy(blob.content()).to_string()
+        let request = gitlayer::GetFileContentRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            revision: ref_name.to_string(),
+            path: path.to_string(),
         };
 
-        Ok(BlobContent {
-            sha: sha.to_string(),
+        let response = client
+            .get_file_content(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to get file content: {}", e)))?
+            .into_inner();
+
+        if !response.found {
+            return Err(AppError::NotFound(format!("File '{}' not found", path)));
+        }
+
+        let is_binary = response.is_binary;
+        let content = if is_binary {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(&response.data)
+        } else {
+            String::from_utf8_lossy(&response.data).to_string()
+        };
+
+        Ok(FileContent {
+            path: path.to_string(),
             content,
-            size: blob.size() as u64,
+            size: response.size as u64,
             encoding: if is_binary { "base64" } else { "utf-8" }.to_string(),
             is_binary,
         })
     }
 
-    pub fn can_merge(repo: &Repository, source: &str, target: &str) -> AppResult<bool> {
-        let source_commit = Self::resolve_ref_to_commit(repo, source)?;
-        let target_commit = Self::resolve_ref_to_commit(repo, target)?;
+    /// 比较两个引用之间的提交
+    pub async fn compare_refs(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        from: &str,
+        to: &str,
+    ) -> AppResult<Vec<CommitInfo>> {
+        let addr = get_gitlayer_address(config);
+        let mut client = CommitServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-        let index = repo.merge_commits(&target_commit, &source_commit, None)?;
-        Ok(!index.has_conflicts())
+        let request = gitlayer::CommitsBetweenRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            from: from.to_string(),
+            to: to.to_string(),
+            limit: 0,
+        };
+
+        let response = client
+            .commits_between(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to compare refs: {}", e)))?
+            .into_inner();
+
+        Ok(response.commits.iter().map(grpc_commit_to_info).collect())
     }
 
-    /// Perform a merge from source branch to target branch
-    /// Returns the merge commit SHA
-    pub fn perform_merge(
-        repo: &Repository,
+    /// 计算两个引用之间的分歧 (ahead, behind)
+    pub async fn calculate_divergence(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        local_ref: &str,
+        upstream_ref: &str,
+    ) -> AppResult<(usize, usize)> {
+        let addr = get_gitlayer_address(config);
+        let mut client = DiffServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::CompareRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            from: upstream_ref.to_string(),
+            to: local_ref.to_string(),
+            straight: false,
+            limit: 0,
+        };
+
+        let response = client
+            .compare(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to compare refs: {}", e)))?
+            .into_inner();
+
+        Ok((
+            response.ahead_count as usize,
+            response.behind_count as usize,
+        ))
+    }
+
+    /// 获取 blob 内容
+    pub async fn get_blob(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        sha: &str,
+    ) -> AppResult<BlobContent> {
+        let addr = get_gitlayer_address(config);
+        let mut client = BlobServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::GetBlobRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            blob_id: sha.to_string(),
+        };
+
+        let response = client
+            .get_blob(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to get blob: {}", e)))?
+            .into_inner();
+
+        if !response.found {
+            return Err(AppError::NotFound(format!("Blob '{}' not found", sha)));
+        }
+
+        let blob = response.blob.ok_or_else(|| {
+            AppError::InternalError("Blob data missing from response".to_string())
+        })?;
+
+        let is_binary = blob.is_binary;
+        let content = if is_binary {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(&blob.data)
+        } else {
+            String::from_utf8_lossy(&blob.data).to_string()
+        };
+
+        Ok(BlobContent {
+            sha: sha.to_string(),
+            content,
+            size: blob.size as u64,
+            encoding: if is_binary { "base64" } else { "utf-8" }.to_string(),
+            is_binary,
+        })
+    }
+
+    /// 检查是否可以合并
+    pub async fn can_merge(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        source: &str,
+        target: &str,
+    ) -> AppResult<bool> {
+        let addr = get_gitlayer_address(config);
+        let mut client = DiffServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::FindConflictsRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            our_revision: target.to_string(),
+            their_revision: source.to_string(),
+        };
+
+        let response = client
+            .find_conflicts(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to check conflicts: {}", e)))?
+            .into_inner();
+
+        Ok(!response.has_conflicts)
+    }
+
+    /// 执行合并
+    pub async fn perform_merge(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
         source_branch: &str,
         target_branch: &str,
         merge_message: &str,
         author_name: &str,
         author_email: &str,
     ) -> AppResult<String> {
-        let source_commit = Self::resolve_ref_to_commit(repo, source_branch)?;
-        let target_commit = Self::resolve_ref_to_commit(repo, target_branch)?;
+        let addr = get_gitlayer_address(config);
+        let mut client = OperationServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-        // Check for conflicts first
-        let mut index = repo.merge_commits(&target_commit, &source_commit, None)?;
-        if index.has_conflicts() {
-            return Err(AppError::Conflict("Cannot merge due to conflicts".to_string()));
+        let request = gitlayer::MergeRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            source_branch: source_branch.to_string(),
+            target_branch: target_branch.to_string(),
+            author: Some(make_signature(author_name, author_email)),
+            message: merge_message.to_string(),
+            strategy: gitlayer::MergeStrategy::Merge as i32,
+            allow_conflicts: false,
+        };
+
+        let response = client
+            .merge(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to perform merge: {}", e)))?
+            .into_inner();
+
+        if !response.success {
+            if response.has_conflicts {
+                return Err(AppError::Conflict("Cannot merge due to conflicts".to_string()));
+            }
+            return Err(AppError::InternalError(format!(
+                "Failed to merge: {}",
+                response.message
+            )));
         }
 
-        // Write the merged tree
-        let tree_oid = index.write_tree_to(repo)?;
-        let tree = repo.find_tree(tree_oid)?;
-
-        // Create signature
-        let sig = Signature::now(author_name, author_email)?;
-
-        // Create merge commit
-        let merge_commit_oid = repo.commit(
-            None, // Don't update any reference yet
-            &sig,
-            &sig,
-            merge_message,
-            &tree,
-            &[&target_commit, &source_commit],
-        )?;
-
-        // Update the target branch reference to point to the new merge commit
-        let target_ref_name = format!("refs/heads/{}", target_branch);
-        repo.reference(
-            &target_ref_name,
-            merge_commit_oid,
-            true, // force
-            &format!("merge: {} into {}", source_branch, target_branch),
-        )?;
-
-        Ok(merge_commit_oid.to_string())
+        Ok(response.commit_id)
     }
 
-    /// Delete a branch (for cleanup after merge)
-    pub fn delete_branch_by_name(repo: &Repository, branch_name: &str) -> AppResult<()> {
-        let mut branch = repo.find_branch(branch_name, BranchType::Local)?;
-        branch.delete()?;
-        Ok(())
-    }
-
-    /// Fetch from fork and merge into target repository
-    /// This handles cross-repository merge requests (fork to upstream)
-    pub fn fetch_and_merge_from_fork(
-        target_repo: &Repository,
-        source_repo: &Repository,
+    /// 从 fork 仓库 fetch 并合并到目标仓库
+    pub async fn fetch_and_merge_from_fork(
+        config: &AppConfig,
+        target_owner: &str,
+        target_name: &str,
+        source_owner: &str,
+        source_name: &str,
         source_branch: &str,
-        target_branch: &str,
+        _target_branch: &str,
     ) -> AppResult<()> {
-        // Get the source branch commit from the fork
-        let source_commit = Self::resolve_ref_to_commit(source_repo, source_branch)?;
-        
-        // Get the target branch commit from the target repo
-        let target_commit = Self::resolve_ref_to_commit(target_repo, target_branch)?;
-        
-        // Create a temporary reference in target repo pointing to source commit
-        // First, we need to copy the objects from source to target
-        // For local repositories, we can use ODB (Object Database) operations
-        let source_odb = source_repo.odb()?;
-        let target_odb = target_repo.odb()?;
-        
-        // Copy the commit object and its tree recursively
-        Self::copy_commit_recursively(&source_odb, &target_odb, source_commit.id())?;
-        
-        // Check for conflicts
-        let index = target_repo.merge_commits(&target_commit, &source_commit, None)?;
-        if index.has_conflicts() {
-            return Err(AppError::Conflict("Cannot merge fork: conflicts detected".to_string()));
+        let addr = get_gitlayer_address(config);
+        let mut client = RepositoryServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let source_path = format!(
+            "{}/{}/{}.git",
+            config.git_repos_path, source_owner, source_name
+        );
+
+        let request = gitlayer::FetchFromRemoteRequest {
+            repository: Some(make_repository(config, target_owner, target_name)),
+            remote_path: source_path,
+            remote_name: "fork-source".to_string(),
+            branches: vec![source_branch.to_string()],
+            prune: false,
+        };
+
+        let response = client
+            .fetch_from_remote(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to fetch from fork: {}", e)))?
+            .into_inner();
+
+        if !response.success {
+            return Err(AppError::InternalError(format!(
+                "Failed to fetch from fork: {}",
+                response.message
+            )));
         }
-        
-        Ok(())
-    }
-    
-    /// Helper function to recursively copy commit objects between repositories
-    fn copy_commit_recursively(
-        source_odb: &git2::Odb,
-        target_odb: &git2::Odb,
-        commit_oid: Oid,
-    ) -> AppResult<()> {
-        // Check if object already exists in target
-        if target_odb.exists(commit_oid) {
-            return Ok(());
-        }
-        
-        // Read object from source
-        let obj = source_odb.read(commit_oid)?;
-        
-        // Write to target
-        target_odb.write(obj.kind(), obj.data())?;
-        
-        // For commit objects, we need to also copy the tree and parent commits
-        if obj.kind() == git2::ObjectType::Commit {
-            // Parse commit to get tree and parents
-            // Note: This is a simplified version. In production, you might want to
-            // use a more robust approach with git2::Repository methods
-        }
-        
+
         Ok(())
     }
 
-    // Helper methods
-
-    pub fn resolve_ref_to_commit<'a>(repo: &'a Repository, ref_name: &str) -> AppResult<Commit<'a>> {
-        // Try as branch first
-        if let Ok(branch) = repo.find_branch(ref_name, BranchType::Local) {
-            if let Some(target) = branch.get().target() {
-                return Ok(repo.find_commit(target)?);
-            }
-        }
-
-        // Try as tag
-        if let Ok(reference) = repo.find_reference(&format!("refs/tags/{}", ref_name)) {
-            let target = reference.peel(ObjectType::Commit)?;
-            return Ok(target.peel_to_commit()?);
-        }
-
-        // Try as commit SHA
-        if let Ok(oid) = Oid::from_str(ref_name) {
-            return Ok(repo.find_commit(oid)?);
-        }
-
-        Err(AppError::NotFound(format!("Reference '{}' not found", ref_name)))
-    }
-
-    fn get_commit_by_ref(repo: &Repository, ref_name: &str) -> AppResult<CommitInfo> {
-        let commit = Self::resolve_ref_to_commit(repo, ref_name)?;
-        Ok(Self::commit_to_info(&commit))
-    }
-
-    fn commit_to_info(commit: &Commit) -> CommitInfo {
-        CommitInfo {
-            sha: commit.id().to_string(),
-            message: commit.message().unwrap_or("").to_string(),
-            author_name: commit.author().name().unwrap_or("").to_string(),
-            author_email: commit.author().email().unwrap_or("").to_string(),
-            authored_date: commit.author().when().seconds(),
-            committer_name: commit.committer().name().unwrap_or("").to_string(),
-            committer_email: commit.committer().email().unwrap_or("").to_string(),
-            committed_date: commit.committer().when().seconds(),
-            gpg_verification: None, // Will be populated by verification service if needed
-        }
-    }
-
-    fn get_commit_diffs(
-        repo: &Repository,
-        commit: &Commit,
-        parent: Option<&Commit>,
-    ) -> AppResult<Vec<DiffInfo>> {
-        const MAX_DIFF_CHANGES: usize = 500; // 单个文件最大 diff 更改行数
-        
-        let tree = commit.tree()?;
-        let parent_tree = parent.map(|p| p.tree()).transpose()?;
-
-        let mut diff_opts = DiffOptions::new();
-        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut diff_opts))?;
-
-        let mut diffs = Vec::new();
-
-        // Step 1: Collect file metadata and content
-        diff.foreach(
-            &mut |delta, _| {
-                let status = match delta.status() {
-                    git2::Delta::Added => DiffStatus::Added,
-                    git2::Delta::Deleted => DiffStatus::Deleted,
-                    git2::Delta::Modified => DiffStatus::Modified,
-                    git2::Delta::Renamed => DiffStatus::Renamed,
-                    git2::Delta::Copied => DiffStatus::Copied,
-                    _ => return true,
-                };
-
-                let old_path = delta.old_file().path()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let new_path = delta.new_file().path()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-
-                diffs.push(DiffInfo {
-                    old_path,
-                    new_path,
-                    diff: String::new(),
-                    status,
-                    additions: 0,
-                    deletions: 0,
-                    original_content: None,
-                    modified_content: None,
-                    is_truncated: false,
-                    total_lines: None,
-                });
-
-                true
-            },
-            None,
-            None,
-            None,
-        )?;
-
-        // Step 2: Generate patch for each file and count stats
-        let mut file_idx = 0;
-        let mut seen_first_file_header = false;
-        
-        diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
-            // File header marks the start of a new file
-            if line.origin() == 'F' {
-                if seen_first_file_header && file_idx + 1 < diffs.len() {
-                    file_idx += 1;
-                }
-                seen_first_file_header = true;
-                return true;
-            }
-
-            if file_idx >= diffs.len() {
-                return true;
-            }
-
-            let diff_info = &mut diffs[file_idx];
-
-            // Count additions and deletions
-            match line.origin() {
-                '+' => {
-                    if !line.content().starts_with(b"+++") {
-                        diff_info.additions += 1;
-                    }
-                }
-                '-' => {
-                    if !line.content().starts_with(b"---") {
-                        diff_info.deletions += 1;
-                    }
-                }
-                _ => {}
-            }
-
-            // Append line to diff string
-            if matches!(line.origin(), 'F' | 'H' | '+' | '-' | ' ') {
-                diff_info.diff.push(line.origin());
-                if let Ok(content) = std::str::from_utf8(line.content()) {
-                    diff_info.diff.push_str(content);
-                }
-            }
-
-            true
-        })?;
-
-        // Step 3: 根据 diff 更改行数决定是否加载完整文件内容
-        for diff_info in &mut diffs {
-            let change_lines = diff_info.additions + diff_info.deletions;
-            
-            if change_lines as usize > MAX_DIFF_CHANGES {
-                // 更改行数过多，不加载完整文件内容
-                diff_info.is_truncated = true;
-                diff_info.total_lines = Some(change_lines as u32);
-                continue;
-            }
-            
-            // 更改行数适中，加载完整文件内容用于 Monaco Editor
-            // 读取原始文件
-            if diff_info.status != DiffStatus::Added {
-                if let Some(content) = Self::load_file_content(&parent_tree, &diff_info.old_path, repo) {
-                    diff_info.original_content = Some(content);
-                }
-            }
-            
-            // 读取修改后文件
-            if diff_info.status != DiffStatus::Deleted {
-                if let Some(content) = Self::load_file_content(&Some(tree.clone()), &diff_info.new_path, repo) {
-                    let line_count = content.lines().count();
-                    diff_info.modified_content = Some(content);
-                    diff_info.total_lines = Some(line_count as u32);
-                }
-            }
-        }
-
-        Ok(diffs)
-    }
-
-    /// 辅助函数：从 Git tree 加载文件内容
-    fn load_file_content(tree: &Option<Tree>, path: &str, repo: &Repository) -> Option<String> {
-        let tree = tree.as_ref()?;
-        let entry = tree.get_path(Path::new(path)).ok()?;
-        let object = entry.to_object(repo).ok()?;
-        let blob = object.as_blob()?;
-        std::str::from_utf8(blob.content()).ok().map(|s| s.to_string())
-    }
-
-    fn commit_affects_path(repo: &Repository, commit: &Commit, path: &str) -> AppResult<bool> {
-        let tree = commit.tree()?;
-        
-        if let Ok(parent) = commit.parent(0) {
-            let parent_tree = parent.tree()?;
-            let mut diff_opts = DiffOptions::new();
-            diff_opts.pathspec(path);
-            
-            let diff = repo.diff_tree_to_tree(
-                Some(&parent_tree),
-                Some(&tree),
-                Some(&mut diff_opts),
-            )?;
-            
-            Ok(diff.deltas().count() > 0)
-        } else {
-            // First commit - check if path exists in tree
-            Ok(tree.get_path(Path::new(path)).is_ok())
-        }
-    }
-
-    /// Create or update a file and commit the changes
-    /// Returns the new commit SHA
-    pub fn commit_file_change(
-        repo: &Repository,
+    /// 提交文件更改
+    pub async fn commit_file_change(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
         branch: &str,
         file_path: &str,
         content: &str,
@@ -880,230 +1080,146 @@ impl GitService {
         author_name: &str,
         author_email: &str,
     ) -> AppResult<String> {
-        // Get the current branch reference
-        let branch_ref = format!("refs/heads/{}", branch);
-        let reference = repo.find_reference(&branch_ref)
-            .map_err(|_| AppError::NotFound(format!("Branch '{}' not found", branch)))?;
-        let parent_commit = reference.peel_to_commit()?;
-        let parent_tree = parent_commit.tree()?;
+        let addr = get_gitlayer_address(config);
+        let mut client = OperationServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-        // Create blob from content
-        let blob_oid = repo.blob(content.as_bytes())?;
-
-        // Build new tree with the file change
-        let mut tree_builder = repo.treebuilder(Some(&parent_tree))?;
-        
-        // Handle nested paths by building intermediate trees
-        let path_parts: Vec<&str> = file_path.split('/').collect();
-        if path_parts.len() > 1 {
-            // Need to build nested tree structure
-            Self::insert_nested_blob(repo, &mut tree_builder, &path_parts, blob_oid, &parent_tree)?;
-        } else {
-            // Simple case: file at root
-            tree_builder.insert(file_path, blob_oid, 0o100644)?;
-        }
-
-        let tree_oid = tree_builder.write()?;
-        let new_tree = repo.find_tree(tree_oid)?;
-
-        // Create signature
-        let sig = Signature::now(author_name, author_email)?;
-
-        // Create commit
-        let commit_oid = repo.commit(
-            Some(&branch_ref),
-            &sig,
-            &sig,
-            commit_message,
-            &new_tree,
-            &[&parent_commit],
-        )?;
-
-        Ok(commit_oid.to_string())
-    }
-
-    /// Helper to insert blob at nested path
-    fn insert_nested_blob(
-        repo: &Repository,
-        tree_builder: &mut git2::TreeBuilder,
-        path_parts: &[&str],
-        blob_oid: Oid,
-        parent_tree: &Tree,
-    ) -> AppResult<()> {
-        if path_parts.len() == 1 {
-            tree_builder.insert(path_parts[0], blob_oid, 0o100644)?;
-            return Ok(());
-        }
-
-        let dir_name = path_parts[0];
-        let remaining_path: Vec<&str> = path_parts[1..].to_vec();
-
-        // Get existing subtree or create empty one
-        let existing_subtree = parent_tree.get_name(dir_name)
-            .and_then(|entry| repo.find_tree(entry.id()).ok());
-
-        let mut sub_builder = if let Some(ref subtree) = existing_subtree {
-            repo.treebuilder(Some(subtree))?
-        } else {
-            repo.treebuilder(None)?
+        let request = gitlayer::WriteFileRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            branch: branch.to_string(),
+            path: file_path.to_string(),
+            content: content.as_bytes().to_vec(),
+            author: Some(make_signature(author_name, author_email)),
+            committer: Some(make_signature(author_name, author_email)),
+            message: commit_message.to_string(),
+            create_branch: false,
+            gpg_private_key: String::new(),
         };
 
-        // Recursively insert
-        let empty_tree = repo.find_tree(repo.treebuilder(None)?.write()?)?;
-        let sub_parent = existing_subtree.unwrap_or(empty_tree);
-        Self::insert_nested_blob(repo, &mut sub_builder, &remaining_path, blob_oid, &sub_parent)?;
+        let response = client
+            .write_file(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to write file: {}", e)))?
+            .into_inner();
 
-        let sub_tree_oid = sub_builder.write()?;
-        tree_builder.insert(dir_name, sub_tree_oid, 0o040000)?;
+        if !response.success {
+            return Err(AppError::InternalError(format!(
+                "Failed to commit file: {}",
+                response.message
+            )));
+        }
 
-        Ok(())
+        Ok(response.commit_id)
     }
 
-    /// Delete a file and commit the change
-    pub fn delete_file_commit(
-        repo: &Repository,
+    /// 删除文件并提交
+    pub async fn delete_file_commit(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
         branch: &str,
         file_path: &str,
         commit_message: &str,
         author_name: &str,
         author_email: &str,
     ) -> AppResult<String> {
-        // Get the current branch reference
-        let branch_ref = format!("refs/heads/{}", branch);
-        let reference = repo.find_reference(&branch_ref)
-            .map_err(|_| AppError::NotFound(format!("Branch '{}' not found", branch)))?;
-        let parent_commit = reference.peel_to_commit()?;
-        let parent_tree = parent_commit.tree()?;
+        let addr = get_gitlayer_address(config);
+        let mut client = OperationServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-        // Build new tree without the file
-        let mut tree_builder = repo.treebuilder(Some(&parent_tree))?;
-        
-        let path_parts: Vec<&str> = file_path.split('/').collect();
-        if path_parts.len() > 1 {
-            Self::remove_nested_blob(repo, &mut tree_builder, &path_parts, &parent_tree)?;
-        } else {
-            tree_builder.remove(file_path)?;
+        let request = gitlayer::DeleteFileRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            branch: branch.to_string(),
+            path: file_path.to_string(),
+            author: Some(make_signature(author_name, author_email)),
+            committer: Some(make_signature(author_name, author_email)),
+            message: commit_message.to_string(),
+            gpg_private_key: String::new(),
+        };
+
+        let response = client
+            .delete_file(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to delete file: {}", e)))?
+            .into_inner();
+
+        if !response.success {
+            return Err(AppError::InternalError(format!(
+                "Failed to delete file: {}",
+                response.message
+            )));
         }
 
-        let tree_oid = tree_builder.write()?;
-        let new_tree = repo.find_tree(tree_oid)?;
-
-        // Create signature
-        let sig = Signature::now(author_name, author_email)?;
-
-        // Create commit
-        let commit_oid = repo.commit(
-            Some(&branch_ref),
-            &sig,
-            &sig,
-            commit_message,
-            &new_tree,
-            &[&parent_commit],
-        )?;
-
-        Ok(commit_oid.to_string())
+        Ok(response.commit_id)
     }
 
-    /// Helper to remove blob from nested path
-    fn remove_nested_blob(
-        repo: &Repository,
-        tree_builder: &mut git2::TreeBuilder,
-        path_parts: &[&str],
-        parent_tree: &Tree,
-    ) -> AppResult<()> {
-        if path_parts.len() == 1 {
-            tree_builder.remove(path_parts[0])?;
-            return Ok(());
-        }
-
-        let dir_name = path_parts[0];
-        let remaining_path: Vec<&str> = path_parts[1..].to_vec();
-
-        let subtree_entry = parent_tree.get_name(dir_name)
-            .ok_or_else(|| AppError::NotFound(format!("Directory '{}' not found", dir_name)))?;
-        let subtree = repo.find_tree(subtree_entry.id())?;
-
-        let mut sub_builder = repo.treebuilder(Some(&subtree))?;
-        Self::remove_nested_blob(repo, &mut sub_builder, &remaining_path, &subtree)?;
-
-        let sub_tree_oid = sub_builder.write()?;
-        
-        // Check if subtree is empty after removal
-        let new_subtree = repo.find_tree(sub_tree_oid)?;
-        if new_subtree.len() == 0 {
-            tree_builder.remove(dir_name)?;
-        } else {
-            tree_builder.insert(dir_name, sub_tree_oid, 0o040000)?;
-        }
-
-        Ok(())
-    }
-
-    /// Batch commit multiple file changes
-    pub fn batch_commit_changes(
-        repo: &Repository,
+    /// 批量提交多个文件更改
+    pub async fn batch_commit_changes(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
         branch: &str,
         changes: Vec<FileChange>,
         commit_message: &str,
         author_name: &str,
         author_email: &str,
     ) -> AppResult<String> {
-        // Get the current branch reference
-        let branch_ref = format!("refs/heads/{}", branch);
-        let reference = repo.find_reference(&branch_ref)
-            .map_err(|_| AppError::NotFound(format!("Branch '{}' not found", branch)))?;
-        let parent_commit = reference.peel_to_commit()?;
-        let mut current_tree = parent_commit.tree()?;
+        let addr = get_gitlayer_address(config);
+        let mut client = OperationServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
 
-        // Apply each change sequentially
-        for change in changes {
-            let tree_oid = match change.action {
-                FileChangeAction::Create | FileChangeAction::Update => {
-                    let content = change.content.as_ref()
-                        .ok_or_else(|| AppError::BadRequest("Content required for create/update".to_string()))?;
-                    let blob_oid = repo.blob(content.as_bytes())?;
-                    let mut tree_builder = repo.treebuilder(Some(&current_tree))?;
-                    
-                    let path_parts: Vec<&str> = change.path.split('/').collect();
-                    if path_parts.len() > 1 {
-                        Self::insert_nested_blob(repo, &mut tree_builder, &path_parts, blob_oid, &current_tree)?;
-                    } else {
-                        tree_builder.insert(&change.path, blob_oid, 0o100644)?;
-                    }
-                    tree_builder.write()?
+        let actions: Vec<gitlayer::FileAction> = changes
+            .iter()
+            .map(|c| {
+                let action = match c.action {
+                    FileChangeAction::Create => "create",
+                    FileChangeAction::Update => "update",
+                    FileChangeAction::Delete => "delete",
+                };
+                gitlayer::FileAction {
+                    action: action.to_string(),
+                    path: c.path.clone(),
+                    content: c.content.as_ref().map(|s| s.as_bytes().to_vec()).unwrap_or_default(),
+                    previous_path: String::new(),
+                    mode: 0o100644,
+                    expected_blob_id: String::new(),
                 }
-                FileChangeAction::Delete => {
-                    let mut tree_builder = repo.treebuilder(Some(&current_tree))?;
-                    let path_parts: Vec<&str> = change.path.split('/').collect();
-                    if path_parts.len() > 1 {
-                        Self::remove_nested_blob(repo, &mut tree_builder, &path_parts, &current_tree)?;
-                    } else {
-                        tree_builder.remove(&change.path)?;
-                    }
-                    tree_builder.write()?
-                }
-            };
-            current_tree = repo.find_tree(tree_oid)?;
+            })
+            .collect();
+
+        let request = gitlayer::CreateCommitRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            branch: branch.to_string(),
+            author: Some(make_signature(author_name, author_email)),
+            committer: Some(make_signature(author_name, author_email)),
+            message: commit_message.to_string(),
+            actions,
+            create_branch: false,
+            expected_parent: String::new(),
+            gpg_private_key: String::new(),
+        };
+
+        let response = client
+            .create_commit(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to create commit: {}", e)))?
+            .into_inner();
+
+        if !response.success {
+            return Err(AppError::InternalError(format!(
+                "Failed to batch commit: {}",
+                response.message
+            )));
         }
 
-        // Create signature
-        let sig = Signature::now(author_name, author_email)?;
-
-        // Create commit
-        let commit_oid = repo.commit(
-            Some(&branch_ref),
-            &sig,
-            &sig,
-            commit_message,
-            &current_tree,
-            &[&parent_commit],
-        )?;
-
-        Ok(commit_oid.to_string())
+        Ok(response.commit_id)
     }
 }
 
-/// Represents a file change for batch commits
+/// 文件更改
 #[derive(Debug, Clone)]
 pub struct FileChange {
     pub path: String,
@@ -1116,4 +1232,57 @@ pub enum FileChangeAction {
     Create,
     Update,
     Delete,
+}
+
+// Helper functions to convert gRPC types to model types
+
+fn grpc_commit_to_info(commit: &gitlayer::Commit) -> CommitInfo {
+    CommitInfo {
+        sha: commit.id.clone(),
+        message: commit.message.clone(),
+        author_name: commit.author.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
+        author_email: commit.author.as_ref().map(|a| a.email.clone()).unwrap_or_default(),
+        authored_date: commit.author.as_ref().map(|a| a.timestamp).unwrap_or(0),
+        committer_name: commit.committer.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
+        committer_email: commit.committer.as_ref().map(|c| c.email.clone()).unwrap_or_default(),
+        committed_date: commit.committer.as_ref().map(|c| c.timestamp).unwrap_or(0),
+        gpg_verification: None,
+    }
+}
+
+fn grpc_diff_file_to_info(diff: &gitlayer::DiffFile) -> DiffInfo {
+    let status = match diff.status.as_str() {
+        "added" => DiffStatus::Added,
+        "deleted" => DiffStatus::Deleted,
+        "renamed" => DiffStatus::Renamed,
+        "copied" => DiffStatus::Copied,
+        _ => DiffStatus::Modified,
+    };
+
+    // Build diff string from hunks
+    let mut diff_str = String::new();
+    for hunk in &diff.hunks {
+        diff_str.push_str(&hunk.header);
+        diff_str.push('\n');
+        for line in &hunk.lines {
+            diff_str.push_str(&line.prefix);
+            diff_str.push_str(&line.content);
+            if !line.content.ends_with('\n') {
+                diff_str.push('\n');
+            }
+        }
+    }
+
+    DiffInfo {
+        old_path: diff.old_path.clone(),
+        new_path: diff.new_path.clone(),
+        diff: diff_str,
+        status,
+        additions: diff.additions as u32,
+        deletions: diff.deletions as u32,
+        original_content: None,
+        modified_content: None,
+        is_truncated: false,
+        total_lines: None,
+    }
 }

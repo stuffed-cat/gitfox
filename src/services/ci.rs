@@ -107,36 +107,8 @@ impl CiService {
             }
         };
 
-        // 尝试打开仓库
-        let repo = match GitService::open_repository(&self.config, &namespace_path, &project_name) {
-            Ok(r) => r,
-            Err(e) => {
-                let error_msg = format!("Failed to open repository: {}", e);
-                warn!("{}", error_msg);
-
-                let pipeline = self
-                    .create_failed_pipeline(
-                        project_id,
-                        user_id,
-                        branch_name,
-                        commit_sha,
-                        trigger_type,
-                        &error_msg,
-                        now,
-                    )
-                    .await?;
-
-                return Ok(Some(PipelineTriggerResult {
-                    pipeline_id: pipeline.id,
-                    jobs_created: 0,
-                    status: PipelineStatus::Failed,
-                    error_message: Some(error_msg),
-                }));
-            }
-        };
-
         // 解析 CI 配置
-        let ci_config = match CiConfigParser::parse_from_repo(&repo, commit_sha) {
+        let ci_config = match CiConfigParser::parse_from_repo(&self.config, &namespace_path, &project_name, commit_sha).await {
             Ok(config) => config,
             Err(e) => {
                 let error_msg = format!("CI configuration error: {}", e);

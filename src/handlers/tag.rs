@@ -33,8 +33,7 @@ pub async fn list_tags(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    let tags = GitService::get_tags(&repo)?;
+    let tags = GitService::get_tags(config.get_ref(), &project.owner_name, &project.name).await?;
     Ok(HttpResponse::Ok().json(tags))
 }
 
@@ -55,18 +54,19 @@ pub async fn create_tag(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
     let user = crate::services::UserService::get_user_by_id(pool.get_ref(), claims.user_id).await?;
     
     GitService::create_tag(
-        &repo,
+        config.get_ref(),
+        &project.owner_name,
+        &project.name,
         &body.name,
         &body.ref_name,
         body.message.as_deref(),
         user.display_name.as_deref().unwrap_or(&user.username),
         &user.email,
-    )?;
+    ).await?;
     
     Ok(HttpResponse::Created().json(serde_json::json!({
         "name": body.name,
@@ -87,9 +87,8 @@ pub async fn get_tag(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
-    let tags = GitService::get_tags(&repo)?;
+    let tags = GitService::get_tags(config.get_ref(), &project.owner_name, &project.name).await?;
     let tag = tags.into_iter()
         .find(|t| t.name == path.tag_name)
         .ok_or_else(|| crate::error::AppError::NotFound("Tag not found".to_string()))?;
@@ -109,7 +108,6 @@ pub async fn delete_tag(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    GitService::delete_tag(&repo, &path.tag_name)?;
+    GitService::delete_tag(config.get_ref(), &project.owner_name, &project.name, &path.tag_name).await?;
     Ok(HttpResponse::NoContent().finish())
 }

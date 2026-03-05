@@ -63,14 +63,13 @@ pub async fn trigger_pipeline(
     let now = Utc::now();
     
     // Get commit SHA from ref
-    let repo = crate::services::GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    let commits = crate::services::GitService::get_commits(&repo, &body.ref_name, None, 1, 1)?;
+    let commits = crate::services::GitService::get_commits(config.get_ref(), &project.owner_name, &project.name, &body.ref_name, None, 1, 1).await?;
     let commit_sha = commits.first()
         .map(|c| c.sha.clone())
         .ok_or_else(|| AppError::NotFound("Reference not found".to_string()))?;
 
     // 尝试解析 CI 配置
-    let ci_result = CiConfigParser::parse_from_repo(&repo, &commit_sha);
+    let ci_result = CiConfigParser::parse_from_repo(config.get_ref(), &project.owner_name, &project.name, &commit_sha).await;
     
     let (status, error_message) = match &ci_result {
         Ok(ci_config) => {

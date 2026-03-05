@@ -162,8 +162,7 @@ pub async fn get_merge_request(
     .await?;
     
     // Check if can merge
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    let can_merge = GitService::can_merge(&repo, &mr.source_branch, &mr.target_branch).unwrap_or(false);
+    let can_merge = GitService::can_merge(config.get_ref(), &project.owner_name, &project.name, &mr.source_branch, &mr.target_branch).await.unwrap_or(false);
     let has_conflicts = !can_merge;
     
     Ok(HttpResponse::Ok().json(serde_json::json!({
@@ -234,8 +233,6 @@ pub async fn merge(
         return Err(AppError::BadRequest("Merge request is not open".to_string()));
     }
     
-    let target_repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    
     // Handle cross-repository merge (from fork)
     if mr.source_project_id != project.id {
         // Get source project info
@@ -254,22 +251,19 @@ pub async fn merge(
         
         let (source_namespace, source_project_name) = source_project;
         
-        let source_repo = GitService::open_repository(
-            config.get_ref(), 
-            &source_namespace, 
-            &source_project_name
-        )?;
-        
         // Fetch from the fork and merge
         GitService::fetch_and_merge_from_fork(
-            &target_repo,
-            &source_repo,
+            config.get_ref(),
+            &project.owner_name,
+            &project.name,
+            &source_namespace,
+            &source_project_name,
             &mr.source_branch,
             &mr.target_branch,
-        )?;
+        ).await?;
     } else {
         // Same-repo merge
-        if !GitService::can_merge(&target_repo, &mr.source_branch, &mr.target_branch)? {
+        if !GitService::can_merge(config.get_ref(), &project.owner_name, &project.name, &mr.source_branch, &mr.target_branch).await? {
             return Err(AppError::Conflict("Cannot merge due to conflicts".to_string()));
         }
     }
@@ -293,17 +287,19 @@ pub async fn merge(
     
     // Perform the actual Git merge
     let merge_commit_sha = GitService::perform_merge(
-        &target_repo,
+        config.get_ref(),
+        &project.owner_name,
+        &project.name,
         &mr.source_branch,
         &mr.target_branch,
         &merge_message,
         &author_name,
         &email,
-    )?;
+    ).await?;
     
     // Optionally delete source branch after merge (only for same-repo MRs)
     if body.delete_source_branch.unwrap_or(false) && mr.source_project_id == project.id {
-        if let Err(e) = GitService::delete_branch_by_name(&target_repo, &mr.source_branch) {
+        if let Err(e) = GitService::delete_branch(config.get_ref(), &project.owner_name, &project.name, &mr.source_branch).await {
             // Log but don't fail the merge
             eprintln!("Warning: Failed to delete source branch after merge: {}", e);
         }
@@ -370,11 +366,8 @@ async fn try_trigger_pipeline_for_merge(
 
     let (namespace_path, project_name) = project;
 
-    // Open repository and parse CI config
-    let repo = GitService::open_repository(config, &namespace_path, &project_name)?;
-
     // Try to parse CI configuration
-    let ci_config = match CiConfigParser::parse_from_repo(&repo, merge_commit_sha) {
+    let ci_config = match CiConfigParser::parse_from_repo(config, &namespace_path, &project_name, merge_commit_sha).await {
         Ok(config) => config,
         Err(_) => return Ok(()), // No CI config is not an error
     };

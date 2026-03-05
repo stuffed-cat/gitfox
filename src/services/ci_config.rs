@@ -1,5 +1,5 @@
+use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
-use git2::Repository;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use std::collections::HashMap;
@@ -78,14 +78,19 @@ pub enum RetryDefinition {
 
 impl CiConfigParser {
     /// 从 git 仓库的指定 commit 解析 CI 配置
-    pub fn parse_from_repo(repo: &Repository, commit_sha: &str) -> AppResult<CiConfig> {
+    pub async fn parse_from_repo(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        commit_sha: &str,
+    ) -> AppResult<CiConfig> {
         use crate::services::GitService;
         
         // 尝试读取 .gitfox/ci/ 目录下的所有 yml/yaml 文件
         let ci_dir_path = ".gitfox/ci";
         
         // 浏览树获取文件列表
-        let entries = match GitService::browse_tree(repo, commit_sha, Some(ci_dir_path)) {
+        let entries = match GitService::browse_tree(config, owner_name, project_name, commit_sha, Some(ci_dir_path)).await {
             Ok(entries) => entries,
             Err(_) => {
                 return Err(AppError::BadRequest(
@@ -101,7 +106,7 @@ impl CiConfigParser {
                 let path = entry.path.to_lowercase();
                 if path.ends_with(".yml") || path.ends_with(".yaml") {
                     // entry.path already contains full path like ".gitfox/ci/build.yml"
-                    match GitService::get_file_content(repo, commit_sha, &entry.path) {
+                    match GitService::get_file_content(config, owner_name, project_name, commit_sha, &entry.path).await {
                         Ok(file_content) => {
                             if !file_content.is_binary {
                                 yaml_files.push((entry.name.clone(), file_content.content));

@@ -32,8 +32,7 @@ pub async fn list_branches(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    let branches = GitService::get_branches(&repo)?;
+    let branches = GitService::get_branches(config.get_ref(), &project.owner_name, &project.name).await?;
     Ok(HttpResponse::Ok().json(branches))
 }
 
@@ -50,8 +49,7 @@ pub async fn create_branch(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    GitService::create_branch(&repo, &body.name, &body.ref_name)?;
+    GitService::create_branch(config.get_ref(), &project.owner_name, &project.name, &body.name, &body.ref_name).await?;
     Ok(HttpResponse::Created().json(serde_json::json!({
         "name": body.name,
         "commit": null,
@@ -73,8 +71,7 @@ pub async fn get_branch(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    let branches = GitService::get_branches(&repo)?;
+    let branches = GitService::get_branches(config.get_ref(), &project.owner_name, &project.name).await?;
     
     let branch = branches.into_iter()
         .find(|b| b.name == path.branch)
@@ -95,7 +92,6 @@ pub async fn delete_branch(
         &path.namespace, 
         &path.project
     ).await?;
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    GitService::delete_branch(&repo, &path.branch)?;
+    GitService::delete_branch(config.get_ref(), &project.owner_name, &project.name, &path.branch).await?;
     Ok(HttpResponse::NoContent().finish())
 }

@@ -26,9 +26,6 @@ sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "chrono", "uu
 deadpool-redis = "0.14"
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 
-# Git Operations
-git2 = { version = "0.18", features = ["vendored-libgit2", "vendored-openssl"] }
-
 # Authentication
 jsonwebtoken = "9"
 bcrypt = "0.15"
