@@ -1,11 +1,11 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use sqlx::PgPool;
-
+use std::path::PathBuf;
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
-use crate::middleware::{validate_token, try_validate_token};
-use crate::models::{AddMemberRequest, CreateProjectRequest, UpdateProjectRequest, ForkProjectRequest, ProjectStar};
+use crate::middleware::{validate_token, try_validate_token, AuthenticatedUser};
+use crate::models::{AddMemberRequest, CreateProjectRequest, UpdateProjectRequest, ForkProjectRequest, ProjectStar, MemberRole};
 use crate::services::{GitService, ProjectService};
 
 #[derive(Debug, serde::Deserialize)]
@@ -575,4 +575,80 @@ pub async fn get_fork_divergence(
         fork_branch,
         upstream_branch,
     }))
+}
+
+/// POST /projects/:namespace/:project/sync_fork
+/// Sync fork with its upstream repository (fetch from upstream)
+pub async fn sync_fork(
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<ProjectPath>,
+    auth: AuthenticatedUser,
+) -> AppResult<HttpResponse> {
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+
+    // Check if this is a fork
+    if project.forked_from_id.is_none() || project.forked_from_namespace.is_none() || project.forked_from_name.is_none() {
+        return Err(AppError::BadRequest("This project is not a fork".to_string()));
+    }
+
+    // Check write permission - user must be owner or have developer+ access
+    let has_permission = if project.owner_id == auth.user_id {
+        true
+    } else {
+        // Check project membership
+        let member_role = ProjectService::get_member_role(pool.get_ref(), project.id, auth.user_id).await?;
+        matches!(member_role, Some(role) if role == MemberRole::Owner || role == MemberRole::Maintainer || role == MemberRole::Developer)
+    };
+    
+    if !has_permission {
+        return Err(AppError::Forbidden("You don't have permission to sync this fork".to_string()));
+    }
+
+    let upstream_namespace = project.forked_from_namespace.as_ref().unwrap();
+    let upstream_name = project.forked_from_name.as_ref().unwrap();
+
+    // Get repository paths
+    let base_path = PathBuf::from(&config.git_repos_path);
+    let fork_path = base_path.join(format!("{}/{}.git", project.owner_name, project.name));
+    let upstream_path = base_path.join(format!("{}/{}.git", upstream_namespace, upstream_name));
+
+    // Call GitLayer to fetch from upstream
+    let gitlayer_address = std::env::var("GITLAYER_URL")
+        .unwrap_or_else(|_| "http://[::1]:50052".to_string());
+
+    let mut client = crate::services::gitlayer::RepositoryServiceClient::connect(gitlayer_address)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+    let request = crate::services::gitlayer::FetchFromRemoteRequest {
+        repository: Some(crate::services::gitlayer::Repository {
+            storage_path: fork_path.to_string_lossy().to_string(),
+            relative_path: String::new(),
+        }),
+        remote_path: upstream_path.to_string_lossy().to_string(),
+        remote_name: "upstream".to_string(),
+        branches: vec![], // Fetch all branches
+        prune: false,
+    };
+
+    let response = client.fetch_from_remote(request)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to fetch from upstream: {}", e)))?
+        .into_inner();
+
+    if !response.success {
+        return Err(AppError::InternalError(format!("Sync failed: {}", response.message)));
+    }
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "success": true,
+        "message": "Successfully synced from upstream",
+        "updated_refs": response.updated_refs
+    })))
 }

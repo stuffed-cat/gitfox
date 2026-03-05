@@ -30,6 +30,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::path::Path;
 
@@ -245,22 +246,47 @@ impl Default for SshConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InternalConfig {
-    /// 后端 Unix Socket 路径（优先级高于 backend_port）
-    /// 推荐使用，性能更好更安全
+    /// 内部服务绑定主机（默认 127.0.0.1）
+    /// All-in-one 模式：保持默认
+    /// 分布式模式：设置为 0.0.0.0 让服务可被外部访问
+    #[serde(default = "default_internal_host")]
+    pub host: String,
+
+    /// 后端 Unix Socket 路径（优先级最高）
+    /// 推荐用于 all-in-one 模式，性能更好更安全
     #[serde(default)]
     pub backend_socket: Option<String>,
 
-    /// 后端 API 端口（当不使用 Unix Socket 时）
+    /// 后端 API URL（完整地址，覆盖 host:backend_port）
+    /// 分布式部署时使用，如 "http://backend.internal:8081"
+    #[serde(default)]
+    pub backend_url: Option<String>,
+
+    /// 后端 API 端口（当不使用 Unix Socket 或 backend_url 时）
     #[serde(default = "default_backend_port")]
     pub backend_port: u16,
+
+    /// GitLayer gRPC 完整地址（覆盖 host:gitlayer_port）
+    /// 分布式部署时使用，如 "http://gitlayer.internal:50052"
+    #[serde(default)]
+    pub gitlayer_address: Option<String>,
 
     /// GitLayer gRPC 端口（Git 操作服务）
     #[serde(default = "default_gitlayer_port")]
     pub gitlayer_port: u16,
 
+    /// Auth gRPC 完整地址（覆盖 host:auth_grpc_port）
+    /// 分布式部署时使用，如 "http://auth.internal:50051"
+    #[serde(default)]
+    pub auth_grpc_address: Option<String>,
+
     /// Auth gRPC 端口（认证服务）
     #[serde(default = "default_auth_grpc_port")]
     pub auth_grpc_port: u16,
+}
+
+fn default_internal_host() -> String {
+    "127.0.0.1".to_string()
 }
 
 fn default_backend_port() -> u16 {
@@ -278,11 +304,54 @@ fn default_auth_grpc_port() -> u16 {
 impl Default for InternalConfig {
     fn default() -> Self {
         Self {
+            host: default_internal_host(),
             backend_socket: None,
+            backend_url: None,
             backend_port: default_backend_port(),
+            gitlayer_address: None,
             gitlayer_port: default_gitlayer_port(),
+            auth_grpc_address: None,
             auth_grpc_port: default_auth_grpc_port(),
         }
+    }
+}
+
+impl InternalConfig {
+    /// 获取后端 URL（优先级：backend_socket > backend_url > host:port）
+    pub fn get_backend_url(&self) -> String {
+        if let Some(ref url) = self.backend_url {
+            url.clone()
+        } else {
+            format!("http://{}:{}", self.host, self.backend_port)
+        }
+    }
+
+    /// 获取 GitLayer gRPC 地址
+    pub fn get_gitlayer_address(&self) -> String {
+        if let Some(ref addr) = self.gitlayer_address {
+            addr.clone()
+        } else {
+            format!("http://{}:{}", self.host, self.gitlayer_port)
+        }
+    }
+
+    /// 获取 Auth gRPC 地址
+    pub fn get_auth_grpc_address(&self) -> String {
+        if let Some(ref addr) = self.auth_grpc_address {
+            addr.clone()
+        } else {
+            format!("http://{}:{}", self.host, self.auth_grpc_port)
+        }
+    }
+
+    /// 获取 Auth gRPC 绑定地址（服务端监听用）
+    pub fn get_auth_grpc_listen_address(&self) -> String {
+        format!("{}:{}", self.host, self.auth_grpc_port)
+    }
+
+    /// 获取 GitLayer gRPC 绑定地址（服务端监听用）
+    pub fn get_gitlayer_listen_address(&self) -> String {
+        format!("{}:{}", self.host, self.gitlayer_port)
     }
 }
 
@@ -311,6 +380,10 @@ pub struct PathsConfig {
     /// SSH Host Key 路径
     #[serde(default = "default_ssh_host_key_path")]
     pub ssh_host_key: String,
+
+    /// gitfox-shell 二进制路径（omnibus 模式自动设置）
+    #[serde(default)]
+    pub shell_binary: String,
 }
 
 fn default_repos_path() -> String {
@@ -341,6 +414,7 @@ impl Default for PathsConfig {
             webide: default_webide_path(),
             assets: default_assets_path(),
             ssh_host_key: default_ssh_host_key_path(),
+            shell_binary: String::new(),
         }
     }
 }
@@ -1143,13 +1217,37 @@ impl GitFoxConfig {
         Ok(warnings)
     }
 
-    /// 生成后端（devops）所需的环境变量
+    /// 生成后端（devops）所需的环境变量（HashMap 形式，已废弃，保留用于兼容）
+    #[deprecated(note = "使用 to_backend_vars() + fill_template() 代替")]
     pub fn to_backend_env(&self) -> HashMap<String, String> {
         let mut env = HashMap::new();
 
+        // 当内置服务启用时，根据内置配置生成连接 URL
+        let database_url = if self.bundled.enabled && self.bundled.postgresql.enabled {
+            let pg = &self.bundled.postgresql;
+            let password = if pg.password.is_empty() {
+                String::new()
+            } else {
+                format!(":{}", pg.password)
+            };
+            format!(
+                "postgres://{}{}@{}:{}/{}",
+                pg.username, password, pg.host, pg.port, pg.database
+            )
+        } else {
+            self.database.url.clone()
+        };
+
+        let redis_url = if self.bundled.enabled && self.bundled.redis.enabled {
+            let redis = &self.bundled.redis;
+            format!("redis://{}:{}", redis.host, redis.port)
+        } else {
+            self.redis.url.clone()
+        };
+
         // 数据库
-        env.insert("DATABASE_URL".to_string(), self.database.url.clone());
-        env.insert("REDIS_URL".to_string(), self.redis.url.clone());
+        env.insert("DATABASE_URL".to_string(), database_url);
+        env.insert("REDIS_URL".to_string(), redis_url);
 
         // 安全
         env.insert("JWT_SECRET".to_string(), self.secrets.jwt.clone());
@@ -1164,7 +1262,7 @@ impl GitFoxConfig {
             env.insert("SERVER_SOCKET_PATH".to_string(), socket.clone());
         } else {
             env.insert("SERVER_CONNECTION_TYPE".to_string(), "tcp".to_string());
-            env.insert("SERVER_HOST".to_string(), "127.0.0.1".to_string());
+            env.insert("SERVER_HOST".to_string(), self.internal.host.clone());
             env.insert("SERVER_PORT".to_string(), self.internal.backend_port.to_string());
         }
 
@@ -1177,13 +1275,11 @@ impl GitFoxConfig {
         env.insert("GIT_REPOS_PATH".to_string(), self.paths.repos.clone());
         env.insert("ASSETS_PATH".to_string(), self.paths.assets.clone());
 
-        // gRPC
-        env.insert("GRPC_ENABLED".to_string(), "true".to_string());
-        env.insert("GRPC_ADDRESS".to_string(), format!("[::1]:{}", self.internal.auth_grpc_port));
+        // gRPC - 强制启用（shell/workhorse 依赖 gRPC auth）
+        env.insert("GRPC_ADDRESS".to_string(), self.internal.get_auth_grpc_listen_address());
 
-        if self.internal.gitlayer_port > 0 {
-            env.insert("GITLAYER_ADDRESS".to_string(), format!("http://127.0.0.1:{}", self.internal.gitlayer_port));
-        }
+        // GitLayer - 使用配置的完整地址或默认 host:port
+        env.insert("GITLAYER_ADDRESS".to_string(), self.internal.get_gitlayer_address());
 
         // 初始管理员
         if let Some(ref username) = self.admin.username {
@@ -1240,76 +1336,69 @@ impl GitFoxConfig {
         env
     }
 
-    /// 生成 Workhorse TOML 配置内容
-    pub fn to_workhorse_toml(&self) -> String {
-        let mut config = format!(
-            r#"# GitFox Workhorse 配置
-# 由 gitfox.toml 自动生成，请勿手动修改
-
-listen_addr = "0.0.0.0"
-listen_port = {}
-
-"#,
-            self.server.http_port
-        );
-
-        // 后端连接
-        if let Some(ref socket) = self.internal.backend_socket {
-            config.push_str(&format!("backend_socket = \"{}\"\n", socket));
+    /// 生成 Workhorse 配置变量（用于模板填充）
+    pub fn to_workhorse_vars(&self) -> ConfigVars {
+        let registry_jwt = if self.registry.jwt_secret.is_empty() {
+            &self.secrets.jwt
         } else {
-            config.push_str(&format!("backend_url = \"http://127.0.0.1:{}\"\n", self.internal.backend_port));
+            &self.registry.jwt_secret
+        };
+
+        ConfigVars {
+            // Workhorse 专用
+            listen_addr: "0.0.0.0".to_string(),
+            listen_port: self.server.http_port,
+            backend_socket: self.internal.backend_socket.clone().unwrap_or_default(),
+            backend_url: self.internal.get_backend_url(),
+            auth_grpc_address: self.internal.get_auth_grpc_address(),
+            gitlayer_address: self.internal.get_gitlayer_address(),
+            gitfox_shell_secret: self.secrets.internal.clone(),
+            
+            // 路径
+            frontend_path: self.paths.frontend.clone(),
+            webide_path: self.paths.webide.clone(),
+            assets_path: self.paths.assets.clone(),
+            
+            // HTTP 配置
+            max_upload_size: self.server.max_upload_size,
+            enable_request_logging: true,
+            enable_cors: true,
+            websocket_timeout: 3600,
+            static_cache_control: "public, max-age=31536000, immutable".to_string(),
+            
+            // Registry
+            registry_enabled: self.registry.enabled,
+            registry_domain: self.registry.domain.clone(),
+            registry_docker_enabled: self.registry.docker_enabled,
+            registry_npm_enabled: self.registry.npm_enabled,
+            registry_storage_path: self.registry.storage_path.clone(),
+            registry_max_size: self.registry.max_package_size,
+            registry_jwt_secret: registry_jwt.clone(),
+            
+            ..Default::default()
         }
-
-        // 路径
-        config.push_str(&format!("\nfrontend_dist_path = \"{}\"\n", self.paths.frontend));
-        config.push_str(&format!("webide_dist_path = \"{}\"\n", self.paths.webide));
-        config.push_str(&format!("assets_path = \"{}\"\n", self.paths.assets));
-
-        // GitLayer (required)
-        config.push_str(&format!("\ngitlayer_address = \"http://127.0.0.1:{}\"\n", self.internal.gitlayer_port));
-
-        // Auth gRPC
-        config.push_str(&format!("\nauth_grpc_address = \"http://[::1]:{}\"\n", self.internal.auth_grpc_port));
-        config.push_str("use_grpc_auth = true\n");
-
-        // 内部认证密钥
-        config.push_str(&format!("\nshell_secret = \"{}\"\n", self.secrets.internal));
-
-        // Package Registry
-        if self.registry.enabled {
-            config.push_str("\n# Package Registry\n");
-            config.push_str("registry_enabled = true\n");
-            if !self.registry.domain.is_empty() {
-                config.push_str(&format!("registry_domain = \"{}\"\n", self.registry.domain));
-            }
-            config.push_str(&format!("registry_docker_enabled = {}\n", self.registry.docker_enabled));
-            config.push_str(&format!("registry_npm_enabled = {}\n", self.registry.npm_enabled));
-            config.push_str(&format!("registry_storage_path = \"{}\"\n", self.registry.storage_path));
-            config.push_str(&format!("registry_max_size = {}\n", self.registry.max_package_size));
-            // 如果有独立的 registry JWT secret，使用它；否则使用主 JWT secret
-            let registry_jwt = if self.registry.jwt_secret.is_empty() {
-                &self.secrets.jwt
-            } else {
-                &self.registry.jwt_secret
-            };
-            config.push_str(&format!("registry_jwt_secret = \"{}\"\n", registry_jwt));
-        }
-
-        config
     }
 
-    /// 生成 GitLayer 所需的环境变量
+    /// 生成 Workhorse TOML 配置内容（使用模板）
+    pub fn to_workhorse_toml(&self, template: &str) -> String {
+        let vars = self.to_workhorse_vars();
+        vars.fill_template(template)
+    }
+
+    /// 生成 GitLayer 所需的环境变量（HashMap 形式，已废弃，保留用于兼容）
+    #[deprecated(note = "使用 to_gitlayer_vars() + fill_template() 代替")]
     pub fn to_gitlayer_env(&self) -> HashMap<String, String> {
         let mut env = HashMap::new();
 
-        env.insert("GITLAYER_LISTEN_ADDR".to_string(), format!("0.0.0.0:{}", self.internal.gitlayer_port));
+        env.insert("GITLAYER_LISTEN_ADDR".to_string(), self.internal.get_gitlayer_listen_address());
         env.insert("GITLAYER_STORAGE_PATH".to_string(), self.paths.repos.clone());
         env.insert("RUST_LOG".to_string(), self.logging.level.clone());
 
         env
     }
 
-    /// 生成 Shell 所需的环境变量
+    /// 生成 Shell 所需的环境变量（HashMap 形式，已废弃，保留用于兼容）
+    #[deprecated(note = "使用 to_shell_vars() + fill_template() 代替")]
     pub fn to_shell_env(&self) -> HashMap<String, String> {
         let mut env = HashMap::new();
 
@@ -1317,7 +1406,7 @@ listen_port = {}
         env.insert("SSH_HOST_KEY_PATH".to_string(), self.paths.ssh_host_key.clone());
         
         // GitLayer gRPC (用于 Git 操作)
-        env.insert("GITLAYER_ADDRESS".to_string(), format!("http://127.0.0.1:{}", self.internal.gitlayer_port));
+        env.insert("GITLAYER_ADDRESS".to_string(), self.internal.get_gitlayer_address());
         
         // 内部 API 认证密钥
         env.insert("GITFOX_API_SECRET".to_string(), self.secrets.internal.clone());
@@ -1326,11 +1415,178 @@ listen_port = {}
         env.insert("GITFOX_REPOS_PATH".to_string(), self.paths.repos.clone());
 
         // Auth gRPC (用于权限验证)
-        env.insert("AUTH_GRPC_ADDRESS".to_string(), format!("http://[::1]:{}", self.internal.auth_grpc_port));
+        env.insert("AUTH_GRPC_ADDRESS".to_string(), self.internal.get_auth_grpc_address());
 
         env.insert("RUST_LOG".to_string(), self.logging.level.clone());
 
         env
+    }
+
+    /// 生成 Backend 配置变量（用于模板填充）
+    pub fn to_backend_vars(&self) -> ConfigVars {
+        // 当内置服务启用时，根据内置配置生成连接 URL
+        let database_url = if self.bundled.enabled && self.bundled.postgresql.enabled {
+            let pg = &self.bundled.postgresql;
+            let password = if pg.password.is_empty() {
+                String::new()
+            } else {
+                format!(":{}", pg.password)
+            };
+            format!(
+                "postgres://{}{}@{}:{}/{}",
+                pg.username, password, pg.host, pg.port, pg.database
+            )
+        } else {
+            self.database.url.clone()
+        };
+
+        let redis_url = if self.bundled.enabled && self.bundled.redis.enabled {
+            let redis = &self.bundled.redis;
+            format!("redis://{}:{}", redis.host, redis.port)
+        } else {
+            self.redis.url.clone()
+        };
+
+        ConfigVars {
+            // 数据库和缓存
+            database_url,
+            redis_url,
+
+            // 安全密钥
+            jwt_secret: self.secrets.jwt.clone(),
+            gitfox_shell_secret: self.secrets.internal.clone(),
+
+            // 服务配置
+            gitfox_base_url: self.server.base_url.clone(),
+            http_port: self.server.http_port,
+            max_upload_size: self.server.max_upload_size,
+
+            // SSH 配置
+            ssh_enabled: self.server.ssh.enabled,
+            ssh_host: self.server.ssh.host.clone(),
+            ssh_port: self.server.ssh.port,
+            ssh_public_host: self.server.ssh.public_host.clone(),
+            ssh_public_port: self.server.ssh.public_port,
+
+            // 内部服务
+            server_connection_type: if self.internal.backend_socket.is_some() {
+                "unix_socket".to_string()
+            } else {
+                "tcp".to_string()
+            },
+            server_socket_path: self.internal.backend_socket.clone().unwrap_or_default(),
+            server_host: self.internal.host.clone(),
+            server_port: self.internal.backend_port,
+
+            // 路径
+            git_repos_path: self.paths.repos.clone(),
+            assets_path: self.paths.assets.clone(),
+            ssh_host_key_path: self.paths.ssh_host_key.clone(),
+            gitfox_shell_path: self.paths.shell_binary.clone(),
+
+            // 管理员
+            initial_admin_username: self.admin.username.clone().unwrap_or_default(),
+            initial_admin_email: self.admin.email.clone().unwrap_or_default(),
+            initial_admin_password: self.admin.password.clone().unwrap_or_default(),
+
+            // SMTP
+            smtp_enabled: self.smtp.enabled,
+            smtp_host: self.smtp.host.clone(),
+            smtp_port: self.smtp.port,
+            smtp_username: self.smtp.username.clone(),
+            smtp_password: self.smtp.password.clone(),
+            smtp_from_email: self.smtp.from_email.clone(),
+            smtp_from_name: self.smtp.from_name.clone(),
+            smtp_use_tls: self.smtp.use_tls,
+            smtp_use_ssl: self.smtp.use_ssl,
+
+            // OAuth
+            oauth_github_client_id: self.oauth.github.client_id.clone(),
+            oauth_github_client_secret: self.oauth.github.client_secret.clone(),
+            oauth_gitlab_client_id: self.oauth.gitlab.client_id.clone(),
+            oauth_gitlab_client_secret: self.oauth.gitlab.client_secret.clone(),
+            oauth_google_client_id: self.oauth.google.client_id.clone(),
+            oauth_google_client_secret: self.oauth.google.client_secret.clone(),
+
+            // WebAuthn
+            webauthn_rp_id: self.server.base_url.replace("http://", "").replace("https://", "").split(':').next().unwrap_or("localhost").to_string(),
+            webauthn_rp_origin: self.server.base_url.clone(),
+
+            // 日志
+            rust_log: self.logging.level.clone(),
+
+            // gRPC 监听地址
+            grpc_address: self.internal.get_auth_grpc_listen_address(),
+            
+            // GitLayer 地址
+            gitlayer_address: self.internal.get_gitlayer_address(),
+
+            ..Default::default()
+        }
+    }
+
+    /// 生成 Backend .env 配置内容（使用模板）
+    pub fn to_backend_env_template(&self, template: &str) -> String {
+        let vars = self.to_backend_vars();
+        vars.fill_template(template)
+    }
+
+    /// 生成 GitLayer 配置变量（用于模板填充）
+    pub fn to_gitlayer_vars(&self) -> ConfigVars {
+        ConfigVars {
+            // gRPC 监听地址
+            gitlayer_listen_addr: self.internal.get_gitlayer_listen_address(),
+            
+            // 仓库存储路径
+            git_repos_path: self.paths.repos.clone(),
+            
+            // Git 二进制路径
+            gitlayer_git_bin: "git".to_string(),
+            
+            // 性能配置
+            gitlayer_max_concurrent_ops: 10,
+            gitlayer_enable_cache: true,
+            gitlayer_cache_ttl: 60,
+            
+            // 日志
+            rust_log: self.logging.level.clone(),
+
+            ..Default::default()
+        }
+    }
+
+    /// 生成 GitLayer .env 配置内容（使用模板）
+    pub fn to_gitlayer_env_template(&self, template: &str) -> String {
+        let vars = self.to_gitlayer_vars();
+        vars.fill_template(template)
+    }
+
+    /// 生成 Shell 配置变量（用于模板填充）
+    pub fn to_shell_vars(&self) -> ConfigVars {
+        ConfigVars {
+            // SSH 监听地址
+            ssh_listen_addr: format!("{}:{}", self.server.ssh.host, self.server.ssh.port),
+            ssh_host_key_path: self.paths.ssh_host_key.clone(),
+            
+            // gRPC 地址
+            auth_grpc_address: self.internal.get_auth_grpc_address(),
+            gitlayer_address: self.internal.get_gitlayer_address(),
+            
+            // 内部 API 密钥
+            gitfox_shell_secret: self.secrets.internal.clone(),
+            
+            // 日志
+            rust_log: self.logging.level.clone(),
+            gitfox_debug: false,
+
+            ..Default::default()
+        }
+    }
+
+    /// 生成 Shell .env 配置内容（使用模板）
+    pub fn to_shell_env_template(&self, template: &str) -> String {
+        let vars = self.to_shell_vars();
+        vars.fill_template(template)
     }
 }
 
@@ -1413,14 +1669,45 @@ pub struct ConfigVars {
     pub services_workhorse: bool,
 
     // Registry
+    pub registry_enabled: bool,
     pub registry_domain: String,
+    pub registry_docker_enabled: bool,
+    pub registry_npm_enabled: bool,
     pub registry_storage_path: String,
+    pub registry_max_size: u64,
+    pub registry_jwt_secret: String,
 
     // Bundled 内置服务
     pub bundled_enabled: bool,
     pub bundled_postgresql_enabled: bool,
     pub bundled_redis_enabled: bool,
     pub bundled_nginx_enabled: bool,
+
+    // Workhorse 专用
+    pub listen_addr: String,
+    pub listen_port: u16,
+    pub backend_socket: String,
+    pub backend_url: String,
+    pub auth_grpc_address: String,
+    pub gitlayer_address: String,
+    pub enable_request_logging: bool,
+    pub enable_cors: bool,
+    pub websocket_timeout: u32,
+    pub static_cache_control: String,
+
+    // GitLayer 专用
+    pub gitlayer_listen_addr: String,
+    pub gitlayer_git_bin: String,
+    pub gitlayer_max_concurrent_ops: u32,
+    pub gitlayer_enable_cache: bool,
+    pub gitlayer_cache_ttl: u32,
+
+    // Shell 专用
+    pub ssh_listen_addr: String,
+    pub gitfox_debug: bool,
+    
+    // gRPC 监听地址（给后端用）
+    pub grpc_address: String,
 }
 
 impl ConfigVars {
@@ -1500,14 +1787,48 @@ impl ConfigVars {
         result = result.replace("{{SERVICES_WORKHORSE}}", &self.services_workhorse.to_string());
 
         // Registry
+        result = result.replace("{{REGISTRY_ENABLED}}", &self.registry_enabled.to_string());
         result = result.replace("{{REGISTRY_DOMAIN}}", &self.registry_domain);
+        result = result.replace("{{REGISTRY_DOCKER_ENABLED}}", &self.registry_docker_enabled.to_string());
+        result = result.replace("{{REGISTRY_NPM_ENABLED}}", &self.registry_npm_enabled.to_string());
         result = result.replace("{{REGISTRY_STORAGE_PATH}}", &self.registry_storage_path);
+        result = result.replace("{{REGISTRY_MAX_SIZE}}", &self.registry_max_size.to_string());
+        result = result.replace("{{REGISTRY_JWT_SECRET}}", &self.registry_jwt_secret);
 
         // Bundled 内置服务
         result = result.replace("{{BUNDLED_ENABLED}}", &self.bundled_enabled.to_string());
         result = result.replace("{{BUNDLED_POSTGRESQL_ENABLED}}", &self.bundled_postgresql_enabled.to_string());
         result = result.replace("{{BUNDLED_REDIS_ENABLED}}", &self.bundled_redis_enabled.to_string());
         result = result.replace("{{BUNDLED_NGINX_ENABLED}}", &self.bundled_nginx_enabled.to_string());
+
+        // Workhorse 专用
+        result = result.replace("{{LISTEN_ADDR}}", &self.listen_addr);
+        result = result.replace("{{LISTEN_PORT}}", &self.listen_port.to_string());
+        result = result.replace("{{BACKEND_SOCKET}}", &self.backend_socket);
+        result = result.replace("{{BACKEND_URL}}", &self.backend_url);
+        result = result.replace("{{AUTH_GRPC_ADDRESS}}", &self.auth_grpc_address);
+        result = result.replace("{{GITLAYER_ADDRESS}}", &self.gitlayer_address);
+        result = result.replace("{{SHELL_SECRET}}", &self.gitfox_shell_secret);
+        result = result.replace("{{FRONTEND_DIST_PATH}}", &self.frontend_path);
+        result = result.replace("{{WEBIDE_DIST_PATH}}", &self.webide_path);
+        result = result.replace("{{ENABLE_REQUEST_LOGGING}}", &self.enable_request_logging.to_string());
+        result = result.replace("{{ENABLE_CORS}}", &self.enable_cors.to_string());
+        result = result.replace("{{WEBSOCKET_TIMEOUT}}", &self.websocket_timeout.to_string());
+        result = result.replace("{{STATIC_CACHE_CONTROL}}", &self.static_cache_control);
+
+        // GitLayer 专用
+        result = result.replace("{{GITLAYER_LISTEN_ADDR}}", &self.gitlayer_listen_addr);
+        result = result.replace("{{GITLAYER_GIT_BIN}}", &self.gitlayer_git_bin);
+        result = result.replace("{{GITLAYER_MAX_CONCURRENT_OPS}}", &self.gitlayer_max_concurrent_ops.to_string());
+        result = result.replace("{{GITLAYER_ENABLE_CACHE}}", &self.gitlayer_enable_cache.to_string());
+        result = result.replace("{{GITLAYER_CACHE_TTL}}", &self.gitlayer_cache_ttl.to_string());
+
+        // Shell 专用
+        result = result.replace("{{SSH_LISTEN_ADDR}}", &self.ssh_listen_addr);
+        result = result.replace("{{GITFOX_DEBUG}}", &self.gitfox_debug.to_string());
+        
+        // gRPC 监听地址（后端/Shell共用）
+        result = result.replace("{{GRPC_ADDRESS}}", &self.grpc_address);
 
         result
     }
@@ -1604,14 +1925,19 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
 
     // 构建 Internal 配置
     let connection_type = get("SERVER_CONNECTION_TYPE", "tcp");
+    let host = get("INTERNAL_HOST", "127.0.0.1");
     let internal = if connection_type == "unix_socket" {
         InternalConfig {
+            host: host.clone(),
             backend_socket: Some(get("SERVER_SOCKET_PATH", "/tmp/gitfox-backend.sock")),
+            backend_url: env::var("BACKEND_URL").ok(),
             backend_port: 8081,
+            gitlayer_address: env::var("GITLAYER_ADDRESS").ok(),
             gitlayer_port: get_u16("GITLAYER_PORT", 50052),
+            auth_grpc_address: env::var("AUTH_GRPC_ADDRESS").ok(),
             auth_grpc_port: {
                 // 解析 GRPC_ADDRESS 获取端口
-                let grpc_addr = get("GRPC_ADDRESS", "[::1]:50051");
+                let grpc_addr = get("GRPC_ADDRESS", "127.0.0.1:50051");
                 grpc_addr
                     .rsplit(':')
                     .next()
@@ -1621,11 +1947,15 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
         }
     } else {
         InternalConfig {
+            host: host.clone(),
             backend_socket: None,
+            backend_url: env::var("BACKEND_URL").ok(),
             backend_port: get_u16("SERVER_PORT", 8081),
+            gitlayer_address: env::var("GITLAYER_ADDRESS").ok(),
             gitlayer_port: get_u16("GITLAYER_PORT", 50052),
+            auth_grpc_address: env::var("AUTH_GRPC_ADDRESS").ok(),
             auth_grpc_port: {
-                let grpc_addr = get("GRPC_ADDRESS", "[::1]:50051");
+                let grpc_addr = get("GRPC_ADDRESS", "127.0.0.1:50051");
                 grpc_addr
                     .rsplit(':')
                     .next()
@@ -1669,6 +1999,7 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
             webide: get("WEBIDE_PATH", "./webide/dist"),
             assets: get("ASSETS_PATH", "./assets"),
             ssh_host_key: get("SSH_HOST_KEY_PATH", "./data/ssh/host_key"),
+            shell_binary: get("SHELL_BINARY", ""),
         },
 
         admin: AdminConfig {
@@ -1749,7 +2080,6 @@ struct WorkhorseConfig {
     max_upload_size: Option<u64>,
     auth_grpc_address: Option<String>,
     gitlayer_address: Option<String>,
-    use_grpc_auth: Option<bool>,
 }
 
 /// 从 workhorse.toml 解析配置
@@ -1972,6 +2302,7 @@ mod tests {
                 jwt: "test_jwt_secret_at_least_32_characters_long".to_string(),
                 internal: "test_internal_secret_at_least_32_chars".to_string(),
             },
+            bundled: BundledConfig::default(),
             server: ServerConfig::default(),
             internal: InternalConfig::default(),
             paths: PathsConfig::default(),
@@ -1979,6 +2310,8 @@ mod tests {
             smtp: SmtpConfig::default(),
             oauth: OAuthConfig::default(),
             logging: LoggingConfig::default(),
+            registry: RegistryConfig::default(),
+            services: ServicesConfig::default(),
         };
 
         let warnings = config.validate().unwrap();
@@ -1997,6 +2330,7 @@ mod tests {
                 jwt: "test_jwt_secret_at_least_32_characters_long".to_string(),
                 internal: "test_internal_secret_at_least_32_chars".to_string(),
             },
+            bundled: BundledConfig::default(),
             server: ServerConfig {
                 http_port: 8080,
                 ..Default::default()
@@ -2010,6 +2344,8 @@ mod tests {
             smtp: SmtpConfig::default(),
             oauth: OAuthConfig::default(),
             logging: LoggingConfig::default(),
+            registry: RegistryConfig::default(),
+            services: ServicesConfig::default(),
         };
 
         let result = config.validate();

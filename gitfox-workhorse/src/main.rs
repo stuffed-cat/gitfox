@@ -6,6 +6,7 @@ mod http_client;
 mod lfs;
 mod proxy;
 mod registry;
+mod registry_client;
 mod static_files;
 
 use actix_cors::Cors;
@@ -73,6 +74,59 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("WebIDE dist: {:?}", config.webide_dist_path);
     tracing::info!("Assets path: {:?}", config.assets_path);
 
+    // 初始化 Auth gRPC 客户端（必需，用于 Git HTTP/LFS/Registry 权限验证）
+    // gRPC auth 强制启用，shell/workhorse 依赖此服务进行认证
+    let auth_client = {
+        let addr = config.auth_grpc_address.as_ref()
+            .ok_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Configuration error: auth_grpc_address is required. \
+                Git HTTP requires authentication service to function properly."
+            ))?;
+        
+        // 重试连接 Auth gRPC，最多重试 10 次，每次间隔递增
+        let mut retry_count = 0;
+        let max_retries = 10;
+        let mut last_error = None;
+        
+        loop {
+            match auth_client::AuthClient::connect(addr, config.shell_secret.clone()).await {
+                Ok(client) => {
+                    tracing::info!("Auth gRPC client connected to {}", addr);
+                    break client;
+                }
+                Err(e) => {
+                    retry_count += 1;
+                    last_error = Some(e.to_string());
+                    
+                    if retry_count >= max_retries {
+                        // 重试次数用尽，退出程序
+                        // 不应该在没有认证服务的情况下继续运行
+                        tracing::error!(
+                            "Failed to connect to Auth gRPC at {} after {} retries: {}",
+                            addr, max_retries, last_error.as_ref().unwrap()
+                        );
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionRefused,
+                            format!(
+                                "Cannot start workhorse: Auth gRPC service at {} is not available. \
+                                Make sure the main gitfox service is running.",
+                                addr
+                            )
+                        ));
+                    }
+                    
+                    let delay = std::time::Duration::from_secs(retry_count as u64);
+                    tracing::warn!(
+                        "Failed to connect to Auth gRPC at {} (attempt {}/{}): {}. Retrying in {:?}...",
+                        addr, retry_count, max_retries, e, delay
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    };
+
     let client_data = web::Data::new(backend_client);
     let config_data = web::Data::new(config.clone());
     let backend_url_data = web::Data::new(config.backend_url.clone());
@@ -84,7 +138,7 @@ async fn main() -> std::io::Result<()> {
     // 初始化 LFS 状态
     let lfs_state = if config.lfs_enabled {
         tracing::info!("LFS enabled, storage path: {:?}", config.lfs_storage_path);
-        let state = lfs::LfsState::new(std::sync::Arc::new(config.clone()));
+        let state = lfs::LfsState::new(std::sync::Arc::new(config.clone()), auth_client.clone());
         if let Err(e) = state.init().await {
             tracing::error!("Failed to initialize LFS storage: {}", e);
             std::process::exit(1);
@@ -118,6 +172,7 @@ async fn main() -> std::io::Result<()> {
             let state = registry::DockerRegistryState::new(
                 registry_config.clone(),
                 config.shell_secret.clone(),
+                config.backend_url.clone(),
             );
             if let Err(e) = state.init().await {
                 tracing::error!("Failed to initialize Docker Registry storage: {}", e);
@@ -139,6 +194,7 @@ async fn main() -> std::io::Result<()> {
                 registry_config.clone(),
                 config.shell_secret.clone(),
                 base_url,
+                config.backend_url.clone(),
             );
             if let Err(e) = state.init().await {
                 tracing::error!("Failed to initialize npm Registry storage: {}", e);
@@ -162,29 +218,6 @@ async fn main() -> std::io::Result<()> {
     let registry_max_upload_size = config.registry_max_size as usize;
 
     tracing::info!("Max upload size: {} bytes ({:.2} MB)", max_upload_size, max_upload_size as f64 / 1024.0 / 1024.0);
-
-    // 初始化 Auth gRPC 客户端（用于 Git HTTP 权限验证）
-    let auth_client = if config.use_grpc_auth {
-        if let Some(ref addr) = config.auth_grpc_address {
-            match auth_client::AuthClient::connect(addr, config.shell_secret.clone()).await {
-                Ok(client) => {
-                    tracing::info!("Auth gRPC client connected to {}", addr);
-                    Some(client)
-                }
-                Err(e) => {
-                    tracing::error!("Failed to connect to Auth gRPC at {}: {}", addr, e);
-                    tracing::warn!("Git HTTP authentication will be disabled");
-                    None
-                }
-            }
-        } else {
-            tracing::warn!("use_grpc_auth=true but auth_grpc_address not configured");
-            None
-        }
-    } else {
-        tracing::info!("gRPC auth disabled, Git HTTP will allow anonymous access only");
-        None
-    };
 
     // 启动 HTTP 服务器
     HttpServer::new(move || {

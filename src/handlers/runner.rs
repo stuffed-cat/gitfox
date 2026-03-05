@@ -777,6 +777,21 @@ async fn get_pending_job(pool: &PgPool, runner_id: i64, redis: &deadpool_redis::
             Ok((row.try_get("ref_name")?, row.try_get("commit_sha")?))
         })?;
 
+        // Get before_sha from commit's parent (first parent for merge commits)
+        let before_sha: String = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(
+                (SELECT parent_shas[1] FROM commits WHERE project_id = $1 AND sha = $2),
+                '0000000000000000000000000000000000000000'
+            )
+            "#
+        )
+        .bind(project_id)
+        .bind(&commit_sha)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_else(|_| "0000000000000000000000000000000000000000".to_string());
+
         // Merge user-defined variables with built-in CI environment variables
         let mut variables = config.variables.unwrap_or_default();
         inject_ci_variables(
@@ -814,7 +829,7 @@ async fn get_pending_job(pool: &PgPool, runner_id: i64, redis: &deadpool_redis::
             ),
             ref_name,
             commit_sha,
-            before_sha: String::new(), // TODO: Get from commit parent
+            before_sha,
         };
 
         Ok(Some(job))
@@ -1512,8 +1527,30 @@ pub async fn namespace_list_runners(
         }))),
     };
 
-    // TODO: 检查用户是否是组群成员（需要实现组群成员表）
-    // 现在暂时允许所有认证用户查看
+    // 检查用户是否是组群成员或组群所有者
+    let is_member = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM group_members gm
+            JOIN groups g ON gm.group_id = g.id
+            JOIN namespaces n ON g.namespace_id = n.id
+            WHERE n.id = $1 AND gm.user_id = $2
+        )
+        OR EXISTS(
+            SELECT 1 FROM namespaces WHERE id = $1 AND owner_id = $2
+        )
+        "#
+    )
+    .bind(namespace_id)
+    .bind(auth.user_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    if !is_member {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "You are not a member of this group"
+        })));
+    }
 
     let runners = sqlx::query_as::<_, RunnerInfo>(
         r#"

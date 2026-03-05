@@ -415,6 +415,8 @@ const forksCount = ref(0)
 // Fork divergence state
 const forkDivergence = ref<ForkDivergence | null>(null)
 const divergenceLoading = ref(false)
+const syncing = ref(false)
+const syncError = ref('')
 
 const showRefDropdown = ref(false)
 const showCodeDropdown = ref(false)
@@ -565,10 +567,40 @@ async function handleUpdate() {
   if (!props.project?.owner_name || !props.project?.name) return
   if (!props.project.forked_from_namespace || !props.project.forked_from_name) return
   
-  // In a real implementation, this would trigger a sync/update operation
-  // For now, just show a message
-  alert('更新功能将会从上游仓库拉取最新代码。此功能正在开发中。')
-  // TODO: Implement actual sync functionality
+  if (!confirm('确定要从上游仓库同步最新代码吗？这将会获取上游仓库的所有更新。')) {
+    return
+  }
+  
+  syncing.value = true
+  syncError.value = ''
+  
+  try {
+    const result = await apiClient.projects.syncFork({
+      namespace: props.project.owner_name,
+      project: props.project.name
+    })
+    
+    if (result.success) {
+      // 显示成功消息
+      const message = result.updated_refs > 0 
+        ? `同步成功！更新了 ${result.updated_refs} 个引用。` 
+        : '同步成功！仓库已是最新状态。'
+      alert(message)
+      
+      // 刷新分叉差异状态
+      await loadForkDivergence()
+      // 刷新分支列表
+      await loadBranches()
+    } else {
+      syncError.value = result.message || '同步失败'
+      alert(`同步失败: ${syncError.value}`)
+    }
+  } catch (err: any) {
+    syncError.value = err.response?.data?.message || err.message || '同步失败'
+    alert(`同步失败: ${syncError.value}`)
+  } finally {
+    syncing.value = false
+  }
 }
 
 async function copyUrl() {

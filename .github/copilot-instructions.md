@@ -7,7 +7,7 @@
   - 2. 代码质量和安全性同样重要，不能为了追求代码质量而牺牲安全性
   - 3. 为了部分安全性而牺牲代码质量的情况需要在代码中添加注释说明原因
   - 4. 为了速度牺牲代码质量的情况需要在代码中添加注释说明原因
-  
+  - 5. 必须完全完整实现功能, 不能有任何stub, hack, todo, 简化, 不完全实现
 ## 项目概述
 
 GitFox 是一个类似 GitLab 的 DevSecOps 平台，采用 **微服务架构**：
@@ -445,7 +445,7 @@ build:rust:
 **Proto 定义**: [gitlayer/proto/](gitlayer/proto/)
 
 **代码生成**: 在 `build.rs` 中使用 `tonic-build`:
-```rust
+```rust`
 // gitlayer/build.rs
 tonic_build::configure()
     .compile(&["proto/repository.proto"], &["proto/"])?;

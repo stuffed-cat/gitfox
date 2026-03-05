@@ -4,18 +4,18 @@
 //! They should be protected by a secret token and not exposed publicly.
 
 use actix_web::{web, HttpRequest, HttpResponse};
-use chrono::Utc;
 use sqlx::PgPool;
 use log::{debug, info, warn};
+use std::sync::Arc;
 
 use crate::config::Config;
 use crate::error::AppError;
 use crate::models::{
     AccessCheckRequest, AccessCheckResponse, CheckRefUpdateRequest, CheckRefUpdateResponse,
     FindKeyRequest, PostReceiveRequest, SshKey, SshKeyInternalInfo,
-    Pipeline, PipelineStatus, PipelineTriggerType,
+    PipelineTriggerType,
 };
-use crate::services::{GitService, CiConfigParser};
+use crate::services::CiService;
 
 /// Verify the internal API token
 fn verify_shell_token(req: &HttpRequest, config: &Config) -> Result<(), AppError> {
@@ -111,7 +111,7 @@ pub async fn check_allowed(
         SELECT p.id, p.visibility::text, p.owner_id
         FROM projects p
         JOIN users u ON p.owner_id = u.id
-        WHERE LOWER(u.username) = LOWER($1) AND LOWER(p.name) = LOWER($2)
+        WHERE u.username = $1 AND p.name = $2
         "#,
     )
     .bind(owner_name)
@@ -298,6 +298,11 @@ pub async fn find_key_by_fingerprint(
 
 /// Handle post-receive hook notification
 /// POST /api/internal/post-receive
+///
+/// 完整流程：
+/// 1. 解析 CI 配置文件
+/// 2. 创建 pipeline 和 jobs
+/// 3. 返回处理结果
 pub async fn post_receive(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -342,6 +347,12 @@ pub async fn post_receive(
 
     let user_id: i64 = body.user_id.parse().unwrap_or(0);
 
+    // 创建 CiService 实例
+    let ci_service = CiService::new(pool.get_ref().clone(), Arc::new(config.get_ref().clone()));
+
+    let mut pipelines_created = 0;
+    let mut total_jobs = 0;
+
     // Process each ref change
     for change in &body.changes {
         debug!(
@@ -355,24 +366,40 @@ pub async fn post_receive(
             continue;
         }
 
-        // Try to trigger CI/CD pipeline for any ref update (gitfox-shell sends short names like "master")
+        // 使用 CiService 触发 pipeline
         if project_id > 0 {
-            match try_trigger_pipeline(
-                pool.get_ref(),
-                config.get_ref(),
-                project_id,
-                user_id,
-                &change.ref_name,
-                &change.new_sha,
-            ).await {
-                Ok(_) => info!("Pipeline triggered for {} at {}", change.ref_name, change.new_sha),
-                Err(e) => warn!("Failed to trigger pipeline: {}", e),
+            match ci_service
+                .trigger_pipeline(
+                    project_id,
+                    user_id,
+                    &change.ref_name,
+                    &change.new_sha,
+                    PipelineTriggerType::Push,
+                )
+                .await
+            {
+                Ok(Some(result)) => {
+                    info!(
+                        "Pipeline {} created with {} jobs for {} at {}",
+                        result.pipeline_id, result.jobs_created, change.ref_name, change.new_sha
+                    );
+                    pipelines_created += 1;
+                    total_jobs += result.jobs_created;
+                }
+                Ok(None) => {
+                    debug!("No pipeline triggered for {}", change.ref_name);
+                }
+                Err(e) => {
+                    warn!("Failed to trigger pipeline: {}", e);
+                }
             }
         }
     }
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
-        "status": "ok"
+        "status": "ok",
+        "pipelines_created": pipelines_created,
+        "jobs_created": total_jobs
     })))
 }
 
@@ -479,216 +506,6 @@ pub async fn check_ref_update(
         allowed: true,
         message: None,
     }))
-}
-
-/// Try to trigger CI/CD pipeline for a push
-async fn try_trigger_pipeline(
-    pool: &PgPool,
-    config: &Config,
-    project_id: i64,
-    user_id: i64,
-    ref_name: &str,
-    commit_sha: &str,
-) -> Result<(), AppError> {
-    let now = Utc::now();
-    
-    // Get project info
-    let project = sqlx::query_as::<_, (String, String)>(
-        r#"
-        SELECT n.path, p.name
-        FROM projects p
-        JOIN namespaces n ON p.namespace_id = n.id
-        WHERE p.id = $1
-        "#
-    )
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await?;
-
-    let (namespace_path, project_name) = match project {
-        Some(p) => p,
-        None => {
-            warn!("Project {} not found", project_id);
-            return Ok(());
-        }
-    };
-
-    // Try to open repository and parse CI config
-    let repo = match GitService::open_repository(config, &namespace_path, &project_name) {
-        Ok(r) => r,
-        Err(e) => {
-            // Create failed pipeline with error message
-            let error_msg = format!("Failed to open repository: {}", e);
-            warn!("{}", error_msg);
-            
-            let pipeline = sqlx::query_as::<_, Pipeline>(
-                r#"
-                INSERT INTO pipelines
-                (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, error_message, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-                RETURNING *
-                "#
-            )
-            .bind(project_id)
-            .bind(ref_name)
-            .bind(commit_sha)
-            .bind(PipelineStatus::Failed)
-            .bind(PipelineTriggerType::Push)
-            .bind(user_id)
-            .bind(&error_msg)
-            .bind(now)
-            .fetch_one(pool)
-            .await?;
-            
-            info!("Created failed pipeline {} with error", pipeline.id);
-            return Ok(());
-        }
-    };
-
-    // Try to parse CI configuration
-    let ci_config = match CiConfigParser::parse_from_repo(&repo, commit_sha) {
-        Ok(config) => config,
-        Err(e) => {
-            // Create failed pipeline with error message
-            let error_msg = format!("CI configuration error: {}", e);
-            warn!("{}", error_msg);
-            
-            let pipeline = sqlx::query_as::<_, Pipeline>(
-                r#"
-                INSERT INTO pipelines
-                (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, error_message, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-                RETURNING *
-                "#
-            )
-            .bind(project_id)
-            .bind(ref_name)
-            .bind(commit_sha)
-            .bind(PipelineStatus::Failed)
-            .bind(PipelineTriggerType::Push)
-            .bind(user_id)
-            .bind(&error_msg)
-            .bind(now)
-            .fetch_one(pool)
-            .await?;
-            
-            info!("Created failed pipeline {} with CI config error", pipeline.id);
-            return Ok(());
-        }
-    };
-
-    // Check if there are any jobs
-    if ci_config.jobs.is_empty() {
-        debug!("No jobs defined in CI config");
-        
-        // Create skipped pipeline
-        let pipeline = sqlx::query_as::<_, Pipeline>(
-            r#"
-            INSERT INTO pipelines
-            (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-            RETURNING *
-            "#
-        )
-        .bind(project_id)
-        .bind(ref_name)
-        .bind(commit_sha)
-        .bind(PipelineStatus::Skipped)
-        .bind(PipelineTriggerType::Push)
-        .bind(user_id)
-        .bind(now)
-        .fetch_one(pool)
-        .await?;
-        
-        info!("Created skipped pipeline {} (no jobs defined)", pipeline.id);
-        return Ok(());
-    }
-
-    // Create pipeline
-    let pipeline = sqlx::query_as::<_, Pipeline>(
-        r#"
-        INSERT INTO pipelines
-        (project_id, ref_name, commit_sha, status, trigger_type, triggered_by, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-        RETURNING *
-        "#
-    )
-    .bind(project_id)
-    .bind(ref_name)
-    .bind(commit_sha)
-    .bind(PipelineStatus::Pending)
-    .bind(PipelineTriggerType::Push)
-    .bind(user_id)
-    .bind(now)
-    .fetch_one(pool)
-    .await?;
-
-    info!("Created pipeline {} for project {} on {}", pipeline.id, project_id, ref_name);
-
-    // Create jobs for this pipeline
-    let mut jobs_created = 0;
-    for (job_name, job_def) in &ci_config.jobs {
-        // Check if job should run on this ref
-        if !CiConfigParser::should_run_job(job_def, ref_name) {
-            debug!("Job {} skipped due to only/except rules", job_name);
-            continue;
-        }
-
-        // Build job config JSON
-        let job_config = serde_json::json!({
-            "script": job_def.script,
-            "before_script": job_def.before_script.as_ref().or(ci_config.before_script.as_ref()),
-            "after_script": job_def.after_script.as_ref().or(ci_config.after_script.as_ref()),
-            "variables": job_def.variables.as_ref().or(ci_config.variables.as_ref()),
-            "artifacts": job_def.artifacts,
-            "cache": job_def.cache,
-            "retry": job_def.retry,
-            "timeout": job_def.timeout,
-            "tags": job_def.tags,
-            "needs": job_def.needs,
-        });
-
-        // Insert job into database
-        sqlx::query(
-            r#"
-            INSERT INTO jobs
-            (pipeline_id, project_id, name, stage, status, config, allow_failure, when_condition, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $8)
-            "#
-        )
-        .bind(pipeline.id)
-        .bind(project_id)
-        .bind(job_name)
-        .bind(&job_def.stage)
-        .bind(&job_config)
-        .bind(job_def.allow_failure)
-        .bind(&job_def.when)
-        .bind(now)
-        .execute(pool)
-        .await?;
-
-        jobs_created += 1;
-    }
-
-    info!("Created {} jobs for pipeline {}", jobs_created, pipeline.id);
-
-    // If no jobs were created, mark pipeline as skipped
-    if jobs_created == 0 {
-        sqlx::query(
-            r#"
-            UPDATE pipelines
-            SET status = 'skipped', updated_at = NOW()
-            WHERE id = $1
-            "#
-        )
-        .bind(pipeline.id)
-        .execute(pool)
-        .await?;
-        
-        debug!("Pipeline {} marked as skipped (no matching jobs)", pipeline.id);
-    }
-
-    Ok(())
 }
 
 /// Configure internal API routes

@@ -393,4 +393,71 @@ impl OperationOps {
         
         Self::create_commit(repo, branch, author, committer, message, &actions, false)
     }
+    
+    /// Squash multiple commits into one
+    /// 
+    /// Takes all commits from start_commit to end_commit (inclusive) and squashes them
+    /// into a single commit. The resulting commit will have:
+    /// - The tree state from end_commit
+    /// - The parent of start_commit as its parent
+    /// - The provided message and author
+    pub fn squash(
+        repo: &Repository,
+        branch: &str,
+        start_commit: &str,
+        end_commit: &str,
+        author: &SignatureInfo,
+        message: &str,
+    ) -> Result<String> {
+        info!("Squashing commits from {} to {} on branch {}", start_commit, end_commit, branch);
+        
+        // 解析开始和结束提交
+        let start_oid = Oid::from_str(start_commit)
+            .or_else(|_| repo.revparse_single(start_commit).map(|o| o.id()))
+            .map_err(|_| GitLayerError::InvalidRevision(start_commit.to_string()))?;
+        let end_oid = Oid::from_str(end_commit)
+            .or_else(|_| repo.revparse_single(end_commit).map(|o| o.id()))
+            .map_err(|_| GitLayerError::InvalidRevision(end_commit.to_string()))?;
+        
+        let start_commit_obj = repo.find_commit(start_oid)?;
+        let end_commit_obj = repo.find_commit(end_oid)?;
+        
+        // 验证 end_commit 是 start_commit 的后代
+        // 通过检查 start_commit 是否是 end_commit 的祖先
+        if !repo.graph_descendant_of(end_oid, start_oid)? && start_oid != end_oid {
+            return Err(GitLayerError::InvalidArgument(
+                format!("end_commit {} is not a descendant of start_commit {}", end_commit, start_commit)
+            ));
+        }
+        
+        // 获取 start_commit 的父提交作为新提交的父提交
+        let parent = if start_commit_obj.parent_count() > 0 {
+            Some(start_commit_obj.parent(0)?)
+        } else {
+            // start_commit 是根提交，squash 后的提交也将是根提交
+            None
+        };
+        
+        // 获取 end_commit 的 tree（最终状态）
+        let tree = end_commit_obj.tree()?;
+        
+        // 创建签名
+        let sig = GitSignature::now(&author.name, &author.email)?;
+        
+        // 创建 squash 后的新提交
+        let branch_ref = format!("refs/heads/{}", branch);
+        let parents: Vec<&git2::Commit> = parent.as_ref().map(|p| vec![p]).unwrap_or_default();
+        
+        let new_commit_id = repo.commit(
+            Some(&branch_ref),
+            &sig,
+            &sig,
+            message,
+            &tree,
+            &parents,
+        )?;
+        
+        info!("Squash complete, new commit: {}", new_commit_id);
+        Ok(new_commit_id.to_string())
+    }
 }

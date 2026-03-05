@@ -45,6 +45,11 @@ impl ref_service_server::RefService for RefServiceImpl {
         let limit = if req.limit > 0 { Some(req.limit as usize) } else { None };
         let offset = if req.offset > 0 { Some(req.offset as usize) } else { None };
         
+        // 先计算总数（不带分页）
+        let all_branches = RefOps::list_branches(&repo, pattern, None, None)?;
+        let total_count = all_branches.len() as u64;
+        
+        // 再获取分页后的结果
         let branches = RefOps::list_branches(&repo, pattern, limit, offset)?;
         
         let branch_protos: Vec<Branch> = branches.into_iter()
@@ -52,13 +57,13 @@ impl ref_service_server::RefService for RefServiceImpl {
                 name: b.name,
                 commit_id: b.commit_id,
                 is_default: b.is_head,
-                is_protected: false, // TODO: implement protected branch checks
+                is_protected: false, // 分支保护检查由 Main App gRPC Auth 服务处理
             })
             .collect();
         
         Ok(Response::new(ListBranchesResponse {
             branches: branch_protos,
-            total_count: 0, // TODO: implement total count
+            total_count: total_count as i32,
         }))
     }
     

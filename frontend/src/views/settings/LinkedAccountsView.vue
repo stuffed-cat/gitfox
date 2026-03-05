@@ -112,7 +112,7 @@ import type { OAuthIdentity, OAuthProviderInfo } from '@/types'
 const loading = ref(true)
 const identities = ref<OAuthIdentity[]>([])
 const providers = ref<OAuthProviderInfo[]>([])
-const hasPassword = ref(true) // TODO: 从用户信息获取
+const hasPassword = ref(true)
 const unlinkingIdentity = ref<OAuthIdentity | null>(null)
 const unlinking = ref(false)
 
@@ -128,12 +128,14 @@ const availableProviders = computed(() =>
 
 onMounted(async () => {
   try {
-    const [identitiesData, providersData] = await Promise.all([
+    const [identitiesData, providersData, accountStatus] = await Promise.all([
       api.identities.list(),
-      api.oauth.getProviders()
+      api.oauth.getProviders(),
+      api.identities.getAccountStatus()
     ])
     identities.value = identitiesData
     providers.value = providersData
+    hasPassword.value = accountStatus.has_password
   } catch (error) {
     console.error('Failed to load data:', error)
   } finally {

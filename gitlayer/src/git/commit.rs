@@ -13,6 +13,15 @@ pub struct SignatureInfo {
     pub timezone: String,
 }
 
+/// GPG signature information from a commit
+#[derive(Debug, Clone, Default)]
+pub struct GpgSignatureInfo {
+    /// The raw signature (ASCII armored)
+    pub signature: String,
+    /// The signed data (commit header without signature)
+    pub signed_data: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct CommitInfo {
     pub id: String,
@@ -22,6 +31,8 @@ pub struct CommitInfo {
     pub committer: SignatureInfo,
     pub message: String,
     pub short_message: String,
+    /// GPG signature if present
+    pub gpg_signature: Option<GpgSignatureInfo>,
 }
 
 pub struct CommitOps;
@@ -39,7 +50,7 @@ impl CommitOps {
             Err(_) => return Ok(None),
         };
         
-        Ok(Some(Self::commit_to_info(&commit)))
+        Ok(Some(Self::commit_to_info(repo, &commit)))
     }
     
     /// List commits with various filters
@@ -109,7 +120,7 @@ impl CommitOps {
                 break;
             }
             
-            commits.push(Self::commit_to_info(&c));
+            commits.push(Self::commit_to_info(repo, &c));
             collected += 1;
         }
         
@@ -213,7 +224,7 @@ impl CommitOps {
             
             let oid = oid_result?;
             let c = repo.find_commit(oid)?;
-            commits.push(Self::commit_to_info(&c));
+            commits.push(Self::commit_to_info(repo, &c));
         }
         
         Ok(commits)
@@ -251,9 +262,12 @@ impl CommitOps {
     }
     
     /// Convert git2 commit to CommitInfo
-    fn commit_to_info(commit: &git2::Commit) -> CommitInfo {
+    fn commit_to_info(repo: &Repository, commit: &git2::Commit) -> CommitInfo {
         let message = commit.message().unwrap_or("").to_string();
         let short_message = commit.summary().unwrap_or("").to_string();
+        
+        // Extract GPG signature if present
+        let gpg_signature = Self::extract_gpg_signature(repo, commit);
         
         CommitInfo {
             id: commit.id().to_string(),
@@ -275,6 +289,131 @@ impl CommitOps {
             },
             message,
             short_message,
+            gpg_signature,
         }
+    }
+    
+    /// Extract GPG signature from a commit
+    fn extract_gpg_signature(repo: &Repository, commit: &git2::Commit) -> Option<GpgSignatureInfo> {
+        // Use git2's extract_signature method
+        // Note: git2 returns (signature, signed_data) as Buf types
+        match repo.extract_signature(&commit.id(), Some("gpgsig")) {
+            Ok((signature, signed_data)) => {
+                let sig_str = String::from_utf8_lossy(signature.as_ref()).to_string();
+                let data_str = String::from_utf8_lossy(signed_data.as_ref()).to_string();
+                
+                if !sig_str.is_empty() {
+                    Some(GpgSignatureInfo {
+                        signature: sig_str,
+                        signed_data: data_str,
+                    })
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
+    
+    /// 搜索提交
+    /// 
+    /// search_in 可以是 "message"、"author" 或 "all"
+    pub fn search_commits(
+        repo: &Repository,
+        query: &str,
+        search_in: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<CommitInfo>> {
+        debug!("Searching commits for '{}' in {}", query, search_in);
+        
+        let query_lower = query.to_lowercase();
+        
+        // 从所有分支收集提交
+        let mut all_oids = std::collections::HashSet::new();
+        for branch_result in repo.branches(Some(git2::BranchType::Local))? {
+            let (branch, _) = branch_result?;
+            if let Ok(reference) = branch.into_reference().resolve() {
+                if let Some(oid) = reference.target() {
+                    all_oids.insert(oid);
+                }
+            }
+        }
+        
+        // 如果没有分支，尝试 HEAD
+        if all_oids.is_empty() {
+            if let Ok(head) = repo.head() {
+                if let Some(oid) = head.target() {
+                    all_oids.insert(oid);
+                }
+            }
+        }
+        
+        let mut revwalk = repo.revwalk()?;
+        revwalk.set_sorting(Sort::TIME)?;
+        for oid in all_oids {
+            let _ = revwalk.push(oid);
+        }
+        
+        let mut results = Vec::new();
+        let mut skipped = 0;
+        let mut visited = std::collections::HashSet::new();
+        
+        for oid_result in revwalk {
+            let oid = oid_result?;
+            
+            // 去重
+            if visited.contains(&oid) {
+                continue;
+            }
+            visited.insert(oid);
+            
+            let commit = repo.find_commit(oid)?;
+            
+            // 根据 search_in 进行匹配
+            let matches = match search_in {
+                "message" => {
+                    let msg = commit.message().unwrap_or("").to_lowercase();
+                    msg.contains(&query_lower)
+                }
+                "author" => {
+                    let author_name = commit.author().name().unwrap_or("").to_lowercase();
+                    let author_email = commit.author().email().unwrap_or("").to_lowercase();
+                    author_name.contains(&query_lower) || author_email.contains(&query_lower)
+                }
+                _ => {
+                    // "all" 或其他 - 搜索所有字段
+                    let msg = commit.message().unwrap_or("").to_lowercase();
+                    let author_name = commit.author().name().unwrap_or("").to_lowercase();
+                    let author_email = commit.author().email().unwrap_or("").to_lowercase();
+                    let committer_name = commit.committer().name().unwrap_or("").to_lowercase();
+                    let committer_email = commit.committer().email().unwrap_or("").to_lowercase();
+                    let commit_id = oid.to_string().to_lowercase();
+                    
+                    msg.contains(&query_lower) 
+                        || author_name.contains(&query_lower) 
+                        || author_email.contains(&query_lower)
+                        || committer_name.contains(&query_lower)
+                        || committer_email.contains(&query_lower)
+                        || commit_id.starts_with(&query_lower)
+                }
+            };
+            
+            if matches {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                
+                if results.len() >= limit {
+                    break;
+                }
+                
+                results.push(Self::commit_to_info(repo, &commit));
+            }
+        }
+        
+        debug!("Found {} commits matching '{}'", results.len(), query);
+        Ok(results)
     }
 }

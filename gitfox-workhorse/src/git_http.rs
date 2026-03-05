@@ -10,7 +10,9 @@
 
 use actix_web::{web, Error, HttpRequest, HttpResponse};
 use bytes::{Bytes, BytesMut};
+use flate2::write::GzDecoder;
 use futures::stream::StreamExt;
+use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -54,6 +56,11 @@ fn extract_auth(req: &HttpRequest) -> AuthType {
         if let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, basic) {
             if let Ok(credentials) = String::from_utf8(decoded) {
                 if let Some((username, password)) = credentials.split_once(':') {
+                    // 如果用户名和密码都为空，视为无认证（匿名访问）
+                    // Git 客户端在用户按回车跳过时会发送空凭据
+                    if username.is_empty() && password.is_empty() {
+                        return AuthType::None;
+                    }
                     return AuthType::Basic {
                         username: username.to_string(),
                         password: password.to_string(),
@@ -76,15 +83,7 @@ async fn verify_access(
     project: &str,
     action: &str,
 ) -> Result<(i64, String, bool), HttpResponse> {
-    let auth_client = match &state.auth_client {
-        Some(c) => c.clone(),
-        None => {
-            warn!("Auth client not configured, allowing anonymous access");
-            return Ok((0, "anonymous".to_string(), false));
-        }
-    };
-
-    let mut auth_client = auth_client;
+    let mut auth_client = state.auth_client.clone();
     let repo_path = build_repo_relative_path(namespace, project);
     let auth = extract_auth(req);
 
@@ -131,12 +130,12 @@ async fn verify_access(
 /// Git HTTP handler 状态
 pub struct GitHttpState {
     pub config: Arc<Config>,
-    pub auth_client: Option<AuthClient>,
+    pub auth_client: AuthClient,
     channel: tokio::sync::RwLock<Option<Channel>>,
 }
 
 impl GitHttpState {
-    pub fn new(config: Arc<Config>, auth_client: Option<AuthClient>) -> Self {
+    pub fn new(config: Arc<Config>, auth_client: AuthClient) -> Self {
         Self {
             config,
             auth_client,
@@ -316,42 +315,88 @@ pub async fn handle_upload_pack(
         relative_path: repo_path,
     };
 
-    // 创建请求流（流式读取 HTTP body）
+    // 检查 Content-Encoding 是否为 gzip
+    let is_gzip = req
+        .headers()
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_lowercase().contains("gzip"))
+        .unwrap_or(false);
+
+    // 创建请求流
     let (tx, rx) = mpsc::channel::<UploadPackRequest>(16);
-    
-    // 首次发送包含 repository 信息
-    let first_msg = UploadPackRequest {
-        repository: Some(repository.clone()),
-        data: Vec::new(),
-    };
-    
-    // 启动后台任务：从 HTTP payload 流式读取并发送到 gRPC
-    // 使用 actix_web::rt::spawn 因为 Payload 不是 Send
+
+    // 启动后台任务：流式读取 HTTP payload，流式解压 gzip（如果需要），流式发送到 gRPC
     let payload_task = actix_web::rt::spawn(async move {
-        // 先发送首条消息
-        if tx.send(first_msg).await.is_err() {
-            return;
-        }
+        let mut is_first_msg = true;  // 是否是发送给 gRPC 的第一条消息
+        let mut gz_initialized = false;  // gzip 检测是否已完成
+        let mut detected_gzip = false;
         
-        // 流式读取 HTTP body
+        // gzip 解压器，使用 write 模式实现流式解压
+        // 每次 write 压缩数据，底层 Vec 会收到解压后的数据
+        let mut gz_decoder: Option<GzDecoder<Vec<u8>>> = None;
+
         while let Some(chunk_result) = payload.next().await {
             match chunk_result {
                 Ok(chunk) => {
-                    let msg = UploadPackRequest {
-                        repository: None, // 后续消息不需要重复 repository
-                        data: chunk.to_vec(),
+                    // gzip 检测只做一次（在收到第一个 chunk 时）
+                    if !gz_initialized {
+                        detected_gzip = is_gzip || (chunk.len() >= 2 && chunk[0] == 0x1f && chunk[1] == 0x8b);
+                        if detected_gzip {
+                            gz_decoder = Some(GzDecoder::new(Vec::new()));
+                        }
+                        gz_initialized = true;
+                    }
+                    
+                    let data_to_send = if detected_gzip {
+                        // 流式解压：写入压缩数据，取出解压后的数据
+                        let decoder = gz_decoder.as_mut().unwrap();
+                        if decoder.write_all(&chunk).is_err() {
+                            error!("Gzip decompression error");
+                            break;
+                        }
+                        // 取出已解压的数据
+                        let decompressed = decoder.get_mut();
+                        if decompressed.is_empty() {
+                            // gzip 还没解压出数据，继续读取更多压缩数据
+                            continue;
+                        }
+                        let data = std::mem::take(decompressed);
+                        data
+                    } else {
+                        chunk.to_vec()
                     };
-                    if tx.send(msg).await.is_err() {
-                        break;
+
+                    if !data_to_send.is_empty() {
+                        let msg = UploadPackRequest {
+                            repository: if is_first_msg { Some(repository.clone()) } else { None },
+                            data: data_to_send,
+                        };
+                        is_first_msg = false;
+                        if tx.send(msg).await.is_err() {
+                            break;
+                        }
                     }
                 }
                 Err(e) => {
-                    // EOF 错误是正常的流结束，不需要记录
                     let error_msg = e.to_string();
                     if !error_msg.contains("EOF") && !error_msg.contains("Connection reset") {
                         error!("Error reading HTTP payload: {}", e);
                     }
                     break;
+                }
+            }
+        }
+
+        // 完成 gzip 解压，获取剩余数据
+        if let Some(decoder) = gz_decoder {
+            if let Ok(remaining) = decoder.finish() {
+                if !remaining.is_empty() {
+                    let msg = UploadPackRequest {
+                        repository: if is_first_msg { Some(repository.clone()) } else { None },
+                        data: remaining,
+                    };
+                    let _ = tx.send(msg).await;
                 }
             }
         }

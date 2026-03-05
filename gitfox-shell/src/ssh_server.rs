@@ -566,9 +566,47 @@ async fn execute_gitlayer_streaming(
             }
         }
         GitAction::UploadArchive => {
-            // Upload-archive via GitLayer
-            // TODO: Implement dedicated UploadArchive in GitLayer if needed
-            return Err(ShellError::GitExecution("git-upload-archive via GitLayer not yet implemented".to_string()));
+            // git-upload-archive generates an archive of a repository via GitLayer's SshUploadArchive
+            // Create stdin stream from SSH channel
+            let (stdin_tx, stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+            
+            // Create stream from receiver
+            let stdin_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(stdin_rx);
+            
+            let mut archive_stream = client.ssh_upload_archive(
+                repo_path,
+                HashMap::new(), // env vars
+                stdin_stream,
+            ).await
+                .map_err(|e| ShellError::GitExecution(format!("Failed to start upload-archive: {}", e)))?;
+            
+            // Drop sender to signal EOF (no stdin needed for archive)
+            drop(stdin_tx);
+            
+            while let Some(result) = archive_stream.next().await {
+                match result {
+                    Ok(output) => {
+                        if !output.stdout.is_empty() {
+                            if let Err(e) = handle.data(channel, CryptoVec::from_slice(&output.stdout)).await {
+                                debug!("Failed to send archive data: {:?}", e);
+                                break;
+                            }
+                        }
+                        if !output.stderr.is_empty() {
+                            if let Err(e) = handle.extended_data(channel, 1, CryptoVec::from_slice(&output.stderr)).await {
+                                debug!("Failed to send stderr: {:?}", e);
+                            }
+                        }
+                        if output.exit_code != 0 {
+                            exit_code = output.exit_code as u32;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Archive stream error: {}", e);
+                        return Err(ShellError::GitExecution(format!("Archive error: {}", e)));
+                    }
+                }
+            }
         }
         GitAction::LfsAuthenticate => {
             // LFS authenticate is handled separately in command.rs

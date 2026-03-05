@@ -456,6 +456,30 @@ fn copy_templates(workspace: &Path, output_dir: &Path) -> Result<()> {
         }
     }
     
+    // 复制 gitlayer/.env.example
+    let gitlayer_env_example = workspace.join("gitlayer").join(".env.example");
+    if gitlayer_env_example.exists() {
+        let dst = output_dir.join("gitlayer.env.template");
+        if smart_copy_file(&gitlayer_env_example, &dst)? {
+            debug!("Copied gitlayer/.env.example → gitlayer.env.template");
+            copied += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+    
+    // 复制 gitfox-shell/.env.example
+    let shell_env_example = workspace.join("gitfox-shell").join(".env.example");
+    if shell_env_example.exists() {
+        let dst = output_dir.join("shell.env.template");
+        if smart_copy_file(&shell_env_example, &dst)? {
+            debug!("Copied gitfox-shell/.env.example → shell.env.template");
+            copied += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+    
     // 复制 config.example.toml
     let workhorse_config = workspace.join("gitfox-workhorse").join("config.example.toml");
     if workhorse_config.exists() {

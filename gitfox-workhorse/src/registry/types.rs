@@ -113,6 +113,14 @@ impl DockerError {
     pub fn unsupported() -> Self {
         Self::new("UNSUPPORTED", "the operation is unsupported")
     }
+    
+    pub fn internal_error(reason: &str) -> Self {
+        Self::with_detail(
+            "INTERNAL_ERROR",
+            "internal server error",
+            serde_json::json!({ "reason": reason }),
+        )
+    }
 }
 
 /// Docker Manifest (V2 Schema 2)
@@ -213,6 +221,10 @@ impl NpmError {
     
     pub fn bad_request(reason: &str) -> Self {
         Self::new("bad_request", reason)
+    }
+    
+    pub fn internal_error(reason: &str) -> Self {
+        Self::new("internal_error", reason)
     }
 }
 

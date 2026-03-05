@@ -1,4 +1,4 @@
-listen_addr = "0.0.0.0"
+listen_addr = "{{LISTEN_ADDR}}"
 listen_port = {{LISTEN_PORT}}
 
 # 后端服务器地址（支持两种方式）
@@ -8,16 +8,17 @@ backend_socket = "{{BACKEND_SOCKET}}"
 backend_url = "{{BACKEND_URL}}"
 
 # ============================================
-# gRPC 服务配置
+# gRPC 服务配置 (必需)
 # ============================================
 # Auth gRPC 服务地址（主应用提供的认证服务）
-# auth_grpc_address = "http://[::1]:50051"
+# shell/workhorse 依赖此服务进行认证，必须配置
+auth_grpc_address = "{{AUTH_GRPC_ADDRESS}}"
 
 # GitLayer gRPC 服务地址（Git 操作服务，必需）
-# gitlayer_address = "http://[::1]:50052"
+gitlayer_address = "{{GITLAYER_ADDRESS}}"
 
-# 是否使用 gRPC 进行权限认证（推荐启用）
-# use_grpc_auth = true
+# 内部服务认证密钥
+shell_secret = "{{SHELL_SECRET}}"
 
 # 静态文件路径
 frontend_dist_path = "{{FRONTEND_DIST_PATH}}"
@@ -25,10 +26,10 @@ webide_dist_path = "{{WEBIDE_DIST_PATH}}"
 assets_path = "{{ASSETS_PATH}}"
 
 # 启用请求日志
-enable_request_logging = true
+enable_request_logging = {{ENABLE_REQUEST_LOGGING}}
 
 # 启用 CORS
-enable_cors = true
+enable_cors = {{ENABLE_CORS}}
 
 # 最大上传文件大小
 # Git push 操作可能需要较大的限制，建议至少 500MB (524288000) 或 1GB (1073741824)
@@ -36,10 +37,10 @@ enable_cors = true
 max_upload_size = {{MAX_UPLOAD_SIZE}}
 
 # WebSocket 超时时间 (3600秒 = 1小时)
-websocket_timeout = 3600
+websocket_timeout = {{WEBSOCKET_TIMEOUT}}
 
 # 静态文件缓存控制头
-static_cache_control = "public, max-age=31536000, immutable"
+static_cache_control = "{{STATIC_CACHE_CONTROL}}"
 
 # ============================================
 # Package Registry 配置
@@ -47,20 +48,23 @@ static_cache_control = "public, max-age=31536000, immutable"
 # 类似 GitLab Package Registry，支持 Docker 和 npm
 
 # 是否启用 Package Registry
-registry_enabled = false
+registry_enabled = {{REGISTRY_ENABLED}}
 
 # Registry 独立域名（如 registry.gitfox.studio）
 # 为空则使用主域名的 /v2/ 和 /npm/ 路径
-# registry_domain = "registry.gitfox.studio"
+registry_domain = "{{REGISTRY_DOMAIN}}"
 
 # 是否启用 Docker Registry
-registry_docker_enabled = true
+registry_docker_enabled = {{REGISTRY_DOCKER_ENABLED}}
 
 # 是否启用 npm Registry  
-registry_npm_enabled = true
+registry_npm_enabled = {{REGISTRY_NPM_ENABLED}}
 
 # Registry 存储路径
 registry_storage_path = "{{REGISTRY_STORAGE_PATH}}"
 
 # 最大包文件大小 (bytes)，默认 512MB
-registry_max_size = 536870912
+registry_max_size = {{REGISTRY_MAX_SIZE}}
+
+# Registry JWT 密钥
+registry_jwt_secret = "{{REGISTRY_JWT_SECRET}}"

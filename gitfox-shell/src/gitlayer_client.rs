@@ -211,6 +211,72 @@ impl GitLayerClient {
         
         Ok(output_stream)
     }
+    
+    /// Execute SSH upload-archive (git archive --remote)
+    pub async fn ssh_upload_archive(
+        &self,
+        repo_path: &str,
+        env_vars: HashMap<String, String>,
+        stdin_stream: impl Stream<Item = Vec<u8>> + Send + 'static,
+    ) -> Result<impl Stream<Item = Result<SshPackOutput, ShellError>>, ShellError> {
+        let mut client = SshServiceClient::new(self.channel.clone());
+        
+        let repository = Repository {
+            storage_path: String::new(),
+            relative_path: repo_path.to_string(),
+        };
+        
+        let repo_clone = repository.clone();
+        let env_clone = env_vars.clone();
+        
+        let request_stream = async_stream::stream! {
+            let mut first = true;
+            
+            tokio::pin!(stdin_stream);
+            
+            while let Some(data) = stdin_stream.next().await {
+                if first {
+                    yield SshPackRequest {
+                        repository: Some(repo_clone.clone()),
+                        stdin: data,
+                        env_vars: env_clone.clone(),
+                    };
+                    first = false;
+                } else {
+                    yield SshPackRequest {
+                        repository: None,
+                        stdin: data,
+                        env_vars: HashMap::new(),
+                    };
+                }
+            }
+            
+            if first {
+                yield SshPackRequest {
+                    repository: Some(repo_clone.clone()),
+                    stdin: Vec::new(),
+                    env_vars: env_clone.clone(),
+                };
+            }
+        };
+        
+        let response = client
+            .ssh_upload_archive(request_stream)
+            .await
+            .map_err(|e| ShellError::GitExecution(format!("upload-archive failed: {}", e)))?;
+        
+        let output_stream = response.into_inner().map(|result| {
+            result
+                .map(|r| SshPackOutput {
+                    stdout: r.stdout,
+                    stderr: r.stderr,
+                    exit_code: r.exit_code,
+                })
+                .map_err(|e| ShellError::GitExecution(format!("Stream error: {}", e)))
+        });
+        
+        Ok(output_stream)
+    }
 }
 
 /// Output from SSH pack operations

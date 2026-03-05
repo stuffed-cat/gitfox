@@ -36,6 +36,9 @@ service RepositoryService {
     
     // Get Git config from repository
     rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+    
+    // Fetch from remote repository (for fork sync)
+    rpc FetchFromRemote(FetchFromRemoteRequest) returns (FetchFromRemoteResponse);
 }
 
 message Repository {
@@ -152,4 +155,23 @@ message GetConfigRequest {
 message GetConfigResponse {
     string value = 1;
     bool found = 2;
+}
+
+message FetchFromRemoteRequest {
+    Repository repository = 1;
+    // Path to the remote repository (e.g., /data/repos/upstream/project.git)
+    string remote_path = 2;
+    // Remote name to use (default: upstream)
+    string remote_name = 3;
+    // Branches to fetch (empty = all branches)
+    repeated string branches = 4;
+    // Whether to prune deleted remote branches
+    bool prune = 5;
+}
+
+message FetchFromRemoteResponse {
+    bool success = 1;
+    string message = 2;
+    // Number of updated refs
+    uint32 updated_refs = 3;
 }

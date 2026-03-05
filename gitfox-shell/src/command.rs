@@ -265,8 +265,35 @@ impl GitCommand {
                 }
             }
             GitAction::UploadArchive => {
-                // TODO: Implement via GitLayer
-                return Err(ShellError::GitExecution("upload-archive via GitLayer not implemented".to_string()));
+                // git-upload-archive generates an archive of a repository
+                // Use GitLayer's SshUploadArchive RPC (same protocol as upload-pack/receive-pack)
+                use tokio_stream::StreamExt;
+                
+                // Create stdin stream from async stdin
+                let stdin_stream = crate::gitlayer_client::stdin_stream();
+                
+                let mut archive_stream = client.ssh_upload_archive(
+                    &self.repo_path,
+                    env_vars.clone(),
+                    stdin_stream,
+                ).await?;
+                
+                // Stream archive data to stdout
+                while let Some(result) = archive_stream.next().await {
+                    let output = result?;
+                    if !output.stdout.is_empty() {
+                        stdout.write_all(&output.stdout).await
+                            .map_err(|e| ShellError::GitExecution(format!("Failed to write archive: {}", e)))?;
+                    }
+                    if !output.stderr.is_empty() {
+                        stderr.write_all(&output.stderr).await
+                            .map_err(|e| ShellError::GitExecution(format!("Failed to write stderr: {}", e)))?;
+                    }
+                    if output.exit_code != 0 {
+                        return Err(ShellError::GitExecution(format!("upload-archive exited with code {}", output.exit_code)));
+                    }
+                }
+                stdout.flush().await.ok();
             }
             GitAction::LfsAuthenticate => {
                 unreachable!("LFS authenticate handled separately")

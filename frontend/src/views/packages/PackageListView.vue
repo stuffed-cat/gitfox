@@ -1,49 +1,56 @@
 <template>
-  <div class="package-list-view">
-    <div class="page-header">
-      <h1>软件包仓库</h1>
-      <p class="subtitle">管理项目的 Docker 镜像和 npm 包</p>
-    </div>
-
-    <!-- 类型切换 -->
-    <div class="package-tabs">
-      <button 
-        :class="['tab-btn', { active: activeTab === 'all' }]" 
-        @click="activeTab = 'all'"
-      >
-        全部 <span class="badge" v-if="totalCount">{{ totalCount }}</span>
-      </button>
-      <button 
-        :class="['tab-btn', { active: activeTab === 'docker' }]" 
-        @click="activeTab = 'docker'"
-      >
-        <span class="icon">🐳</span> Docker
-        <span class="badge" v-if="dockerCount">{{ dockerCount }}</span>
-      </button>
-      <button 
-        :class="['tab-btn', { active: activeTab === 'npm' }]" 
-        @click="activeTab = 'npm'"
-      >
-        <span class="icon">📦</span> npm
-        <span class="badge" v-if="npmCount">{{ npmCount }}</span>
-      </button>
-    </div>
-
-    <!-- 搜索和排序 -->
-    <div class="filter-bar">
-      <div class="search-box">
-        <input 
-          type="text" 
-          v-model="searchQuery" 
-          placeholder="搜索软件包..."
-          @input="debouncedSearch"
-        />
+  <div class="package-list">
+    <!-- 顶栏：标签页 + 搜索 -->
+    <div class="package-toolbar">
+      <div class="toolbar-tabs">
+        <button
+          class="tab-btn"
+          :class="{ active: activeTab === 'all' }"
+          @click="activeTab = 'all'"
+        >
+          全部
+          <span class="tab-count">{{ totalCount }}</span>
+        </button>
+        <button
+          class="tab-btn"
+          :class="{ active: activeTab === 'docker' }"
+          @click="activeTab = 'docker'"
+        >
+          <svg class="tab-icon" viewBox="0 0 16 16" fill="none">
+            <path d="M1.5 8h2v2h-2zM4.5 8h2v2h-2zM7.5 8h2v2h-2zM4.5 5h2v2h-2zM7.5 5h2v2h-2zM10.5 6c.5-1 1.5-1.5 3-1.5.3 1 .2 2-.5 3H1c0-3 1.5-5.5 4.5-5.5 1 0 2 .5 2.5 1.5h2c.5-1 1-1.5 2-1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Docker
+          <span class="tab-count">{{ dockerCount }}</span>
+        </button>
+        <button
+          class="tab-btn"
+          :class="{ active: activeTab === 'npm' }"
+          @click="activeTab = 'npm'"
+        >
+          <svg class="tab-icon" viewBox="0 0 16 16" fill="none">
+            <path d="M2 3h12v10H2V3zM5 6v4h2V7h1v3h3V6H5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          npm
+          <span class="tab-count">{{ npmCount }}</span>
+        </button>
       </div>
-      <div class="sort-box">
-        <select v-model="sortBy">
-          <option value="name">按名称</option>
-          <option value="created_at">按创建时间</option>
+      <div class="toolbar-actions">
+        <div class="search-input">
+          <svg viewBox="0 0 16 16" width="14" height="14">
+            <circle cx="7" cy="7" r="5" stroke="currentColor" fill="none" stroke-width="1.5"/>
+            <path d="M11 11l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <input
+            type="text"
+            v-model="searchQuery"
+            placeholder="搜索软件包..."
+            @input="debouncedSearch"
+          />
+        </div>
+        <select v-model="sortBy" class="sort-select">
           <option value="updated_at">按更新时间</option>
+          <option value="created_at">按创建时间</option>
+          <option value="name">按名称</option>
           <option value="version">按版本</option>
         </select>
       </div>
@@ -51,96 +58,142 @@
 
     <!-- 加载中 -->
     <div v-if="loading" class="loading-state">
-      <div class="spinner"></div>
-      <span>加载中...</span>
+      <div class="loading-spinner"></div>
     </div>
 
     <!-- 空状态 -->
     <div v-else-if="filteredPackages.length === 0" class="empty-state">
-      <div class="empty-icon">📦</div>
+      <svg viewBox="0 0 48 48" width="48" height="48">
+        <path d="M24 4L4 14v20l20 10 20-10V14L24 4z" stroke="currentColor" stroke-width="2" fill="none"/>
+        <path d="M24 24v20M4 14l20 10 20-10" stroke="currentColor" stroke-width="2"/>
+      </svg>
       <h3>暂无软件包</h3>
-      <p v-if="searchQuery">未找到匹配"{{ searchQuery }}"的软件包</p>
-      <p v-else>
-        此项目还没有发布任何软件包。
-        <br />
-        查看下方的使用说明开始使用。
-      </p>
+      <p v-if="searchQuery">未找到匹配 "<strong>{{ searchQuery }}</strong>" 的软件包</p>
+      <p v-else>此项目还没有发布任何软件包，查看下方的使用说明开始使用</p>
     </div>
 
-    <!-- 软件包列表 -->
-    <div v-else class="package-list">
-      <div 
-        v-for="pkg in filteredPackages" 
-        :key="pkg.id" 
-        class="package-item"
+    <!-- 软件包表格 -->
+    <div v-else class="packages-table">
+      <div
+        v-for="pkg in filteredPackages"
+        :key="pkg.id"
+        class="package-row"
         @click="goToPackage(pkg)"
       >
-        <div class="package-icon">
-          <span v-if="pkg.package_type === 'docker'">🐳</span>
-          <span v-else-if="pkg.package_type === 'npm'">📦</span>
-          <span v-else>📁</span>
+        <!-- 类型图标 -->
+        <div class="col-type">
+          <div class="type-icon" :class="pkg.package_type">
+            <svg v-if="pkg.package_type === 'docker'" viewBox="0 0 16 16" fill="none">
+              <path d="M1.5 8h2v2h-2zM4.5 8h2v2h-2zM7.5 8h2v2h-2zM4.5 5h2v2h-2zM7.5 5h2v2h-2zM10.5 6c.5-1 1.5-1.5 3-1.5.3 1 .2 2-.5 3H1c0-3 1.5-5.5 4.5-5.5 1 0 2 .5 2.5 1.5h2c.5-1 1-1.5 2-1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <svg v-else-if="pkg.package_type === 'npm'" viewBox="0 0 16 16" fill="none">
+              <path d="M2 3h12v10H2V3zM5 6v4h2V7h1v3h3V6H5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <svg v-else viewBox="0 0 16 16" fill="none">
+              <path d="M8 1L1 4v8l7 3 7-3V4L8 1zM8 8v7M1 4l7 4 7-4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
         </div>
-        <div class="package-info">
+
+        <!-- 包信息 -->
+        <div class="col-info">
           <div class="package-name">
-            {{ pkg.name }}
-            <span class="package-type-badge" :class="pkg.package_type">
-              {{ pkg.package_type }}
-            </span>
+            <router-link
+              :to="{ name: 'PackageDetail', params: { ...route.params, packageId: pkg.id.toString() } }"
+              class="name-link"
+              @click.stop
+            >
+              {{ pkg.name }}
+            </router-link>
+            <span class="type-badge" :class="pkg.package_type">{{ pkg.package_type }}</span>
           </div>
           <div class="package-meta">
-            <span class="version">{{ pkg.version }}</span>
+            <span class="version">v{{ pkg.version }}</span>
             <span class="separator">·</span>
             <span class="date">{{ formatDate(pkg.created_at) }}</span>
-            <span class="separator" v-if="pkg.size">·</span>
-            <span class="size" v-if="pkg.size">{{ formatSize(pkg.size) }}</span>
+            <template v-if="pkg.size">
+              <span class="separator">·</span>
+              <span class="size">{{ formatSize(pkg.size) }}</span>
+            </template>
           </div>
         </div>
-        <div class="package-actions">
-          <button class="btn btn-sm" @click.stop="copyInstallCommand(pkg)">
-            复制命令
+
+        <!-- 操作 -->
+        <div class="col-actions">
+          <button class="action-btn copy" title="复制安装命令" @click.stop="copyInstallCommand(pkg)">
+            <svg viewBox="0 0 16 16" width="14" height="14">
+              <rect x="5" y="5" width="8" height="10" rx="1" stroke="currentColor" fill="none" stroke-width="1.5"/>
+              <path d="M3 11V3a1 1 0 011-1h6" stroke="currentColor" stroke-width="1.5" fill="none"/>
+            </svg>
           </button>
         </div>
       </div>
     </div>
 
-    <!-- 使用说明 -->
-    <div class="usage-guide">
-      <h3>使用说明</h3>
-      
-      <div class="guide-section" v-if="activeTab === 'all' || activeTab === 'docker'">
-        <h4>🐳 Docker Registry</h4>
-        <div class="code-block">
-          <div class="code-header">登录</div>
-          <pre><code>docker login {{ registryDomain }}</code></pre>
-        </div>
-        <div class="code-block">
-          <div class="code-header">推送镜像</div>
-          <pre><code>docker tag myimage {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:latest
+    <!-- 使用说明（折叠面板） -->
+    <details class="usage-panel" open>
+      <summary class="usage-header">
+        <svg viewBox="0 0 16 16" width="14" height="14" class="chevron">
+          <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        使用说明
+      </summary>
+      <div class="usage-content">
+        <div class="usage-section" v-if="activeTab === 'all' || activeTab === 'docker'">
+          <div class="section-header">
+            <svg class="section-icon docker" viewBox="0 0 16 16" fill="none">
+              <path d="M1.5 8h2v2h-2zM4.5 8h2v2h-2zM7.5 8h2v2h-2zM4.5 5h2v2h-2zM7.5 5h2v2h-2zM10.5 6c.5-1 1.5-1.5 3-1.5.3 1 .2 2-.5 3H1c0-3 1.5-5.5 4.5-5.5 1 0 2 .5 2.5 1.5h2c.5-1 1-1.5 2-1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Docker Registry</span>
+          </div>
+          <div class="code-block">
+            <div class="code-label">登录</div>
+            <pre><code>docker login {{ registryDomain }}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-label">推送镜像</div>
+            <pre><code>docker tag myimage {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:latest
 docker push {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:latest</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-label">拉取镜像</div>
+            <pre><code>docker pull {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:latest</code></pre>
+          </div>
         </div>
-        <div class="code-block">
-          <div class="code-header">拉取镜像</div>
-          <pre><code>docker pull {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:latest</code></pre>
-        </div>
-      </div>
 
-      <div class="guide-section" v-if="activeTab === 'all' || activeTab === 'npm'">
-        <h4>📦 npm Registry</h4>
-        <div class="code-block">
-          <div class="code-header">配置 .npmrc</div>
-          <pre><code>@{{ namespace }}:registry=https://{{ registryDomain }}/npm/
+        <div class="usage-section" v-if="activeTab === 'all' || activeTab === 'npm'">
+          <div class="section-header">
+            <svg class="section-icon npm" viewBox="0 0 16 16" fill="none">
+              <path d="M2 3h12v10H2V3zM5 6v4h2V7h1v3h3V6H5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>npm Registry</span>
+          </div>
+          <div class="code-block">
+            <div class="code-label">配置 .npmrc</div>
+            <pre><code>@{{ namespace }}:registry=https://{{ registryDomain }}/npm/
 //{{ registryDomain }}/npm/:_authToken=YOUR_PERSONAL_ACCESS_TOKEN</code></pre>
-        </div>
-        <div class="code-block">
-          <div class="code-header">发布包</div>
-          <pre><code>npm publish</code></pre>
-        </div>
-        <div class="code-block">
-          <div class="code-header">安装包</div>
-          <pre><code>npm install @{{ namespace }}/package-name</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-label">发布包</div>
+            <pre><code>npm publish</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-label">安装包</div>
+            <pre><code>npm install @{{ namespace }}/package-name</code></pre>
+          </div>
         </div>
       </div>
-    </div>
+    </details>
+
+    <!-- 复制成功提示 -->
+    <Transition name="toast">
+      <div v-if="copySuccess" class="toast-message">
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <path d="M3 8l4 4 6-8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        已复制到剪贴板
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -169,15 +222,18 @@ const packages = ref<Package[]>([])
 const activeTab = ref<'all' | 'docker' | 'npm'>('all')
 const searchQuery = ref('')
 const sortBy = ref('updated_at')
+const copySuccess = ref(false)
+const copySuccessTimeout = ref<number | null>(null)
 
 // 从项目或路由获取 namespace 和 project 信息
 const namespace = computed(() => props.project?.namespace?.path || route.params.namespace as string)
 const projectName = computed(() => props.project?.name || route.params.project as string)
 
-// Registry 域名（从配置获取，这里使用默认值）
+// Registry 域名 - 使用当前域名
 const registryDomain = computed(() => {
-  // TODO: 从系统配置获取
-  return window.location.hostname.replace(/^[^.]+/, 'registry')
+  // 对于统一入口部署，直接使用当前主机名
+  // 对于分离部署场景，可以配置子域名如 registry.example.com
+  return window.location.host
 })
 
 // 计数
@@ -270,7 +326,15 @@ function copyInstallCommand(pkg: Package) {
   }
   
   navigator.clipboard.writeText(command)
-  // TODO: 显示复制成功提示
+  
+  // 显示复制成功提示
+  if (copySuccessTimeout.value) {
+    clearTimeout(copySuccessTimeout.value)
+  }
+  copySuccess.value = true
+  copySuccessTimeout.value = window.setTimeout(() => {
+    copySuccess.value = false
+  }, 2000)
 }
 
 // 格式化日期
@@ -306,262 +370,437 @@ onMounted(() => {
 </script>
 
 <style lang="scss" scoped>
-.package-list-view {
-  padding: $spacing-lg;
-}
-
-.page-header {
-  margin-bottom: $spacing-lg;
-
-  h1 {
-    font-size: $font-size-xxl;
-    margin-bottom: $spacing-xs;
-  }
-
-  .subtitle {
-    color: $text-muted;
-    margin: 0;
-  }
-}
-
-.package-tabs {
+// ── 工具栏 ────────────────────────────────────────────────
+.package-toolbar {
   display: flex;
-  gap: $spacing-sm;
-  margin-bottom: $spacing-md;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
   border-bottom: 1px solid $border-color;
-  padding-bottom: $spacing-sm;
-
-  .tab-btn {
-    display: flex;
-    align-items: center;
-    gap: $spacing-xs;
-    padding: $spacing-sm $spacing-md;
-    background: none;
-    border: none;
-    border-radius: $border-radius;
-    cursor: pointer;
-    font-size: $font-size-base;
-    color: $text-muted;
-    transition: all 0.2s;
-
-    &:hover {
-      background: $bg-secondary;
-      color: $text-primary;
-    }
-
-    &.active {
-      background: $primary-color;
-      color: white;
-    }
-
-    .badge {
-      background: rgba(255, 255, 255, 0.2);
-      padding: 2px 6px;
-      border-radius: 10px;
-      font-size: $font-size-sm;
-    }
-  }
 }
 
-.filter-bar {
+.toolbar-tabs {
   display: flex;
-  gap: $spacing-md;
-  margin-bottom: $spacing-lg;
-
-  .search-box {
-    flex: 1;
-
-    input {
-      width: 100%;
-      padding: $spacing-sm $spacing-md;
-      border: 1px solid $border-color;
-      border-radius: $border-radius;
-      font-size: $font-size-base;
-
-      &:focus {
-        outline: none;
-        border-color: $primary-color;
-      }
-    }
-  }
-
-  .sort-box {
-    select {
-      padding: $spacing-sm $spacing-md;
-      border: 1px solid $border-color;
-      border-radius: $border-radius;
-      font-size: $font-size-base;
-      background: $bg-primary;
-    }
-  }
+  gap: 4px;
 }
 
-.loading-state {
+.tab-btn {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: $spacing-sm;
-  padding: $spacing-xxl;
-  color: $text-muted;
-
-  .spinner {
-    width: 20px;
-    height: 20px;
-    border: 2px solid $border-color;
-    border-top-color: $primary-color;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  }
-}
-
-.empty-state {
-  text-align: center;
-  padding: $spacing-xxl;
-  color: $text-muted;
-
-  .empty-icon {
-    font-size: 48px;
-    margin-bottom: $spacing-md;
-  }
-
-  h3 {
-    margin-bottom: $spacing-sm;
-    color: $text-primary;
-  }
-}
-
-.package-list {
-  display: flex;
-  flex-direction: column;
-  gap: $spacing-sm;
-}
-
-.package-item {
-  display: flex;
-  align-items: center;
-  gap: $spacing-md;
-  padding: $spacing-md;
-  background: $bg-primary;
-  border: 1px solid $border-color;
-  border-radius: $border-radius;
+  gap: 6px;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: $font-size-sm;
+  color: $text-secondary;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
+  border-radius: 0;
 
   &:hover {
-    background: $bg-secondary;
-    border-color: $primary-color;
+    color: $text-primary;
   }
 
-  .package-icon {
-    font-size: 24px;
-    width: 40px;
-    height: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  &.active {
+    color: $text-primary;
+    font-weight: 500;
+    border-bottom-color: $primary-color;
+  }
+
+  .tab-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+
+  .tab-count {
     background: $bg-secondary;
+    border-radius: 10px;
+    padding: 1px 6px;
+    font-size: 11px;
+    min-width: 18px;
+    text-align: center;
+  }
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.search-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+
+  svg {
+    position: absolute;
+    left: 10px;
+    color: $text-tertiary;
+  }
+
+  input {
+    padding: 6px 12px 6px 32px;
+    border: 1px solid $border-color;
     border-radius: $border-radius;
-  }
+    font-size: $font-size-sm;
+    width: 200px;
+    background: $bg-primary;
+    color: $text-primary;
 
-  .package-info {
-    flex: 1;
-
-    .package-name {
-      font-weight: 500;
-      display: flex;
-      align-items: center;
-      gap: $spacing-sm;
-
-      .package-type-badge {
-        font-size: $font-size-xs;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-weight: normal;
-
-        &.docker {
-          background: #0db7ed20;
-          color: #0db7ed;
-        }
-
-        &.npm {
-          background: #cb373520;
-          color: #cb3735;
-        }
-      }
+    &::placeholder {
+      color: $text-tertiary;
     }
 
-    .package-meta {
-      font-size: $font-size-sm;
-      color: $text-muted;
-      margin-top: 4px;
-
-      .separator {
-        margin: 0 $spacing-xs;
-      }
-    }
-  }
-
-  .package-actions {
-    .btn-sm {
-      padding: $spacing-xs $spacing-sm;
-      font-size: $font-size-sm;
+    &:focus {
+      outline: none;
+      border-color: $primary-color;
+      box-shadow: 0 0 0 2px rgba($primary-color, 0.1);
     }
   }
 }
 
-.usage-guide {
-  margin-top: $spacing-xxl;
-  padding: $spacing-lg;
-  background: $bg-secondary;
+.sort-select {
+  padding: 6px 12px;
+  border: 1px solid $border-color;
   border-radius: $border-radius;
+  font-size: $font-size-sm;
+  background: $bg-primary;
+  color: $text-primary;
+  cursor: pointer;
 
-  h3 {
-    margin-bottom: $spacing-lg;
-    font-size: $font-size-lg;
+  &:focus {
+    outline: none;
+    border-color: $primary-color;
   }
+}
 
-  .guide-section {
-    margin-bottom: $spacing-lg;
+// ── 加载状态 ────────────────────────────────────────────────
+.loading-state {
+  display: flex;
+  justify-content: center;
+  padding: 48px;
+}
 
-    &:last-child {
-      margin-bottom: 0;
-    }
-
-    h4 {
-      margin-bottom: $spacing-md;
-      font-size: $font-size-base;
-    }
-  }
-
-  .code-block {
-    margin-bottom: $spacing-md;
-    border-radius: $border-radius;
-    overflow: hidden;
-
-    .code-header {
-      background: darken($bg-secondary, 5%);
-      padding: $spacing-xs $spacing-sm;
-      font-size: $font-size-sm;
-      color: $text-muted;
-    }
-
-    pre {
-      margin: 0;
-      padding: $spacing-md;
-      background: $bg-primary;
-      overflow-x: auto;
-
-      code {
-        font-family: 'Monaco', 'Menlo', monospace;
-        font-size: $font-size-sm;
-      }
-    }
-  }
+.loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid $border-color;
+  border-top-color: $primary-color;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
 }
 
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
+  to { transform: rotate(360deg); }
+}
+
+// ── 空状态 ────────────────────────────────────────────────
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 64px 24px;
+  color: $text-secondary;
+
+  svg {
+    margin-bottom: 16px;
+    color: $text-tertiary;
+    opacity: 0.5;
   }
+
+  h3 {
+    margin: 0 0 8px;
+    font-size: $font-size-lg;
+    color: $text-primary;
+  }
+
+  p {
+    margin: 0;
+    font-size: $font-size-sm;
+    color: $text-secondary;
+
+    strong {
+      color: $text-primary;
+    }
+  }
+}
+
+// ── 表格 ────────────────────────────────────────────────
+.packages-table {
+  border-top: 1px solid $border-color;
+}
+
+.package-row {
+  display: grid;
+  grid-template-columns: 48px 1fr 48px;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid $border-color;
+  cursor: pointer;
+  transition: background 0.1s;
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &:hover {
+    background: $bg-secondary;
+  }
+}
+
+// ── 类型图标列 ────────────────────────────────────────────
+.col-type {
+  .type-icon {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: $border-radius;
+    background: $bg-tertiary;
+
+    svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    &.docker {
+      background: rgba(13, 183, 237, 0.1);
+      color: #0db7ed;
+    }
+
+    &.npm {
+      background: rgba(203, 55, 53, 0.1);
+      color: #cb3735;
+    }
+  }
+}
+
+// ── 信息列 ────────────────────────────────────────────────
+.col-info {
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.package-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+
+  .name-link {
+    font-weight: 600;
+    font-size: $font-size-sm;
+    color: $text-primary;
+    text-decoration: none;
+
+    &:hover {
+      color: $primary-color;
+      text-decoration: underline;
+    }
+  }
+
+  .type-badge {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 500;
+    text-transform: uppercase;
+
+    &.docker {
+      background: rgba(13, 183, 237, 0.1);
+      color: #0db7ed;
+    }
+
+    &.npm {
+      background: rgba(203, 55, 53, 0.1);
+      color: #cb3735;
+    }
+  }
+}
+
+.package-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: $text-secondary;
+
+  .version {
+    font-family: monospace;
+    font-weight: 500;
+  }
+
+  .separator {
+    color: $text-tertiary;
+  }
+}
+
+// ── 操作列 ────────────────────────────────────────────────
+.col-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: $border-radius;
+  color: $text-secondary;
+  cursor: pointer;
+  transition: all 0.15s;
+
+  &:hover {
+    background: $bg-tertiary;
+    color: $text-primary;
+  }
+
+  &.copy:hover {
+    color: $primary-color;
+  }
+}
+
+// ── 使用说明面板 ────────────────────────────────────────
+.usage-panel {
+  margin-top: 24px;
+  border: 1px solid $border-color;
+  border-radius: $border-radius;
+  background: $bg-primary;
+}
+
+.usage-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  font-size: $font-size-sm;
+  font-weight: 500;
+  color: $text-primary;
+  cursor: pointer;
+  user-select: none;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+
+  .chevron {
+    transition: transform 0.2s;
+  }
+}
+
+.usage-panel[open] .chevron {
+  transform: rotate(90deg);
+}
+
+.usage-content {
+  padding: 0 16px 16px;
+  border-top: 1px solid $border-color;
+}
+
+.usage-section {
+  margin-top: 16px;
+
+  &:first-child {
+    margin-top: 16px;
+  }
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: $font-size-sm;
+  font-weight: 600;
+  color: $text-primary;
+
+  .section-icon {
+    width: 16px;
+    height: 16px;
+
+    &.docker {
+      color: #0db7ed;
+    }
+
+    &.npm {
+      color: #cb3735;
+    }
+  }
+}
+
+.code-block {
+  margin-bottom: 12px;
+  border: 1px solid $border-color;
+  border-radius: $border-radius;
+  overflow: hidden;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+
+  .code-label {
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 500;
+    color: $text-secondary;
+    background: $bg-secondary;
+    border-bottom: 1px solid $border-color;
+  }
+
+  pre {
+    margin: 0;
+    padding: 12px;
+    background: $bg-primary;
+    overflow-x: auto;
+
+    code {
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 12px;
+      color: $text-primary;
+      line-height: 1.5;
+    }
+  }
+}
+
+// ── Toast 提示 ────────────────────────────────────────────
+.toast-message {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: $gray-800;
+  color: white;
+  font-size: $font-size-sm;
+  border-radius: $border-radius;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+
+  svg {
+    color: $color-success;
+  }
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: all 0.25s ease;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(10px);
 }
 </style>

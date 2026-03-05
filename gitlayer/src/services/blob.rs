@@ -198,11 +198,33 @@ impl blob_service_server::BlobService for BlobServiceImpl {
     
     async fn get_lfs_pointers(
         &self,
-        _request: Request<GetLfsPointersRequest>,
+        request: Request<GetLfsPointersRequest>,
     ) -> Result<Response<GetLfsPointersResponse>, Status> {
-        // TODO: Implement LFS support
+        let req = request.into_inner();
+        let path = self.get_repo_path(req.repository.as_ref())?;
+        
+        let repo = RepositoryOps::open(&path)?;
+        let revision = if req.revision.is_empty() { "HEAD" } else { &req.revision };
+        
+        // 如果指定了路径，只检查这些路径；否则扫描整个树
+        let pointers = if req.paths.is_empty() {
+            BlobOps::scan_lfs_pointers(&repo, revision)
+                .map_err(|e| Status::internal(format!("Failed to scan LFS pointers: {}", e)))?
+        } else {
+            BlobOps::get_lfs_pointers(&repo, revision, &req.paths)
+                .map_err(|e| Status::internal(format!("Failed to get LFS pointers: {}", e)))?
+        };
+        
+        let pointer_protos: Vec<LfsPointer> = pointers.into_iter()
+            .map(|p| LfsPointer {
+                oid: p.oid,
+                size: p.size,
+                path: p.path,
+            })
+            .collect();
+        
         Ok(Response::new(GetLfsPointersResponse {
-            pointers: Vec::new(),
+            pointers: pointer_protos,
         }))
     }
 }

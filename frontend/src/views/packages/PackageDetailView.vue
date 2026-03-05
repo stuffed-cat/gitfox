@@ -1,180 +1,238 @@
 <template>
-  <div class="package-detail-view">
-    <!-- 返回链接 -->
+  <div class="package-detail">
+    <!-- 面包屑 -->
     <div class="breadcrumb">
-      <router-link :to="{ name: 'Packages' }" class="back-link">
-        ← 返回软件包列表
+      <router-link :to="{ name: 'Packages' }" class="breadcrumb-link">
+        <svg viewBox="0 0 16 16" width="12" height="12">
+          <path d="M10 4L6 8l4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        软件包仓库
       </router-link>
     </div>
 
     <!-- 加载中 -->
     <div v-if="loading" class="loading-state">
-      <div class="spinner"></div>
-      <span>加载中...</span>
+      <div class="loading-spinner"></div>
     </div>
 
     <!-- 包详情 -->
     <template v-else-if="pkg">
-      <div class="package-header">
-        <div class="package-icon">
-          <span v-if="pkg.package_type === 'docker'">🐳</span>
-          <span v-else-if="pkg.package_type === 'npm'">📦</span>
-          <span v-else>📁</span>
+      <!-- 头部 -->
+      <div class="detail-header">
+        <div class="header-icon" :class="pkg.package_type">
+          <svg v-if="pkg.package_type === 'docker'" viewBox="0 0 16 16" fill="none">
+            <path d="M1.5 8h2v2h-2zM4.5 8h2v2h-2zM7.5 8h2v2h-2zM4.5 5h2v2h-2zM7.5 5h2v2h-2zM10.5 6c.5-1 1.5-1.5 3-1.5.3 1 .2 2-.5 3H1c0-3 1.5-5.5 4.5-5.5 1 0 2 .5 2.5 1.5h2c.5-1 1-1.5 2-1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <svg v-else-if="pkg.package_type === 'npm'" viewBox="0 0 16 16" fill="none">
+            <path d="M2 3h12v10H2V3zM5 6v4h2V7h1v3h3V6H5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <svg v-else viewBox="0 0 16 16" fill="none">
+            <path d="M8 1L1 4v8l7 3 7-3V4L8 1zM8 8v7M1 4l7 4 7-4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </div>
-        <div class="package-title">
+        <div class="header-info">
           <h1>{{ pkg.name }}</h1>
-          <div class="package-meta">
-            <span class="package-type-badge" :class="pkg.package_type">
-              {{ pkg.package_type }}
-            </span>
+          <div class="header-meta">
+            <span class="type-badge" :class="pkg.package_type">{{ pkg.package_type }}</span>
             <span class="separator">·</span>
             <span class="version">v{{ pkg.version }}</span>
             <span class="separator">·</span>
-            <span class="date">发布于 {{ formatDate(pkg.created_at) }}</span>
+            <span class="date">{{ formatDate(pkg.created_at) }}</span>
           </div>
         </div>
-        <div class="package-actions">
-          <button class="btn btn-danger" @click="deletePackage" v-if="canDelete">
+        <div class="header-actions" v-if="canDelete">
+          <button class="btn btn-danger btn-sm" @click="deletePackage">
+            <svg viewBox="0 0 16 16" width="14" height="14">
+              <path d="M3 4h10M6 4V2h4v2M5 4v9h6V4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
             删除
           </button>
         </div>
       </div>
 
-      <!-- 安装命令 -->
-      <div class="install-section">
-        <h3>安装</h3>
-        <div class="install-command">
+      <!-- 安装命令卡片 -->
+      <div class="install-card">
+        <div class="card-header">
+          <svg viewBox="0 0 16 16" width="14" height="14">
+            <path d="M5 4L1 8l4 4M11 4l4 4-4 4M9 2l-2 12" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>安装命令</span>
+        </div>
+        <div class="card-body">
           <code>{{ installCommand }}</code>
-          <button class="copy-btn" @click="copyCommand">
+          <button class="copy-btn" @click="copyCommand" :class="{ copied }">
+            <svg v-if="!copied" viewBox="0 0 16 16" width="14" height="14">
+              <rect x="5" y="5" width="8" height="10" rx="1" stroke="currentColor" fill="none" stroke-width="1.5"/>
+              <path d="M3 11V3a1 1 0 011-1h6" stroke="currentColor" stroke-width="1.5" fill="none"/>
+            </svg>
+            <svg v-else viewBox="0 0 16 16" width="14" height="14">
+              <path d="M3 8l4 4 6-8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
             {{ copied ? '已复制' : '复制' }}
           </button>
         </div>
       </div>
 
-      <!-- 版本列表 -->
-      <div class="versions-section">
-        <h3>版本历史</h3>
-        <div class="version-list">
-          <div 
-            v-for="version in versions" 
-            :key="version.id" 
-            class="version-item"
-            :class="{ current: version.version === pkg.version }"
-          >
-            <div class="version-info">
-              <span class="version-tag">v{{ version.version }}</span>
-              <span class="version-date">{{ formatDate(version.created_at) }}</span>
-            </div>
-            <div class="version-meta">
-              <span v-if="version.size">{{ formatSize(version.size) }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Docker 特有信息 -->
-      <div v-if="pkg.package_type === 'docker'" class="docker-section">
-        <h3>Docker 镜像信息</h3>
-        <div class="info-grid">
-          <div class="info-item">
-            <label>镜像 Digest</label>
-            <code>{{ dockerManifest?.digest || 'N/A' }}</code>
-          </div>
-          <div class="info-item">
-            <label>架构</label>
-            <span>{{ dockerManifest?.architecture || 'N/A' }}</span>
-          </div>
-          <div class="info-item">
-            <label>OS</label>
-            <span>{{ dockerManifest?.os || 'N/A' }}</span>
-          </div>
-          <div class="info-item">
-            <label>层数</label>
-            <span>{{ dockerManifest?.layers?.length || 'N/A' }}</span>
-          </div>
-        </div>
-
-        <h4>使用方法</h4>
-        <div class="code-blocks">
-          <div class="code-block">
-            <div class="code-header">拉取镜像</div>
-            <pre><code>docker pull {{ fullImageName }}</code></pre>
-          </div>
-          <div class="code-block">
-            <div class="code-header">运行容器</div>
-            <pre><code>docker run -it {{ fullImageName }}</code></pre>
-          </div>
-        </div>
-      </div>
-
-      <!-- npm 特有信息 -->
-      <div v-if="pkg.package_type === 'npm'" class="npm-section">
-        <h3>npm 包信息</h3>
-        <div class="info-grid">
-          <div class="info-item" v-if="npmMetadata?.description">
-            <label>描述</label>
-            <span>{{ npmMetadata.description }}</span>
-          </div>
-          <div class="info-item" v-if="npmMetadata?.license">
-            <label>许可证</label>
-            <span>{{ npmMetadata.license }}</span>
-          </div>
-          <div class="info-item" v-if="npmMetadata?.homepage">
-            <label>主页</label>
-            <a :href="npmMetadata.homepage" target="_blank">{{ npmMetadata.homepage }}</a>
-          </div>
-          <div class="info-item" v-if="npmMetadata?.repository">
-            <label>仓库</label>
-            <span>{{ npmMetadata.repository }}</span>
-          </div>
-        </div>
-
-        <h4>使用方法</h4>
-        <div class="code-blocks">
-          <div class="code-block">
-            <div class="code-header">配置 .npmrc</div>
-            <pre><code>@{{ namespace }}:registry=https://{{ registryDomain }}/npm/
-//{{ registryDomain }}/npm/:_authToken=YOUR_TOKEN</code></pre>
-          </div>
-          <div class="code-block">
-            <div class="code-header">安装</div>
-            <pre><code>npm install {{ fullPackageName }}</code></pre>
-          </div>
-        </div>
-
-        <!-- 依赖 -->
-        <div v-if="npmMetadata?.dependencies" class="dependencies-section">
-          <h4>依赖</h4>
-          <div class="dependency-list">
+      <!-- 版本历史 -->
+      <details class="section-panel" open>
+        <summary class="section-header">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="chevron">
+            <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          版本历史
+          <span class="count">{{ versions.length }}</span>
+        </summary>
+        <div class="section-content">
+          <div class="version-table">
             <div 
-              v-for="(version, name) in npmMetadata.dependencies" 
-              :key="name"
-              class="dependency-item"
+              v-for="version in versions" 
+              :key="version.id" 
+              class="version-row"
+              :class="{ current: version.version === pkg.version }"
             >
-              <span class="dep-name">{{ name }}</span>
-              <span class="dep-version">{{ version }}</span>
+              <span class="version-tag">
+                <svg viewBox="0 0 16 16" width="12" height="12">
+                  <path d="M1 3l6-1 8 8-5 5-8-8zM5 5m-1 0a1 1 0 102 0a1 1 0 10-2 0" stroke="currentColor" stroke-width="1.5" fill="none"/>
+                </svg>
+                v{{ version.version }}
+              </span>
+              <span class="version-date">{{ formatDate(version.created_at) }}</span>
+              <span class="version-size" v-if="version.size">{{ formatSize(version.size) }}</span>
             </div>
           </div>
         </div>
-      </div>
+      </details>
+
+      <!-- Docker 信息 -->
+      <details v-if="pkg.package_type === 'docker'" class="section-panel" open>
+        <summary class="section-header">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="chevron">
+            <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Docker 镜像信息
+        </summary>
+        <div class="section-content">
+          <div class="info-grid">
+            <div class="info-item">
+              <label>镜像 Digest</label>
+              <code>{{ dockerManifest?.digest || 'N/A' }}</code>
+            </div>
+            <div class="info-item">
+              <label>架构</label>
+              <span>{{ dockerManifest?.architecture || 'N/A' }}</span>
+            </div>
+            <div class="info-item">
+              <label>OS</label>
+              <span>{{ dockerManifest?.os || 'N/A' }}</span>
+            </div>
+            <div class="info-item">
+              <label>层数</label>
+              <span>{{ dockerManifest?.layers?.length || 'N/A' }}</span>
+            </div>
+          </div>
+
+          <div class="usage-section">
+            <h4>使用方法</h4>
+            <div class="code-block">
+              <div class="code-label">拉取镜像</div>
+              <pre><code>docker pull {{ fullImageName }}</code></pre>
+            </div>
+            <div class="code-block">
+              <div class="code-label">运行容器</div>
+              <pre><code>docker run -it {{ fullImageName }}</code></pre>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- npm 信息 -->
+      <details v-if="pkg.package_type === 'npm'" class="section-panel" open>
+        <summary class="section-header">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="chevron">
+            <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          npm 包信息
+        </summary>
+        <div class="section-content">
+          <div class="info-grid" v-if="npmMetadata">
+            <div class="info-item" v-if="npmMetadata.description">
+              <label>描述</label>
+              <span>{{ npmMetadata.description }}</span>
+            </div>
+            <div class="info-item" v-if="npmMetadata.license">
+              <label>许可证</label>
+              <span>{{ npmMetadata.license }}</span>
+            </div>
+            <div class="info-item" v-if="npmMetadata.homepage">
+              <label>主页</label>
+              <a :href="npmMetadata.homepage" target="_blank" class="external-link">{{ npmMetadata.homepage }}</a>
+            </div>
+            <div class="info-item" v-if="npmMetadata.repository">
+              <label>仓库</label>
+              <span>{{ npmMetadata.repository }}</span>
+            </div>
+          </div>
+
+          <div class="usage-section">
+            <h4>使用方法</h4>
+            <div class="code-block">
+              <div class="code-label">配置 .npmrc</div>
+              <pre><code>@{{ namespace }}:registry=https://{{ registryDomain }}/npm/
+//{{ registryDomain }}/npm/:_authToken=YOUR_TOKEN</code></pre>
+            </div>
+            <div class="code-block">
+              <div class="code-label">安装</div>
+              <pre><code>npm install {{ fullPackageName }}</code></pre>
+            </div>
+          </div>
+
+          <div v-if="npmMetadata?.dependencies && Object.keys(npmMetadata.dependencies).length > 0" class="deps-section">
+            <h4>依赖项</h4>
+            <div class="deps-list">
+              <span v-for="(ver, name) in npmMetadata.dependencies" :key="name" class="dep-tag">
+                {{ name }} <code>{{ ver }}</code>
+              </span>
+            </div>
+          </div>
+        </div>
+      </details>
 
       <!-- 文件列表 -->
-      <div class="files-section" v-if="files.length > 0">
-        <h3>文件</h3>
-        <div class="file-list">
-          <div v-for="file in files" :key="file.id" class="file-item">
-            <span class="file-name">{{ file.file_name }}</span>
-            <span class="file-size">{{ formatSize(file.size) }}</span>
-            <a :href="file.download_url" class="download-btn">下载</a>
+      <details v-if="files.length > 0" class="section-panel" open>
+        <summary class="section-header">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="chevron">
+            <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          文件
+          <span class="count">{{ files.length }}</span>
+        </summary>
+        <div class="section-content">
+          <div class="files-table">
+            <div v-for="file in files" :key="file.id" class="file-row">
+              <svg viewBox="0 0 16 16" width="14" height="14" class="file-icon">
+                <path d="M4 2a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6l-4-4H4zM9 2v4h4" stroke="currentColor" stroke-width="1.5" fill="none"/>
+              </svg>
+              <span class="file-name">{{ file.file_name }}</span>
+              <span class="file-size">{{ formatSize(file.size) }}</span>
+              <a :href="file.download_url" class="download-link">
+                <svg viewBox="0 0 16 16" width="14" height="14">
+                  <path d="M8 2v8m-3-3l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </a>
+            </div>
           </div>
         </div>
-      </div>
+      </details>
     </template>
 
     <!-- 404 -->
     <div v-else class="empty-state">
+      <svg viewBox="0 0 48 48" width="48" height="48">
+        <path d="M24 4L4 14v20l20 10 20-10V14L24 4z" stroke="currentColor" stroke-width="2" fill="none"/>
+        <path d="M24 24v20M4 14l20 10 20-10" stroke="currentColor" stroke-width="2"/>
+      </svg>
       <h3>软件包不存在</h3>
-      <router-link :to="{ name: 'Packages' }">返回列表</router-link>
+      <router-link :to="{ name: 'Packages' }" class="back-link">返回软件包列表</router-link>
     </div>
   </div>
 </template>
@@ -183,7 +241,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '@/api'
-import type { Package, PackageFile } from '@/types'
+import { useAuthStore } from '@/stores/auth'
+import type { Package, PackageFile, ProjectMember } from '@/types'
 
 interface DockerManifest {
   digest: string
@@ -212,9 +271,11 @@ const props = defineProps<{
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 
 // 状态
 const loading = ref(false)
+const members = ref<ProjectMember[]>([])
 const pkg = ref<Package | null>(null)
 const versions = ref<Package[]>([])
 const files = ref<PackageFile[]>([])
@@ -232,10 +293,21 @@ const registryDomain = computed(() => {
   return window.location.hostname.replace(/^[^.]+/, 'registry')
 })
 
-// 权限
+// 权限 - 检查当前用户是否为项目 owner、maintainer 或 developer
 const canDelete = computed(() => {
-  // TODO: 检查用户权限
-  return true
+  const currentUser = authStore.user
+  if (!currentUser) return false
+  
+  // 检查是否为项目 owner
+  if (props.project && String(props.project.id) === currentUser.id) return true
+  
+  // 检查项目成员角色 - owner, maintainer, developer 可以删除
+  const member = members.value.find(m => String(m.user_id) === currentUser.id)
+  if (member) {
+    return member.role === 'owner' || member.role === 'maintainer' || member.role === 'developer'
+  }
+  
+  return false
 })
 
 // 完整镜像名（Docker）
@@ -289,11 +361,39 @@ async function loadPackage() {
       files.value = filesResponse.data || []
 
       // 加载特定类型的元数据
-      if (pkg.value.package_type === 'docker') {
-        // TODO: 加载 Docker manifest
-      } else if (pkg.value.package_type === 'npm') {
-        // TODO: 加载 npm 元数据
+      // Docker manifest 和 npm 元数据暂时从 package metadata 字段获取
+      // 后续可以通过专门的 API 获取更详细的信息
+      if (pkg.value.package_type === 'docker' && pkg.value.metadata) {
+        try {
+          const meta = typeof pkg.value.metadata === 'string' 
+            ? JSON.parse(pkg.value.metadata) 
+            : pkg.value.metadata
+          if (meta.manifest) {
+            dockerManifest.value = meta.manifest
+          }
+        } catch { /* ignore parse errors */ }
+      } else if (pkg.value.package_type === 'npm' && pkg.value.metadata) {
+        try {
+          const meta = typeof pkg.value.metadata === 'string' 
+            ? JSON.parse(pkg.value.metadata) 
+            : pkg.value.metadata
+          npmMetadata.value = {
+            description: meta.description,
+            license: meta.license,
+            homepage: meta.homepage,
+            repository: meta.repository?.url || meta.repository,
+            dependencies: meta.dependencies
+          }
+        } catch { /* ignore parse errors */ }
       }
+      
+      // 加载项目成员用于权限检查
+      try {
+        members.value = await api.projects.getMembers({
+          namespace: namespace.value,
+          project: projectName.value
+        })
+      } catch { /* ignore - may not have permission to view members */ }
     }
   } catch (error) {
     console.error('Failed to load package:', error)
@@ -353,15 +453,20 @@ onMounted(() => {
 </script>
 
 <style lang="scss" scoped>
-.package-detail-view {
-  padding: $spacing-lg;
+.package-detail {
+  padding: 16px 20px;
+  color: $text-primary;
 }
 
 .breadcrumb {
-  margin-bottom: $spacing-lg;
+  margin-bottom: 16px;
 
-  .back-link {
-    color: $text-muted;
+  .breadcrumb-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    color: $text-secondary;
     text-decoration: none;
 
     &:hover {
@@ -374,299 +479,487 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: $spacing-sm;
-  padding: $spacing-xxl;
-  color: $text-muted;
+  padding: 80px;
 
-  .spinner {
-    width: 20px;
-    height: 20px;
+  .loading-spinner {
+    width: 24px;
+    height: 24px;
     border: 2px solid $border-color;
     border-top-color: $primary-color;
     border-radius: 50%;
-    animation: spin 1s linear infinite;
+    animation: spin 0.8s linear infinite;
   }
 }
 
-.package-header {
+// 头部
+.detail-header {
   display: flex;
-  align-items: flex-start;
-  gap: $spacing-lg;
-  margin-bottom: $spacing-xl;
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid $border-color;
+  margin-bottom: 20px;
 
-  .package-icon {
-    font-size: 48px;
-    width: 80px;
-    height: 80px;
+  .header-icon {
+    width: 48px;
+    height: 48px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: $bg-secondary;
-    border-radius: $border-radius;
-  }
+    border-radius: 8px;
+    background: $bg-tertiary;
+    color: $text-secondary;
 
-  .package-title {
-    flex: 1;
-
-    h1 {
-      margin: 0 0 $spacing-sm 0;
-      font-size: $font-size-xxl;
+    svg {
+      width: 24px;
+      height: 24px;
     }
 
-    .package-meta {
+    &.docker {
+      background: rgba(13, 183, 237, 0.08);
+      color: #0db7ed;
+    }
+
+    &.npm {
+      background: rgba(203, 55, 53, 0.08);
+      color: #cb3735;
+    }
+  }
+
+  .header-info {
+    flex: 1;
+    min-width: 0;
+
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 20px;
+      font-weight: 600;
+      color: $text-primary;
+    }
+
+    .header-meta {
       display: flex;
       align-items: center;
-      gap: $spacing-xs;
-      color: $text-muted;
+      gap: 4px;
+      font-size: 13px;
+      color: $text-secondary;
 
       .separator {
-        margin: 0 $spacing-xs;
+        color: $text-tertiary;
       }
 
-      .package-type-badge {
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: $font-size-sm;
+      .type-badge {
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
 
         &.docker {
-          background: #0db7ed20;
+          background: rgba(13, 183, 237, 0.1);
           color: #0db7ed;
         }
 
         &.npm {
-          background: #cb373520;
+          background: rgba(203, 55, 53, 0.1);
           color: #cb3735;
+        }
+
+        &.generic {
+          background: $bg-tertiary;
+          color: $text-secondary;
+        }
+      }
+    }
+  }
+
+  .header-actions {
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+
+      &.btn-danger {
+        background: #dc3545;
+        color: white;
+
+        &:hover {
+          background: #c82333;
         }
       }
     }
   }
 }
 
-.install-section {
-  margin-bottom: $spacing-xl;
-  padding: $spacing-lg;
+// 安装卡片
+.install-card {
   background: $bg-secondary;
-  border-radius: $border-radius;
+  border: 1px solid $border-color;
+  border-radius: 6px;
+  margin-bottom: 20px;
 
-  h3 {
-    margin: 0 0 $spacing-md 0;
-    font-size: $font-size-lg;
-  }
-
-  .install-command {
+  .card-header {
     display: flex;
     align-items: center;
-    gap: $spacing-md;
-    padding: $spacing-md;
+    gap: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: $text-primary;
+    border-bottom: 1px solid $border-color;
+
+    svg {
+      color: $text-secondary;
+    }
+  }
+
+  .card-body {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
     background: $bg-primary;
-    border-radius: $border-radius;
+    border-radius: 0 0 6px 6px;
 
     code {
       flex: 1;
-      font-family: 'Monaco', 'Menlo', monospace;
-      font-size: $font-size-base;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 13px;
+      color: $text-primary;
     }
 
     .copy-btn {
-      padding: $spacing-xs $spacing-md;
-      background: $primary-color;
-      color: white;
-      border: none;
-      border-radius: $border-radius;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 10px;
+      font-size: 12px;
+      background: $bg-tertiary;
+      color: $text-secondary;
+      border: 1px solid $border-color;
+      border-radius: 4px;
       cursor: pointer;
+      transition: all 0.15s;
 
       &:hover {
-        background: darken($primary-color, 10%);
+        background: $bg-secondary;
+        color: $text-primary;
+      }
+
+      &.copied {
+        background: rgba(40, 167, 69, 0.1);
+        color: #28a745;
+        border-color: rgba(40, 167, 69, 0.3);
       }
     }
   }
 }
 
-.versions-section,
-.docker-section,
-.npm-section,
-.files-section {
-  margin-bottom: $spacing-xl;
-
-  h3 {
-    font-size: $font-size-lg;
-    margin-bottom: $spacing-md;
-  }
-
-  h4 {
-    font-size: $font-size-base;
-    margin: $spacing-lg 0 $spacing-md 0;
-  }
-}
-
-.version-list {
-  display: flex;
-  flex-direction: column;
-  gap: $spacing-xs;
-}
-
-.version-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: $spacing-md;
-  background: $bg-primary;
+// 可折叠面板
+.section-panel {
   border: 1px solid $border-color;
-  border-radius: $border-radius;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  background: $bg-primary;
 
-  &.current {
-    border-color: $primary-color;
-    background: lighten($primary-color, 45%);
+  &[open] {
+    .section-header .chevron {
+      transform: rotate(90deg);
+    }
   }
 
-  .version-info {
+  .section-header {
     display: flex;
     align-items: center;
-    gap: $spacing-md;
+    gap: 8px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    color: $text-primary;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
 
-    .version-tag {
-      font-weight: 500;
+    &::-webkit-details-marker {
+      display: none;
     }
 
-    .version-date {
-      color: $text-muted;
-      font-size: $font-size-sm;
+    &:hover {
+      background: $bg-secondary;
+    }
+
+    .chevron {
+      transition: transform 0.15s;
+      color: $text-tertiary;
+    }
+
+    .count {
+      margin-left: auto;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: normal;
+      background: $bg-tertiary;
+      color: $text-secondary;
+      border-radius: 10px;
     }
   }
 
-  .version-meta {
-    color: $text-muted;
-    font-size: $font-size-sm;
-  }
-}
-
-.info-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: $spacing-md;
-
-  .info-item {
-    padding: $spacing-md;
-    background: $bg-secondary;
-    border-radius: $border-radius;
-
-    label {
-      display: block;
-      font-size: $font-size-sm;
-      color: $text-muted;
-      margin-bottom: $spacing-xs;
-    }
-
-    code {
-      font-family: 'Monaco', 'Menlo', monospace;
-      font-size: $font-size-sm;
-      word-break: break-all;
-    }
+  .section-content {
+    border-top: 1px solid $border-color;
+    padding: 14px;
   }
 }
 
-.code-blocks {
+// 版本表格
+.version-table {
   display: flex;
   flex-direction: column;
-  gap: $spacing-md;
+  gap: 1px;
+  background: $border-color;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.version-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: $bg-primary;
+  font-size: 13px;
+
+  &.current {
+    background: rgba($primary-color, 0.04);
+  }
+
+  .version-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+    color: $text-primary;
+
+    svg {
+      color: $text-tertiary;
+    }
+  }
+
+  .version-date {
+    color: $text-secondary;
+  }
+
+  .version-size {
+    color: $text-tertiary;
+    font-size: 12px;
+  }
+}
+
+// 信息网格
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.info-item {
+  label {
+    display: block;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: $text-tertiary;
+    margin-bottom: 4px;
+  }
+
+  span, code {
+    font-size: 13px;
+    color: $text-primary;
+  }
+
+  code {
+    font-family: 'Monaco', 'Menlo', monospace;
+    word-break: break-all;
+  }
+
+  .external-link {
+    color: $primary-color;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+// 使用方法
+.usage-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid $border-color;
+
+  h4 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: $text-primary;
+  }
 }
 
 .code-block {
-  border-radius: $border-radius;
+  margin-bottom: 12px;
+  border: 1px solid $border-color;
+  border-radius: 4px;
   overflow: hidden;
 
-  .code-header {
-    background: darken($bg-secondary, 5%);
-    padding: $spacing-xs $spacing-sm;
-    font-size: $font-size-sm;
-    color: $text-muted;
+  &:last-child {
+    margin-bottom: 0;
+  }
+
+  .code-label {
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: $text-secondary;
+    background: $bg-tertiary;
+    border-bottom: 1px solid $border-color;
   }
 
   pre {
     margin: 0;
-    padding: $spacing-md;
+    padding: 10px 12px;
     background: $bg-primary;
     overflow-x: auto;
 
     code {
       font-family: 'Monaco', 'Menlo', monospace;
-      font-size: $font-size-sm;
+      font-size: 12px;
+      color: $text-primary;
     }
   }
 }
 
-.dependencies-section {
-  .dependency-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: $spacing-sm;
-  }
+// 依赖项
+.deps-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid $border-color;
 
-  .dependency-item {
-    display: flex;
-    align-items: center;
-    gap: $spacing-xs;
-    padding: $spacing-xs $spacing-sm;
-    background: $bg-secondary;
-    border-radius: $border-radius;
-    font-size: $font-size-sm;
-
-    .dep-name {
-      font-weight: 500;
-    }
-
-    .dep-version {
-      color: $text-muted;
-    }
+  h4 {
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: $text-primary;
   }
 }
 
-.file-list {
+.deps-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dep-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: $bg-tertiary;
+  color: $text-primary;
+  border-radius: 3px;
+
+  code {
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 11px;
+    color: $text-secondary;
+  }
+}
+
+// 文件表格
+.files-table {
   display: flex;
   flex-direction: column;
-  gap: $spacing-xs;
+  gap: 1px;
+  background: $border-color;
+  border-radius: 4px;
+  overflow: hidden;
 }
 
-.file-item {
+.file-row {
   display: flex;
   align-items: center;
-  gap: $spacing-md;
-  padding: $spacing-md;
+  gap: 10px;
+  padding: 10px 12px;
   background: $bg-primary;
-  border: 1px solid $border-color;
-  border-radius: $border-radius;
+  font-size: 13px;
+
+  .file-icon {
+    color: $text-tertiary;
+    flex-shrink: 0;
+  }
 
   .file-name {
     flex: 1;
+    min-width: 0;
     font-family: 'Monaco', 'Menlo', monospace;
-    font-size: $font-size-sm;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .file-size {
-    color: $text-muted;
-    font-size: $font-size-sm;
+    color: $text-secondary;
+    font-size: 12px;
+    flex-shrink: 0;
   }
 
-  .download-btn {
-    padding: $spacing-xs $spacing-sm;
-    background: $primary-color;
-    color: white;
-    text-decoration: none;
-    border-radius: $border-radius;
-    font-size: $font-size-sm;
+  .download-link {
+    color: $text-secondary;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.15s;
 
     &:hover {
-      background: darken($primary-color, 10%);
+      background: $bg-tertiary;
+      color: $primary-color;
     }
   }
 }
 
+// 空状态
 .empty-state {
   text-align: center;
-  padding: $spacing-xxl;
+  padding: 60px 20px;
+  color: $text-secondary;
+
+  svg {
+    margin-bottom: 16px;
+    opacity: 0.4;
+  }
 
   h3 {
-    margin-bottom: $spacing-md;
+    margin: 0 0 12px 0;
+    font-size: 16px;
+    font-weight: 500;
+    color: $text-primary;
+  }
+
+  .back-link {
+    color: $primary-color;
+    text-decoration: none;
+    font-size: 14px;
+
+    &:hover {
+      text-decoration: underline;
+    }
   }
 }
 

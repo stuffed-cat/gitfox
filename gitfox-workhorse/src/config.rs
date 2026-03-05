@@ -58,13 +58,10 @@ pub struct Config {
     #[serde(default = "default_gitlayer_address")]
     pub gitlayer_address: Option<String>,
 
-    /// Auth gRPC 服务地址（主应用的 gRPC 地址，用于权限认证）
+    /// Auth gRPC 服务地址（必需，主应用的 gRPC 地址，用于权限认证）
+    /// shell/workhorse 依赖此服务进行认证，必须配置
     #[serde(default)]
     pub auth_grpc_address: Option<String>,
-
-    /// 是否使用 gRPC 进行权限认证（而不是 HTTP API）
-    #[serde(default)]
-    pub use_grpc_auth: bool,
 
     /// 内部 API 认证密钥
     #[serde(default = "default_shell_secret")]
@@ -197,12 +194,6 @@ fn default_auth_grpc_address() -> Option<String> {
         .ok()
 }
 
-fn default_use_grpc_auth() -> bool {
-    env::var("WORKHORSE_USE_GRPC_AUTH")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false)
-}
-
 fn default_lfs_storage_path() -> PathBuf {
     PathBuf::from(env::var("LFS_STORAGE_PATH").unwrap_or_else(|_| "./lfs-objects".to_string()))
 }
@@ -238,7 +229,6 @@ impl Config {
     pub fn from_env() -> Self {
         let gitlayer_address = default_gitlayer_address();
         let auth_grpc_address = default_auth_grpc_address();
-        let use_grpc_auth = default_use_grpc_auth() || auth_grpc_address.is_some();
         
         Self {
             listen_addr: default_listen_addr(),
@@ -256,7 +246,6 @@ impl Config {
             static_cache_control: default_static_cache_control(),
             gitlayer_address,
             auth_grpc_address,
-            use_grpc_auth,
             shell_secret: default_shell_secret(),
             
             // LFS 配置

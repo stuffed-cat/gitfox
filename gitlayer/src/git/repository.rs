@@ -167,6 +167,32 @@ impl RepositoryOps {
         Ok(count)
     }
     
+    /// Get commit count in repository
+    /// 遍历所有分支的提交，使用 revwalk 计数
+    /// 返回仓库中唯一提交的总数（去重）
+    pub fn commit_count(repo: &Repository) -> Result<u64> {
+        // 获取所有分支
+        let branches = repo.branches(None)?;
+        let mut revwalk = repo.revwalk()?;
+        
+        // 将所有分支头加入 revwalk
+        for branch_result in branches {
+            if let Ok((branch, _)) = branch_result {
+                if let Ok(Some(target)) = branch.get().peel_to_commit().map(|c| Some(c.id())) {
+                    let _ = revwalk.push(target);
+                }
+            }
+        }
+        
+        // 排序以确保去重
+        revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
+        
+        // 计数
+        let count = revwalk.count() as u64;
+        
+        Ok(count)
+    }
+    
     /// Run garbage collection
     pub fn gc(path: &str, prune: bool) -> Result<()> {
         use std::process::Command;
@@ -204,5 +230,85 @@ impl RepositoryOps {
             Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Fetch from a local remote repository (for fork sync)
+    /// Uses the git command line for simplicity with local file:// protocol
+    pub fn fetch_from_remote(
+        repo_path: &str,
+        remote_path: &str,
+        remote_name: &str,
+        branches: &[String],
+        prune: bool,
+    ) -> Result<u32> {
+        use std::process::Command;
+
+        let remote_name = if remote_name.is_empty() { "upstream" } else { remote_name };
+
+        // First, check if remote exists, if not add it
+        let mut check_cmd = Command::new("git");
+        check_cmd.current_dir(repo_path);
+        check_cmd.args(["remote", "get-url", remote_name]);
+        
+        let check_output = check_cmd.output()?;
+        
+        if !check_output.status.success() {
+            // Remote doesn't exist, add it
+            let remote_url = format!("file://{}", remote_path);
+            let mut add_cmd = Command::new("git");
+            add_cmd.current_dir(repo_path);
+            add_cmd.args(["remote", "add", remote_name, &remote_url]);
+            
+            let add_output = add_cmd.output()?;
+            if !add_output.status.success() {
+                let stderr = String::from_utf8_lossy(&add_output.stderr);
+                return Err(GitLayerError::Internal(format!("Failed to add remote: {}", stderr)));
+            }
+            info!("Added remote '{}' pointing to {}", remote_name, remote_url);
+        } else {
+            // Update remote URL if needed
+            let remote_url = format!("file://{}", remote_path);
+            let mut set_cmd = Command::new("git");
+            set_cmd.current_dir(repo_path);
+            set_cmd.args(["remote", "set-url", remote_name, &remote_url]);
+            let _ = set_cmd.output();
+        }
+
+        // Build fetch command
+        let mut fetch_cmd = Command::new("git");
+        fetch_cmd.current_dir(repo_path);
+        fetch_cmd.arg("fetch");
+        fetch_cmd.arg(remote_name);
+
+        // Add specific branches if provided
+        if !branches.is_empty() {
+            for branch in branches {
+                fetch_cmd.arg(format!("{}:{}", branch, branch));
+            }
+        }
+
+        if prune {
+            fetch_cmd.arg("--prune");
+        }
+
+        // Add verbose flag to get update info
+        fetch_cmd.arg("-v");
+
+        info!("Executing git fetch from {} in {}", remote_name, repo_path);
+        let output = fetch_cmd.output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(GitLayerError::Internal(format!("git fetch failed: {}", stderr)));
+        }
+
+        // Count updated refs from output
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let updated_refs = stderr.lines()
+            .filter(|line| line.contains("->") || line.contains("[new branch]") || line.contains("[new tag]"))
+            .count() as u32;
+
+        info!("Fetch completed, {} refs updated", updated_refs);
+        Ok(updated_refs)
     }
 }

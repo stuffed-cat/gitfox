@@ -165,10 +165,26 @@ impl operation_service_server::OperationService for OperationServiceImpl {
     
     async fn squash(
         &self,
-        _request: Request<SquashRequest>,
+        request: Request<SquashRequest>,
     ) -> Result<Response<SquashResponse>, Status> {
-        // TODO: Implement squash
-        Err(Status::unimplemented("Squash not yet implemented"))
+        let req = request.into_inner();
+        let path = self.get_repo_path(req.repository.as_ref())?;
+        
+        let repo = RepositoryOps::open(&path)?;
+        let author = Self::convert_signature(req.author.as_ref());
+        
+        match OperationOps::squash(&repo, &req.branch, &req.start_commit, &req.end_commit, &author, &req.message) {
+            Ok(commit_id) => Ok(Response::new(SquashResponse {
+                success: true,
+                commit_id,
+                message: String::new(),
+            })),
+            Err(e) => Ok(Response::new(SquashResponse {
+                success: false,
+                commit_id: String::new(),
+                message: e.to_string(),
+            })),
+        }
     }
     
     async fn write_file(

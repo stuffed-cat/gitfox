@@ -184,9 +184,7 @@ pub struct Config {
     pub webide_redirect_uri_path: String,
     /// Maximum upload size in bytes (default: 1GB for Git operations)
     pub max_upload_size: usize,
-    /// gRPC server enabled (for internal service communication)
-    pub grpc_enabled: bool,
-    /// gRPC server address
+    /// gRPC server address (always enabled, required for shell/workhorse auth)
     pub grpc_address: String,
     /// GitLayer gRPC address (for passing to clients)
     pub gitlayer_address: Option<String>,
@@ -301,11 +299,9 @@ impl Config {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1024 * 1024 * 1024), // Default: 1GB
-            grpc_enabled: env::var("GRPC_ENABLED")
-                .map(|v| v == "1" || v.to_lowercase() == "true")
-                .unwrap_or(true),
+            // gRPC 强制启用，不再支持禁用（shell/workhorse 依赖 gRPC auth）
             grpc_address: env::var("GRPC_ADDRESS")
-                .unwrap_or_else(|_| "[::1]:50051".to_string()),
+                .unwrap_or_else(|_| "127.0.0.1:50051".to_string()),
             gitlayer_address: env::var("GITLAYER_ADDRESS").ok(),
             lfs_link_expires: env::var("LFS_LINK_EXPIRES")
                 .ok()

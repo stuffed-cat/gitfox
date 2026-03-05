@@ -11,6 +11,7 @@ pub mod pipeline;
 pub mod webhook;
 pub mod namespace;
 pub mod ssh_key;
+pub mod gpg_key;  // GPG 密钥管理
 pub mod internal;
 pub mod issue;
 pub mod personal_access_token;
@@ -19,6 +20,7 @@ pub mod two_factor;
 pub mod search;
 pub mod runner;
 pub mod job_log_ws;
+pub mod registry;
 
 use actix_web::{web, HttpResponse};
 use serde::Serialize;
@@ -132,6 +134,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // Internal API routes for GitFox Shell
     internal::configure_internal_routes(cfg);
     
+    // Internal API routes for Package Registry (Workhorse calls these)
+    registry::configure_routes(cfg);
+    
     // Standard OAuth2 endpoints (at root level, not under /api/v1)
     cfg.route("/oauth/authorize", web::get().to(oauth::authorize))
        .route("/oauth/authorize", web::post().to(oauth::authorize_grant))
@@ -223,6 +228,13 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/user/ssh_keys/{id}", web::get().to(ssh_key::get_ssh_key))
             .route("/user/ssh_keys/{id}", web::delete().to(ssh_key::delete_ssh_key))
             
+            // GPG Key routes for current user
+            .route("/user/gpg_keys", web::get().to(gpg_key::list_gpg_keys))
+            .route("/user/gpg_keys", web::post().to(gpg_key::create_gpg_key))
+            .route("/user/gpg_keys/{id}", web::get().to(gpg_key::get_gpg_key))
+            .route("/user/gpg_keys/{id}", web::delete().to(gpg_key::delete_gpg_key))
+            .route("/user/gpg_keys/{id}/revoke", web::post().to(gpg_key::revoke_gpg_key))
+            
             // Personal Access Token routes for current user
             .route("/user/access_tokens", web::get().to(personal_access_token::list_tokens))
             .route("/user/access_tokens", web::post().to(personal_access_token::create_token))
@@ -233,6 +245,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             // OAuth Identity routes for current user (linked social accounts)
             .route("/user/identities", web::get().to(oauth::list_identities))
             .route("/user/identities/{id}", web::delete().to(oauth::unlink_identity))
+            .route("/user/account-status", web::get().to(oauth::get_account_status))
             
             // User CI/CD Runner management (user-level private runners)
             .route("/user/runners", web::get().to(runner::user_list_runners))
@@ -282,6 +295,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/forks", web::get().to(project::list_forks))
             .route("/projects/{namespace}/{project}/fork_network", web::get().to(project::get_fork_network))
             .route("/projects/{namespace}/{project}/fork_divergence", web::get().to(project::get_fork_divergence))
+            .route("/projects/{namespace}/{project}/sync_fork", web::post().to(project::sync_fork))
             
             // Repository routes 
             .route("/projects/{namespace}/{project}/repository", web::get().to(repository::get_repository_info))

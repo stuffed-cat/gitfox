@@ -35,6 +35,12 @@ export const userSettingsMenuConfig: NavSection[] = [
         icon: 'key' 
       },
       { 
+        id: 'gpg-keys', 
+        label: 'GPG 密钥', 
+        to: '/-/profile/gpg-keys', 
+        icon: 'key' 
+      },
+      { 
         id: 'access-tokens', 
         label: '访问令牌', 
         to: '/-/profile/tokens', 

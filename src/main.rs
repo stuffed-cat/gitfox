@@ -82,8 +82,8 @@ async fn main() -> std::io::Result<()> {
     });
     log::info!("Redis job timeout listener started (primary)");
 
-    // Start gRPC Auth server if enabled
-    if config.grpc_enabled {
+    // Start gRPC Auth server (always enabled, required for shell/workhorse)
+    {
         let grpc_config = Arc::new(config.clone());
         let grpc_pool = pg_pool.clone();
         let grpc_addr = config.grpc_address.clone();

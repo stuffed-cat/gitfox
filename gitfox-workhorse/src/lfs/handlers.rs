@@ -18,12 +18,12 @@ use crate::lfs::types::*;
 pub struct LfsState {
     pub storage: LfsStorage,
     pub config: Arc<Config>,
-    pub auth_client: Option<AuthClient>,
+    pub auth_client: AuthClient,
     pub lfs_client: Option<LfsClient>,
 }
 
 impl LfsState {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new(config: Arc<Config>, auth_client: AuthClient) -> Self {
         let storage = LfsStorage::new(&config.lfs_storage_path);
         
         // 初始化 LFS gRPC 客户端（如果配置了）
@@ -34,7 +34,7 @@ impl LfsState {
         Self {
             storage,
             config,
-            auth_client: None,
+            auth_client,
             lfs_client,
         }
     }
@@ -893,23 +893,7 @@ async fn authenticate_lfs_request(
     action: &str,
     state: &LfsState,
 ) -> Result<LfsAuthInfo, String> {
-    let auth_client = match &state.auth_client {
-        Some(c) => c.clone(),
-        None => {
-            // 没有 Auth 客户端配置 - 只允许公开仓库的读取
-            if action == "download" {
-                return Ok(LfsAuthInfo {
-                    user_id: 0,
-                    username: "anonymous".to_string(),
-                    project_id: 0,
-                    can_write: false,
-                });
-            }
-            return Err("Authentication service not configured".to_string());
-        }
-    };
-
-    let mut auth_client = auth_client;
+    let mut auth_client = state.auth_client.clone();
     let auth_header = extract_auth_info(req);
 
     // 调用 gRPC Auth 服务

@@ -159,10 +159,13 @@ import { ref, computed } from 'vue'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
+import { useAuthStore } from '@/stores/auth'
 import type { Group, GroupMember, Project } from '@/types'
 
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
+
+const authStore = useAuthStore()
 
 const props = defineProps<{
   group: Group
@@ -175,8 +178,17 @@ const activeTab = ref('subgroups-projects')
 const searchQuery = ref('')
 
 const canManage = computed(() => {
-  // TODO: check actual permission
-  return true
+  const currentUser = authStore.user
+  if (!currentUser) return false
+  
+  // 检查是否为组的 owner 或 maintainer
+  // access_level: 50 = Owner, 40 = Maintainer
+  const member = props.members.find(m => String(m.user_id) === currentUser.id)
+  if (member && member.access_level >= 40) {
+    return true
+  }
+  
+  return false
 })
 
 const filteredSubgroups = computed(() => {

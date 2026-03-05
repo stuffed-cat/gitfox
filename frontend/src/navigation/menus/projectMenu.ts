@@ -118,6 +118,19 @@ export function createProjectMenuConfig(context: NavContext): NavSection[] {
       ]
     },
     {
+      id: 'deploy',
+      title: '部署',
+      items: [
+        { 
+          id: 'packages', 
+          label: '软件包仓库', 
+          to: `${basePath}/-/packages`, 
+          icon: 'package',
+          activeMatch: /\/-\/packages/
+        },
+      ]
+    },
+    {
       id: 'project-settings',
       title: '设置',
       items: [

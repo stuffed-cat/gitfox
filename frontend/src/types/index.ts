@@ -756,6 +756,8 @@ export interface Package {
     username: string
     avatar_url?: string
   }
+  // 包含元数据 JSON（如 npm package.json 内容或 Docker manifest）
+  metadata?: Record<string, any>
 }
 
 export interface PackageFile {

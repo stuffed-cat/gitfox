@@ -291,6 +291,10 @@ class ApiClient {
     getForkDivergence: async (path: ProjectPath): Promise<ForkDivergence> => {
       const response = await this.client.get(`${this.projectPath(path)}/fork_divergence`)
       return response.data
+    },
+    syncFork: async (path: ProjectPath): Promise<{ success: boolean; message: string; updated_refs: number }> => {
+      const response = await this.client.post(`${this.projectPath(path)}/sync_fork`)
+      return response.data
     }
   }
 
@@ -681,6 +685,11 @@ class ApiClient {
     },
     unlink: async (id: number): Promise<void> => {
       await this.client.delete(`/user/identities/${id}`)
+    },
+    // Get account security status (has_password, linked_identity_count)
+    getAccountStatus: async (): Promise<{ has_password: boolean; linked_identity_count: number }> => {
+      const response = await this.client.get('/user/account-status')
+      return response.data
     },
   }
 

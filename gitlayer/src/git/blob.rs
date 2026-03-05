@@ -27,6 +27,14 @@ pub struct BlameLine {
     pub original_line: i32,
 }
 
+/// LFS 指针信息
+#[derive(Debug, Clone)]
+pub struct LfsPointerInfo {
+    pub oid: String,       // SHA-256 OID
+    pub size: i64,         // 文件大小
+    pub path: String,      // 文件路径
+}
+
 pub struct BlobOps;
 
 impl BlobOps {
@@ -198,5 +206,155 @@ impl BlobOps {
         // Check for null bytes in the first 8000 bytes (like Git does)
         let check_len = std::cmp::min(8000, data.len());
         data[..check_len].contains(&0)
+    }
+    
+    /// 检测文件内容是否是 LFS 指针
+    /// 
+    /// LFS 指针格式:
+    /// ```text
+    /// version https://git-lfs.github.com/spec/v1
+    /// oid sha256:4d7a214614ab293729f21ceca41c1c1b6deaecb2e05c9a3b4d5c84c4e3e28e46
+    /// size 12345
+    /// ```
+    pub fn parse_lfs_pointer(content: &[u8]) -> Option<(String, i64)> {
+        // LFS 指针是纯文本，不应该包含二进制数据
+        if Self::is_binary(content) {
+            return None;
+        }
+        
+        // LFS 指针大小限制（通常小于 200 字节）
+        if content.len() > 500 {
+            return None;
+        }
+        
+        let text = match std::str::from_utf8(content) {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        
+        // 检查是否以 "version https://git-lfs.github.com/spec/v1" 开头
+        if !text.starts_with("version https://git-lfs.github.com/spec/v1") {
+            return None;
+        }
+        
+        let mut oid: Option<String> = None;
+        let mut size: Option<i64> = None;
+        
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with("oid sha256:") {
+                oid = Some(line.trim_start_matches("oid sha256:").to_string());
+            } else if line.starts_with("size ") {
+                size = line.trim_start_matches("size ").parse().ok();
+            }
+        }
+        
+        match (oid, size) {
+            (Some(o), Some(s)) => Some((o, s)),
+            _ => None,
+        }
+    }
+    
+    /// 获取指定路径中的 LFS 指针
+    /// 
+    /// 遍历给定路径列表，检测哪些是 LFS 指针，并返回指针信息
+    pub fn get_lfs_pointers(
+        repo: &Repository,
+        revision: &str,
+        paths: &[String],
+    ) -> Result<Vec<LfsPointerInfo>> {
+        let obj = repo.revparse_single(revision)
+            .map_err(|_| GitLayerError::InvalidRevision(revision.to_string()))?;
+        
+        let commit = obj.peel_to_commit()
+            .map_err(|_| GitLayerError::InvalidRevision(format!("{} is not a commit", revision)))?;
+        
+        let tree = commit.tree()?;
+        let mut pointers = Vec::new();
+        
+        for path in paths {
+            let entry = match tree.get_path(Path::new(path)) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            
+            if entry.kind() != Some(ObjectType::Blob) {
+                continue;
+            }
+            
+            let blob = match repo.find_blob(entry.id()) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            
+            if let Some((oid, size)) = Self::parse_lfs_pointer(blob.content()) {
+                pointers.push(LfsPointerInfo {
+                    oid,
+                    size,
+                    path: path.clone(),
+                });
+            }
+        }
+        
+        debug!("Found {} LFS pointers in {} paths", pointers.len(), paths.len());
+        Ok(pointers)
+    }
+    
+    /// 扫描整个树以查找所有 LFS 指针
+    /// 
+    /// 递归遍历树，检测所有 LFS 指针
+    pub fn scan_lfs_pointers(
+        repo: &Repository,
+        revision: &str,
+    ) -> Result<Vec<LfsPointerInfo>> {
+        let obj = repo.revparse_single(revision)
+            .map_err(|_| GitLayerError::InvalidRevision(revision.to_string()))?;
+        
+        let commit = obj.peel_to_commit()
+            .map_err(|_| GitLayerError::InvalidRevision(format!("{} is not a commit", revision)))?;
+        
+        let tree = commit.tree()?;
+        let mut pointers = Vec::new();
+        
+        Self::scan_tree_for_lfs(repo, &tree, "", &mut pointers)?;
+        
+        debug!("Scanned tree, found {} LFS pointers", pointers.len());
+        Ok(pointers)
+    }
+    
+    /// 递归扫描树
+    fn scan_tree_for_lfs(
+        repo: &Repository,
+        tree: &git2::Tree,
+        prefix: &str,
+        pointers: &mut Vec<LfsPointerInfo>,
+    ) -> Result<()> {
+        for entry in tree.iter() {
+            let name = entry.name().unwrap_or("");
+            let path = if prefix.is_empty() {
+                name.to_string()
+            } else {
+                format!("{}/{}", prefix, name)
+            };
+            
+            match entry.kind() {
+                Some(ObjectType::Blob) => {
+                    let blob = repo.find_blob(entry.id())?;
+                    if let Some((oid, size)) = Self::parse_lfs_pointer(blob.content()) {
+                        pointers.push(LfsPointerInfo {
+                            oid,
+                            size,
+                            path,
+                        });
+                    }
+                }
+                Some(ObjectType::Tree) => {
+                    let subtree = repo.find_tree(entry.id())?;
+                    Self::scan_tree_for_lfs(repo, &subtree, &path, pointers)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }

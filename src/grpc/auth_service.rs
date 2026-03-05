@@ -28,6 +28,7 @@ use log::{debug, info, warn};
 use std::sync::Arc;
 
 use crate::config::Config;
+use crate::services::CiService;
 
 // 导入生成的 proto 代码
 pub mod auth_proto {
@@ -124,11 +125,13 @@ impl TokenInfo {
 pub struct AuthServiceImpl {
     pool: PgPool,
     config: Arc<Config>,
+    ci_service: CiService,
 }
 
 impl AuthServiceImpl {
     pub fn new(pool: PgPool, config: Arc<Config>) -> Self {
-        Self { pool, config }
+        let ci_service = CiService::new(pool.clone(), config.clone());
+        Self { pool, config, ci_service }
     }
 
     /// 创建 gRPC 服务
@@ -301,11 +304,36 @@ impl AuthService for AuthServiceImpl {
         // ========================================
         let token_info = match req.auth {
             Some(http_access_request::Auth::JwtAuth(jwt)) => {
-                self.authenticate_jwt(&jwt.token).await?
+                match self.authenticate_jwt(&jwt.token).await {
+                    Ok(info) => info,
+                    Err(e) => {
+                        // JWT 认证失败
+                        // 对于写操作，直接返回错误
+                        if needs_write {
+                            return Err(e);
+                        }
+                        // 对于读操作，回退到匿名访问（公开仓库可以匿名读）
+                        debug!("JWT auth failed, falling back to anonymous: {}", e);
+                        TokenInfo::anonymous()
+                    }
+                }
             }
             Some(http_access_request::Auth::BasicAuth(basic)) => {
                 // Basic auth 可能是密码、PAT 或 OAuth2 token
-                self.authenticate_basic(&basic.username, &basic.password).await?
+                match self.authenticate_basic(&basic.username, &basic.password).await {
+                    Ok(info) => info,
+                    Err(e) => {
+                        // Basic auth 认证失败
+                        // 对于写操作，直接返回错误
+                        if needs_write {
+                            return Err(e);
+                        }
+                        // 对于读操作，回退到匿名访问（公开仓库可以匿名读）
+                        // 这符合 GitLab 的行为：公开仓库忽略错误凭据
+                        debug!("Basic auth failed, falling back to anonymous: {}", e);
+                        TokenInfo::anonymous()
+                    }
+                }
             }
             None => {
                 // 未认证 - 匿名访问
@@ -485,6 +513,11 @@ impl AuthService for AuthServiceImpl {
     }
 
     /// Post-receive 通知
+    ///
+    /// 完整流程：
+    /// 1. 解析 CI 配置文件
+    /// 2. 创建 pipeline 和 jobs
+    /// 3. 返回创建的 pipeline IDs
     async fn notify_post_receive(
         &self,
         request: Request<PostReceiveRequest>,
@@ -493,27 +526,60 @@ impl AuthService for AuthServiceImpl {
 
         let req = request.into_inner();
         info!(
-            "PostReceive notification: user_id={}, repo={}, changes={}",
+            "PostReceive notification: user_id={}, repo={}, project_id={}, changes={}",
             req.user_id,
             req.repository,
+            req.project_id,
             req.changes.len()
         );
 
         let mut pipeline_ids = Vec::new();
+        let mut total_jobs = 0;
 
-        // 触发 CI/CD pipeline
+        // 为每个 ref change 触发 CI/CD pipeline
         for change in &req.changes {
-            if let Ok(Some(pipeline_id)) = self
-                .trigger_pipeline(req.user_id, req.project_id, &change.ref_name, &change.new_sha)
+            // 跳过删除操作
+            if change.new_sha == "0000000000000000000000000000000000000000" {
+                debug!("Ref {} deleted, skipping CI", change.ref_name);
+                continue;
+            }
+
+            // 使用完整的 CI 服务触发 pipeline
+            match self
+                .ci_service
+                .trigger_pipeline(
+                    req.project_id,
+                    req.user_id,
+                    &change.ref_name,
+                    &change.new_sha,
+                    crate::models::PipelineTriggerType::Push,
+                )
                 .await
             {
-                pipeline_ids.push(pipeline_id);
+                Ok(Some(result)) => {
+                    info!(
+                        "Pipeline {} created with {} jobs (status: {:?})",
+                        result.pipeline_id, result.jobs_created, result.status
+                    );
+                    pipeline_ids.push(result.pipeline_id);
+                    total_jobs += result.jobs_created;
+                }
+                Ok(None) => {
+                    debug!("No pipeline triggered for ref {}", change.ref_name);
+                }
+                Err(e) => {
+                    warn!("Failed to trigger pipeline for ref {}: {}", change.ref_name, e);
+                }
             }
         }
 
         Ok(Response::new(PostReceiveResponse {
             success: true,
-            message: format!("Triggered {} pipelines", pipeline_ids.len()),
+            message: format!(
+                "Triggered {} pipelines with {} jobs",
+                pipeline_ids.len(),
+                total_jobs
+            ),
             pipeline_ids,
         }))
     }
@@ -531,8 +597,114 @@ impl AuthService for AuthServiceImpl {
             req.user_id, req.repository, req.ref_name
         );
 
-        // TODO: 实现分支保护规则检查
-        // 目前默认允许所有更新
+        // 解析仓库路径获取项目 ID
+        let parts: Vec<&str> = req.repository.rsplitn(2, '/').collect();
+        if parts.len() != 2 {
+            return Err(Status::invalid_argument("Invalid repository path"));
+        }
+        let (project_name, namespace) = (parts[0].trim_end_matches(".git"), parts[1]);
+        
+        // 查询项目
+        let project = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT p.id, p.owner_id FROM projects p
+             JOIN namespaces n ON p.namespace_id = n.id
+             WHERE n.path = $1 AND p.name = $2"
+        )
+        .bind(namespace)
+        .bind(project_name)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
+        
+        let (project_id, owner_id) = match project {
+            Some(p) => p,
+            None => return Ok(Response::new(RefUpdateResponse {
+                allowed: false,
+                message: "Project not found".to_string(),
+            })),
+        };
+
+        // 只对分支进行保护检查（不检查标签）
+        if !req.ref_name.starts_with("refs/heads/") {
+            return Ok(Response::new(RefUpdateResponse {
+                allowed: true,
+                message: String::new(),
+            }));
+        }
+        
+        let branch_name = req.ref_name.trim_start_matches("refs/heads/");
+        
+        // 检查变更类型
+        let is_deletion = req.change_type == "delete" 
+            || req.new_sha == "0000000000000000000000000000000000000000";
+        // 注意: 强制推送检测需要 git 历史访问，这里简化为只检查 change_type
+        // 完整的强制推送检测应该在 GitLayer 或 git hook 中实现
+        let is_force_push = false; // 由 GitLayer 在实际 git 操作时检测
+
+        // 查询分支保护规则
+        let rules = sqlx::query_as::<_, (String, bool, i32, bool, bool, bool)>(
+            "SELECT branch_pattern, require_review, required_reviewers, 
+                    require_ci_pass, allow_force_push, allow_deletion
+             FROM branch_protection_rules
+             WHERE project_id = $1"
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
+
+        // 检查分支是否匹配任何保护规则
+        for (pattern, require_review, required_reviewers, require_ci_pass, allow_force_push, allow_deletion) in rules {
+            if !self.branch_matches_pattern(branch_name, &pattern) {
+                continue;
+            }
+
+            // 找到匹配的保护规则，检查权限
+            debug!("Branch {} matches protection pattern {}", branch_name, pattern);
+
+            // 检查用户角色
+            let user_role = self.get_user_project_role(req.user_id, project_id, owner_id).await?;
+            
+            // 只有 owner 和 maintainer 可以推送到受保护分支
+            if !matches!(user_role.as_str(), "owner" | "maintainer") {
+                return Ok(Response::new(RefUpdateResponse {
+                    allowed: false,
+                    message: format!(
+                        "Branch '{}' is protected. Only maintainers and owners can push.",
+                        branch_name
+                    ),
+                }));
+            }
+
+            // 检查删除
+            if is_deletion && !allow_deletion {
+                return Ok(Response::new(RefUpdateResponse {
+                    allowed: false,
+                    message: format!(
+                        "Branch '{}' is protected. Deletion is not allowed.",
+                        branch_name
+                    ),
+                }));
+            }
+
+            // 检查强制推送
+            if is_force_push && !allow_force_push {
+                return Ok(Response::new(RefUpdateResponse {
+                    allowed: false,
+                    message: format!(
+                        "Branch '{}' is protected. Force push is not allowed.",
+                        branch_name
+                    ),
+                }));
+            }
+
+            // require_review 和 require_ci_pass 通常在 MR 合并时检查
+            // pre-receive hook 阶段如果不是通过 MR 合并，可以选择拒绝
+            // 这里允许 maintainer/owner 直接推送（他们可以绕过 review）
+            
+            debug!("Protected branch check passed for user role: {}", user_role);
+        }
+
         Ok(Response::new(RefUpdateResponse {
             allowed: true,
             message: String::new(),
@@ -651,6 +823,222 @@ impl AuthService for AuthServiceImpl {
             expires_in,
         }))
     }
+    
+    /// 验证GPG签名
+    async fn verify_gpg_signature(
+        &self,
+        request: Request<VerifyGpgSignatureRequest>,
+    ) -> Result<Response<VerifyGpgSignatureResponse>, Status> {
+        self.verify_internal_token(&request)?;
+        
+        let req = request.into_inner();
+        debug!(
+            "VerifyGpgSignature: commit={}, committer_email={}",
+            req.commit_sha, req.committer_email
+        );
+        
+        // 首先检查缓存
+        if req.project_id > 0 {
+            let cached: Option<(bool, String, Option<String>, Option<i64>, Option<String>)> = sqlx::query_as(
+                r#"
+                SELECT 
+                    (verification_status = 'verified') as valid,
+                    verification_status,
+                    signer_key_id,
+                    signer_user_id,
+                    u.username
+                FROM gpg_signatures gs
+                LEFT JOIN users u ON gs.signer_user_id = u.id
+                WHERE gs.project_id = $1 AND gs.commit_sha = $2
+                "#
+            )
+            .bind(req.project_id)
+            .bind(&req.commit_sha)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
+            
+            if let Some((valid, status, key_id, user_id, username)) = cached {
+                return Ok(Response::new(VerifyGpgSignatureResponse {
+                    valid,
+                    status,
+                    message: String::new(),
+                    key_id: key_id.unwrap_or_default(),
+                    signer_user_id: user_id.unwrap_or(0),
+                    signer_username: username.unwrap_or_default(),
+                }));
+            }
+        }
+        
+        // 调用验证逻辑
+        let result = crate::handlers::gpg_key::verify_gpg_signature(
+            &self.pool,
+            &req.signature,
+            &req.signed_data,
+            &req.committer_email,
+        ).await;
+        
+        match result {
+            Ok((valid, status, key_id, user_id, username)) => {
+                // 缓存结果
+                if req.project_id > 0 {
+                    let _ = sqlx::query(
+                        r#"
+                        INSERT INTO gpg_signatures (
+                            project_id, commit_sha, signer_key_id, verification_status,
+                            signer_email, signer_user_id
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (project_id, commit_sha) DO UPDATE SET
+                            verification_status = EXCLUDED.verification_status,
+                            signer_user_id = EXCLUDED.signer_user_id
+                        "#
+                    )
+                    .bind(req.project_id)
+                    .bind(&req.commit_sha)
+                    .bind(&key_id)
+                    .bind(&status)
+                    .bind(&req.committer_email)
+                    .bind(user_id)
+                    .execute(&self.pool)
+                    .await;
+                }
+                
+                Ok(Response::new(VerifyGpgSignatureResponse {
+                    valid,
+                    status,
+                    message: String::new(),
+                    key_id: key_id.unwrap_or_default(),
+                    signer_user_id: user_id.unwrap_or(0),
+                    signer_username: username.unwrap_or_default(),
+                }))
+            }
+            Err(e) => {
+                warn!("GPG signature verification failed: {}", e);
+                Ok(Response::new(VerifyGpgSignatureResponse {
+                    valid: false,
+                    status: "unknown_key".to_string(),
+                    message: e.to_string(),
+                    ..Default::default()
+                }))
+            }
+        }
+    }
+    
+    /// 查找GPG密钥
+    async fn find_gpg_key(
+        &self,
+        request: Request<FindGpgKeyRequest>,
+    ) -> Result<Response<FindGpgKeyResponse>, Status> {
+        self.verify_internal_token(&request)?;
+        
+        let req = request.into_inner();
+        debug!("FindGpgKey: key_id={}", req.key_id);
+        
+        // 尝试通过主密钥或子密钥查找
+        let result: Option<(i64, i64, String, String, String, Vec<String>, bool, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+            r#"
+            SELECT 
+                g.id,
+                g.user_id,
+                u.username,
+                g.primary_key_id,
+                g.fingerprint,
+                g.emails,
+                g.verified,
+                g.revoked,
+                g.key_expires_at
+            FROM gpg_keys g
+            JOIN users u ON g.user_id = u.id
+            WHERE g.fingerprint = $1
+               OR g.primary_key_id = $1
+               OR g.fingerprint LIKE '%' || $1
+            "#
+        )
+        .bind(&req.key_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
+        
+        if let Some((id, user_id, username, primary_key_id, fingerprint, emails, verified, revoked, expires_at)) = result {
+            let expired = expires_at.map(|e| e < chrono::Utc::now()).unwrap_or(false);
+            
+            return Ok(Response::new(FindGpgKeyResponse {
+                found: true,
+                id,
+                user_id,
+                username,
+                primary_key_id,
+                fingerprint,
+                emails,
+                verified,
+                revoked,
+                expired,
+            }));
+        }
+        
+        // 尝试通过子密钥查找
+        let subkey_result: Option<(i64, String)> = sqlx::query_as(
+            r#"
+            SELECT gpg_key_id, fingerprint
+            FROM gpg_key_subkeys
+            WHERE fingerprint = $1
+               OR key_id = $1
+               OR fingerprint LIKE '%' || $1
+            "#
+        )
+        .bind(&req.key_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
+        
+        if let Some((gpg_key_id, _)) = subkey_result {
+            // 获取主密钥信息
+            let result: Option<(i64, i64, String, String, String, Vec<String>, bool, bool, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+                r#"
+                SELECT 
+                    g.id,
+                    g.user_id,
+                    u.username,
+                    g.primary_key_id,
+                    g.fingerprint,
+                    g.emails,
+                    g.verified,
+                    g.revoked,
+                    g.key_expires_at
+                FROM gpg_keys g
+                JOIN users u ON g.user_id = u.id
+                WHERE g.id = $1
+                "#
+            )
+            .bind(gpg_key_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
+            
+            if let Some((id, user_id, username, primary_key_id, fingerprint, emails, verified, revoked, expires_at)) = result {
+                let expired = expires_at.map(|e| e < chrono::Utc::now()).unwrap_or(false);
+                
+                return Ok(Response::new(FindGpgKeyResponse {
+                    found: true,
+                    id,
+                    user_id,
+                    username,
+                    primary_key_id,
+                    fingerprint,
+                    emails,
+                    verified,
+                    revoked,
+                    expired,
+                }));
+            }
+        }
+        
+        Ok(Response::new(FindGpgKeyResponse {
+            found: false,
+            ..Default::default()
+        }))
+    }
 }
 
 impl AuthServiceImpl {
@@ -661,12 +1049,14 @@ impl AuthServiceImpl {
         repo_path: &str,
         _action: &str,
     ) -> Result<(bool, bool, i64, String), Status> {
-        // 解析仓库路径
+        // 解析仓库路径 (格式: namespace/project.git)
         let parts: Vec<&str> = repo_path.rsplitn(2, '/').collect();
         if parts.len() != 2 {
             return Err(Status::invalid_argument("Invalid repository path format"));
         }
-        let (project_name, namespace) = (parts[0], parts[1]);
+        let (project_with_git, namespace) = (parts[0], parts[1]);
+        // 去掉 .git 后缀
+        let project_name = project_with_git.strip_suffix(".git").unwrap_or(project_with_git);
 
         // 查找项目
         let project = sqlx::query_as::<_, (i64, String, i64, String)>(
@@ -674,7 +1064,7 @@ impl AuthServiceImpl {
             SELECT p.id, p.name, p.owner_id, p.visibility::text
             FROM projects p
             JOIN namespaces n ON p.namespace_id = n.id
-            WHERE LOWER(n.path) = LOWER($1) AND LOWER(p.name) = LOWER($2)
+            WHERE n.path = $1 AND p.name = $2
             "#,
         )
         .bind(namespace)
@@ -695,9 +1085,10 @@ impl AuthServiceImpl {
             self.config.git_repos_path, namespace, project_name
         );
 
-        // 未认证用户只能访问公开仓库
+        // 未认证用户（匿名）只能访问公开仓库
+        // 注意：internal 可见性需要登录用户，不允许匿名访问
         if user_id == 0 {
-            let can_access = visibility == "public" || visibility == "internal";
+            let can_access = visibility == "public";
             return Ok((can_access, false, project_id, repo_disk_path));
         }
 
@@ -723,6 +1114,9 @@ impl AuthServiceImpl {
             }
             None => {
                 // 无成员关系，检查可见性
+                // public: 任何人可读
+                // internal: 仅登录用户可读（user_id != 0 已在上面检查）
+                // private: 仅成员可访问
                 let can_access = visibility == "public" || visibility == "internal";
                 Ok((can_access, false, project_id, repo_disk_path))
             }
@@ -984,46 +1378,54 @@ impl AuthServiceImpl {
         Ok(result)
     }
 
-    /// 触发 CI/CD Pipeline
-    /// 
-    /// 注意：这是一个简化实现，只创建 pipeline 记录。
-    /// 实际的 CI 配置解析和 job 创建由 pipeline 处理服务（如 handlers/internal.rs 中的 post_receive）完成。
-    /// 这避免了在 gRPC 服务中直接使用 git2 库。
-    async fn trigger_pipeline(
+    // ========================================
+    // 分支保护辅助方法
+    // ========================================
+
+    /// 检查分支名是否匹配保护模式
+    /// 支持 glob 模式：* 匹配任意字符，? 匹配单个字符
+    fn branch_matches_pattern(&self, branch: &str, pattern: &str) -> bool {
+        // 特殊情况：精确匹配
+        if !pattern.contains('*') && !pattern.contains('?') {
+            return branch == pattern;
+        }
+
+        // 将 glob 模式转换为正则表达式
+        let regex_pattern = pattern
+            .replace('.', r"\.")
+            .replace('*', ".*")
+            .replace('?', ".");
+        
+        let regex_pattern = format!("^{}$", regex_pattern);
+        
+        match regex::Regex::new(&regex_pattern) {
+            Ok(re) => re.is_match(branch),
+            Err(_) => branch == pattern, // 回退到精确匹配
+        }
+    }
+
+    /// 获取用户在项目中的角色
+    async fn get_user_project_role(
         &self,
         user_id: i64,
         project_id: i64,
-        ref_name: &str,
-        sha: &str,
-    ) -> Result<Option<i64>, Status> {
-        // 只在分支推送时触发（不触发 tag）
-        if !ref_name.starts_with("refs/heads/") {
-            return Ok(None);
+        owner_id: i64,
+    ) -> Result<String, Status> {
+        // 如果是项目所有者
+        if user_id == owner_id {
+            return Ok("owner".to_string());
         }
 
-        let branch_name = ref_name.strip_prefix("refs/heads/").unwrap_or(ref_name);
-
-        // 创建 pipeline 记录（状态为 created，等待后续处理）
-        // 实际的 CI 配置解析和 job 创建由其他服务完成
-        let result = sqlx::query_scalar::<_, i64>(
-            r#"
-            INSERT INTO pipelines (project_id, ref, sha, status, trigger_type, triggered_by)
-            VALUES ($1, $2, $3, 'created', 'push', $4)
-            RETURNING id
-            "#,
+        // 查询项目成员角色
+        let role = sqlx::query_scalar::<_, String>(
+            "SELECT role::text FROM project_members WHERE project_id = $1 AND user_id = $2"
         )
         .bind(project_id)
-        .bind(branch_name)
-        .bind(sha)
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| Status::internal(format!("Failed to create pipeline: {}", e)))?;
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?;
 
-        if let Some(pipeline_id) = result {
-            info!("Created pipeline {} for project {} (ref: {})", pipeline_id, project_id, branch_name);
-        }
-
-        Ok(result)
+        Ok(role.unwrap_or_else(|| "none".to_string()))
     }
 }

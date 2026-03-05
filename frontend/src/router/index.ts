@@ -144,6 +144,12 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/-/profile/gpg-keys',
+    name: 'GpgKeys',
+    component: () => import('@/views/settings/GpgKeysView.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/-/profile/two-factor',
     name: 'TwoFactor',
     component: () => import('@/views/settings/TwoFactorView.vue'),

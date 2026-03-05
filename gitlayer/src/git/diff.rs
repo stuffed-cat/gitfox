@@ -45,6 +45,15 @@ pub struct FileStats {
     pub deletions: i32,
 }
 
+/// 合并冲突信息
+#[derive(Debug, Clone)]
+pub struct ConflictFileInfo {
+    pub path: String,
+    pub ancestor_content: Vec<u8>,
+    pub our_content: Vec<u8>,
+    pub their_content: Vec<u8>,
+}
+
 pub struct DiffOps;
 
 impl DiffOps {
@@ -295,5 +304,87 @@ impl DiffOps {
         )?;
         
         Ok(files.into_inner())
+    }
+    
+    /// 检测两个分支之间的合并冲突
+    /// 使用 git2 的 merge_commits 来模拟合并并检测冲突
+    pub fn find_conflicts(
+        repo: &Repository,
+        our_revision: &str,
+        their_revision: &str,
+    ) -> Result<(Vec<ConflictFileInfo>, bool)> {
+        debug!("Finding conflicts between {} and {}", our_revision, their_revision);
+        
+        // 解析提交
+        let our_obj = repo.revparse_single(our_revision)
+            .map_err(|_| GitLayerError::InvalidRevision(our_revision.to_string()))?;
+        let their_obj = repo.revparse_single(their_revision)
+            .map_err(|_| GitLayerError::InvalidRevision(their_revision.to_string()))?;
+        
+        let our_commit = our_obj.peel_to_commit()?;
+        let their_commit = their_obj.peel_to_commit()?;
+        
+        // 找到合并基准
+        let ancestor_oid = repo.merge_base(our_commit.id(), their_commit.id())
+            .map_err(|e| GitLayerError::Internal(format!("Failed to find merge base: {}", e)))?;
+        let ancestor_commit = repo.find_commit(ancestor_oid)?;
+        
+        // 获取三方的 tree
+        let our_tree = our_commit.tree()?;
+        let their_tree = their_commit.tree()?;
+        let ancestor_tree = ancestor_commit.tree()?;
+        
+        // 执行三方合并
+        let mut merge_opts = git2::MergeOptions::new();
+        let index = repo.merge_trees(&ancestor_tree, &our_tree, &their_tree, Some(&mut merge_opts))?;
+        
+        let has_conflicts = index.has_conflicts();
+        let mut conflict_files = Vec::new();
+        
+        if has_conflicts {
+            // 遍历冲突
+            let conflicts = index.conflicts()?;
+            for conflict in conflicts {
+                let conflict = conflict?;
+                
+                // 获取路径（从任一可用的条目）
+                let path = conflict.ancestor.as_ref()
+                    .or(conflict.our.as_ref())
+                    .or(conflict.their.as_ref())
+                    .and_then(|e| std::str::from_utf8(&e.path).ok())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                
+                if path.is_empty() {
+                    continue;
+                }
+                
+                // 读取三方内容
+                let ancestor_content = conflict.ancestor.as_ref()
+                    .and_then(|e| repo.find_blob(e.id).ok())
+                    .map(|b| b.content().to_vec())
+                    .unwrap_or_default();
+                
+                let our_content = conflict.our.as_ref()
+                    .and_then(|e| repo.find_blob(e.id).ok())
+                    .map(|b| b.content().to_vec())
+                    .unwrap_or_default();
+                
+                let their_content = conflict.their.as_ref()
+                    .and_then(|e| repo.find_blob(e.id).ok())
+                    .map(|b| b.content().to_vec())
+                    .unwrap_or_default();
+                
+                conflict_files.push(ConflictFileInfo {
+                    path,
+                    ancestor_content,
+                    our_content,
+                    their_content,
+                });
+            }
+        }
+        
+        debug!("Found {} conflicts, has_conflicts: {}", conflict_files.len(), has_conflicts);
+        Ok((conflict_files, has_conflicts))
     }
 }

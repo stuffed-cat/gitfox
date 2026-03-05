@@ -204,9 +204,31 @@ impl diff_service_server::DiffService for DiffServiceImpl {
     
     async fn find_conflicts(
         &self,
-        _request: Request<FindConflictsRequest>,
+        request: Request<FindConflictsRequest>,
     ) -> Result<Response<FindConflictsResponse>, Status> {
-        // TODO: Implement conflict detection
-        Err(Status::unimplemented("Conflict detection not yet implemented"))
+        let req = request.into_inner();
+        let path = self.get_repo_path(req.repository.as_ref())?;
+        
+        let repo = RepositoryOps::open(&path)?;
+        
+        let (conflicts, has_conflicts) = DiffOps::find_conflicts(
+            &repo,
+            &req.our_revision,
+            &req.their_revision,
+        ).map_err(|e| Status::internal(format!("Failed to find conflicts: {}", e)))?;
+        
+        let conflict_protos: Vec<ConflictFile> = conflicts.into_iter()
+            .map(|c| ConflictFile {
+                path: c.path,
+                ancestor_content: c.ancestor_content,
+                our_content: c.our_content,
+                their_content: c.their_content,
+            })
+            .collect();
+        
+        Ok(Response::new(FindConflictsResponse {
+            conflicts: conflict_protos,
+            has_conflicts,
+        }))
     }
 }

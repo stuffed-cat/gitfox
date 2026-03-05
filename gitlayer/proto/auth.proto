@@ -27,6 +27,12 @@ service AuthService {
     
     // GenerateLfsToken - 生成LFS认证token (用于git-lfs-authenticate)
     rpc GenerateLfsToken(LfsTokenRequest) returns (LfsTokenResponse);
+    
+    // VerifyGpgSignature - 验证GPG签名
+    rpc VerifyGpgSignature(VerifyGpgSignatureRequest) returns (VerifyGpgSignatureResponse);
+    
+    // FindGpgKey - 通过key ID或指纹查找GPG密钥
+    rpc FindGpgKey(FindGpgKeyRequest) returns (FindGpgKeyResponse);
 }
 
 // SSH访问检查请求
@@ -209,4 +215,64 @@ message LfsTokenResponse {
     string href = 4;
     // Token过期时间 (秒)
     int64 expires_in = 5;
+}
+
+// GPG签名验证请求
+message VerifyGpgSignatureRequest {
+    // 提交SHA
+    string commit_sha = 1;
+    // GPG签名 (ASCII armored)
+    string signature = 2;
+    // 签名的数据 (不含签名的提交内容)
+    string signed_data = 3;
+    // 提交者邮箱 (用于验证签名者身份)
+    string committer_email = 4;
+    // 项目ID (用于缓存)
+    int64 project_id = 5;
+}
+
+// GPG签名验证响应
+message VerifyGpgSignatureResponse {
+    // 签名是否有效
+    bool valid = 1;
+    // 验证状态: "verified", "unverified", "bad_email", "unknown_key", "bad_signature", "expired_key", "revoked_key"
+    string status = 2;
+    // 状态消息
+    string message = 3;
+    // 签名者的GPG密钥ID
+    string key_id = 4;
+    // 签名者的用户ID (如果密钥属于系统中的用户)
+    int64 signer_user_id = 5;
+    // 签名者的用户名
+    string signer_username = 6;
+}
+
+// 查找GPG密钥请求
+message FindGpgKeyRequest {
+    // GPG密钥ID或指纹
+    string key_id = 1;
+}
+
+// 查找GPG密钥响应
+message FindGpgKeyResponse {
+    // 是否找到
+    bool found = 1;
+    // 密钥ID
+    int64 id = 2;
+    // 用户ID
+    int64 user_id = 3;
+    // 用户名
+    string username = 4;
+    // 主密钥ID
+    string primary_key_id = 5;
+    // 完整指纹
+    string fingerprint = 6;
+    // 关联的邮箱列表
+    repeated string emails = 7;
+    // 密钥是否已验证
+    bool verified = 8;
+    // 密钥是否已撤销
+    bool revoked = 9;
+    // 密钥是否已过期
+    bool expired = 10;
 }

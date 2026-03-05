@@ -94,4 +94,9 @@ export const navIcons: Record<string, string> = {
   // OAuth 和访问令牌
   oauth: 'M8 1a7 7 0 100 14A7 7 0 008 1zM8 4a1 1 0 110 2 1 1 0 010-2zm-2.5 6.5a2.5 2.5 0 015 0M4 8h1m6 0h1',
   token: 'M12 1L8 5 4 1M8 5v6m-4 2h8a2 2 0 012 2v0H2v0a2 2 0 012-2z',
+  
+  // 软件包仓库
+  package: 'M8 1L1 4v8l7 3 7-3V4L8 1zM8 8v7M1 4l7 4 7-4',
+  docker: 'M1.5 8h2v2h-2zM4.5 8h2v2h-2zM7.5 8h2v2h-2zM4.5 5h2v2h-2zM7.5 5h2v2h-2zM10.5 6c.5-1 1.5-1.5 3-1.5.3 1 .2 2-.5 3H1c0-3 1.5-5.5 4.5-5.5 1 0 2 .5 2.5 1.5h2c.5-1 1-1.5 2-1.5',
+  npm: 'M2 3h12v10H2V3zM5 6v4h2V7h1v3h3V6H5z',
 }

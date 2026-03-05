@@ -96,31 +96,39 @@ impl smart_http_service_server::SmartHttpService for SmartHttpServiceImpl {
             .arg(&repo_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| Status::internal(format!("Failed to spawn git: {}", e)))?;
         
         let mut stdin = child.stdin.take().unwrap();
-        let mut stdout = child.stdout.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
         
         // Write first chunk
-        stdin.write_all(&first.data).await
-            .map_err(|e| Status::internal(format!("Failed to write to git: {}", e)))?;
+        if !first.data.is_empty() {
+            stdin.write_all(&first.data).await
+                .map_err(|e| Status::internal(format!("Failed to write to git: {}", e)))?;
+        }
         
         // Spawn task to write remaining input
         let write_task = tokio::spawn(async move {
             while let Ok(Some(msg)) = stream.message().await {
-                if let Err(e) = stdin.write_all(&msg.data).await {
-                    error!("Failed to write to git stdin: {}", e);
-                    break;
+                if !msg.data.is_empty() {
+                    if let Err(e) = stdin.write_all(&msg.data).await {
+                        error!("Failed to write to git stdin: {}", e);
+                        break;
+                    }
                 }
             }
-            drop(stdin);
+            drop(stdin); // Close stdin to signal end of input
         });
         
         // Read output as stream
         let output_stream = async_stream::try_stream! {
+            let mut stdout = stdout;
+            let mut stderr = stderr;
             let mut buffer = vec![0u8; 65536];
+            
             loop {
                 match stdout.read(&mut buffer).await {
                     Ok(0) => break,
@@ -135,6 +143,14 @@ impl smart_http_service_server::SmartHttpService for SmartHttpServiceImpl {
                     }
                 }
             }
+            
+            // Log stderr if any (for debugging)
+            let mut stderr_buf = Vec::new();
+            if stderr.read_to_end(&mut stderr_buf).await.is_ok() && !stderr_buf.is_empty() {
+                let stderr_str = String::from_utf8_lossy(&stderr_buf);
+                error!("Git upload-pack stderr: {}", stderr_str);
+            }
+            
             write_task.await.ok();
         };
         

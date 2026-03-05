@@ -104,13 +104,14 @@ impl repository_service_server::RepositoryService for RepositoryServiceImpl {
         let default_branch = RepositoryOps::default_branch(&repo).unwrap_or_else(|_| "main".to_string());
         let size_bytes = RepositoryOps::size(&path).unwrap_or(0);
         let object_count = RepositoryOps::object_count(&repo).unwrap_or(0);
+        let commit_count = RepositoryOps::commit_count(&repo).unwrap_or(0);
         
         Ok(Response::new(GetRepositoryInfoResponse {
             is_empty,
             default_branch,
             size_bytes,
             object_count,
-            commit_count: 0, // TODO: implement
+            commit_count,
             is_bare: repo.is_bare(),
         }))
     }
@@ -238,6 +239,39 @@ impl repository_service_server::RepositoryService for RepositoryServiceImpl {
             Err(_) => Ok(Response::new(GetConfigResponse {
                 value: String::new(),
                 found: false,
+            })),
+        }
+    }
+
+    async fn fetch_from_remote(
+        &self,
+        request: Request<FetchFromRemoteRequest>,
+    ) -> Result<Response<FetchFromRemoteResponse>, Status> {
+        let req = request.into_inner();
+        let path = self.get_repo_path(req.repository.as_ref())?;
+
+        if req.remote_path.is_empty() {
+            return Err(Status::invalid_argument("Remote path is required"));
+        }
+
+        info!("Fetching from remote {} for repository {}", req.remote_path, path);
+
+        match RepositoryOps::fetch_from_remote(
+            &path,
+            &req.remote_path,
+            &req.remote_name,
+            &req.branches,
+            req.prune,
+        ) {
+            Ok(updated_refs) => Ok(Response::new(FetchFromRemoteResponse {
+                success: true,
+                message: String::new(),
+                updated_refs,
+            })),
+            Err(e) => Ok(Response::new(FetchFromRemoteResponse {
+                success: false,
+                message: e.to_string(),
+                updated_refs: 0,
             })),
         }
     }

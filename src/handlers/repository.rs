@@ -210,7 +210,20 @@ pub async fn create_file(
         &path.project,
     ).await?;
     
-    // Check write permission (TODO: implement proper permission check)
+    // Check write permission
+    let has_write_access = check_project_write_permission(
+        pool.get_ref(),
+        project.id,
+        auth.user_id,
+        project.owner_id,
+    ).await?;
+    
+    if !has_write_access {
+        return Err(crate::error::AppError::Forbidden(
+            "You do not have write access to this repository".to_string()
+        ));
+    }
+    
     let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
     
     let sha = GitService::commit_file_change(
@@ -330,4 +343,49 @@ pub async fn batch_commit(
     )?;
     
     Ok(HttpResponse::Created().json(CommitResponse { sha }))
+}
+
+/// Check if user has write permission to a project
+/// Returns true if user is owner, maintainer, or developer
+async fn check_project_write_permission(
+    pool: &PgPool,
+    project_id: i64,
+    user_id: i64,
+    owner_id: i64,
+) -> Result<bool, crate::error::AppError> {
+    use crate::models::MemberRole;
+    
+    // Owner always has write access
+    if user_id == owner_id {
+        return Ok(true);
+    }
+    
+    // Check project membership with write-level roles
+    let role = ProjectService::get_member_role(pool, project_id, user_id).await?;
+    
+    match role {
+        Some(MemberRole::Owner) | Some(MemberRole::Maintainer) | Some(MemberRole::Developer) => Ok(true),
+        _ => {
+            // Check if user is member of the namespace (group) with write access
+            let has_group_write: bool = sqlx::query_scalar(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1 
+                    FROM group_members gm
+                    JOIN groups g ON gm.group_id = g.id
+                    JOIN projects p ON p.namespace_id = g.namespace_id
+                    WHERE p.id = $1 
+                    AND gm.user_id = $2
+                    AND gm.access_level >= 30  -- Developer level or higher
+                )
+                "#
+            )
+            .bind(project_id)
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
+            
+            Ok(has_group_write)
+        }
+    }
 }

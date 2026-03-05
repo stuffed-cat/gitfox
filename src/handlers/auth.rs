@@ -234,8 +234,57 @@ pub async fn verify_two_factor(
             two_factor::use_recovery_code(pool.as_ref(), user_id, code).await?
         },
         "webauthn" => {
-            // TODO: Implement WebAuthn verification
-            return Err(AppError::BadRequest("WebAuthn not yet implemented".to_string()));
+            // WebAuthn verification requires a multi-step challenge-response process.
+            // The webauthn_response field should contain the serialized PublicKeyCredential.
+            // However, WebAuthn authentication needs a prior challenge (from webauthn/start).
+            // If client provided state_key and credential, we can verify directly.
+            let webauthn_json = body.webauthn_response.as_ref()
+                .ok_or_else(|| AppError::BadRequest("WebAuthn response required".to_string()))?;
+            
+            // Parse the WebAuthn response (contains state_key and credential)
+            let webauthn_data: serde_json::Value = serde_json::from_str(webauthn_json)
+                .map_err(|e| AppError::BadRequest(format!("Invalid WebAuthn response: {}", e)))?;
+            
+            let state_key = webauthn_data.get("state_key")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AppError::BadRequest("Missing state_key in WebAuthn response".to_string()))?;
+            
+            let credential_json = webauthn_data.get("credential")
+                .ok_or_else(|| AppError::BadRequest("Missing credential in WebAuthn response".to_string()))?;
+            
+            // Get authentication state from Redis
+            let state_json: Option<String> = deadpool_redis::redis::cmd("GET")
+                .arg(state_key)
+                .query_async(&mut redis_conn)
+                .await
+                .map_err(|e| AppError::InternalError(format!("Redis error: {}", e)))?;
+            
+            let state_json = state_json
+                .ok_or_else(|| AppError::BadRequest("WebAuthn session expired. Please restart authentication.".to_string()))?;
+            
+            // Delete the state from Redis
+            deadpool_redis::redis::cmd("DEL")
+                .arg(state_key)
+                .query_async::<_, ()>(&mut redis_conn)
+                .await
+                .ok();
+            
+            let auth_state: webauthn_rs::prelude::PasskeyAuthentication = serde_json::from_str(&state_json)
+                .map_err(|e| AppError::InternalError(format!("Failed to deserialize state: {}", e)))?;
+            
+            // Parse credential
+            let credential: webauthn_rs::prelude::PublicKeyCredential = serde_json::from_value(credential_json.clone())
+                .map_err(|e| AppError::BadRequest(format!("Invalid credential format: {}", e)))?;
+            
+            // Create WebAuthn instance and verify
+            let webauthn = two_factor::create_webauthn(&config)?;
+            two_factor::finish_webauthn_authentication(
+                pool.as_ref(),
+                &webauthn,
+                user_id,
+                &credential,
+                &auth_state,
+            ).await?
         },
         _ => {
             return Err(AppError::BadRequest("Invalid 2FA method".to_string()));

@@ -9,6 +9,7 @@ pub mod pipeline;
 pub mod webhook;
 pub mod namespace;
 pub mod ssh_key;
+pub mod gpg_key;  // GPG 签名支持
 pub mod issue;
 pub mod personal_access_token;
 pub mod oauth;
@@ -29,6 +30,7 @@ pub use pipeline::*;
 pub use webhook::*;
 pub use namespace::*;
 pub use ssh_key::*;
+pub use gpg_key::*;  // 导出 GPG 类型
 pub use issue::*;
 pub use personal_access_token::*;
 pub use oauth::*;

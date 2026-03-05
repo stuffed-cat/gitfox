@@ -37,6 +37,32 @@ pub struct HttpAccessResult {
     pub gitlayer_address: String,
 }
 
+/// GPG签名验证结果
+#[derive(Debug, Clone)]
+pub struct GpgVerifyResult {
+    pub valid: bool,
+    pub status: String,
+    pub message: String,
+    pub key_id: String,
+    pub signer_user_id: i64,
+    pub signer_username: String,
+}
+
+/// GPG密钥查找结果
+#[derive(Debug, Clone)]
+pub struct GpgKeyInfo {
+    pub found: bool,
+    pub id: i64,
+    pub user_id: i64,
+    pub username: String,
+    pub primary_key_id: String,
+    pub fingerprint: String,
+    pub emails: Vec<String>,
+    pub verified: bool,
+    pub revoked: bool,
+    pub expired: bool,
+}
+
 impl AuthClient {
     /// 创建新的 Auth 客户端
     pub async fn connect(address: &str, shell_token: String) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -182,5 +208,70 @@ impl AuthClient {
 
         let response = self.client.notify_post_receive(request).await?;
         Ok(response.into_inner())
+    }
+    
+    /// 验证GPG签名
+    pub async fn verify_gpg_signature(
+        &mut self,
+        commit_sha: &str,
+        signature: &str,
+        signed_data: &str,
+        committer_email: &str,
+        project_id: i64,
+    ) -> Result<GpgVerifyResult, Box<dyn std::error::Error + Send + Sync>> {
+        debug!(
+            "VerifyGpgSignature: commit={}, email={}",
+            commit_sha, committer_email
+        );
+        
+        let mut request = Request::new(VerifyGpgSignatureRequest {
+            commit_sha: commit_sha.to_string(),
+            signature: signature.to_string(),
+            signed_data: signed_data.to_string(),
+            committer_email: committer_email.to_string(),
+            project_id,
+        });
+        self.add_auth(&mut request);
+        
+        let response = self.client.verify_gpg_signature(request).await?;
+        let resp = response.into_inner();
+        
+        Ok(GpgVerifyResult {
+            valid: resp.valid,
+            status: resp.status,
+            message: resp.message,
+            key_id: resp.key_id,
+            signer_user_id: resp.signer_user_id,
+            signer_username: resp.signer_username,
+        })
+    }
+    
+    /// 查找GPG密钥
+    pub async fn find_gpg_key(
+        &mut self,
+        key_id: &str,
+    ) -> Result<GpgKeyInfo, Box<dyn std::error::Error + Send + Sync>> {
+        debug!("FindGpgKey: key_id={}", key_id);
+        
+        let mut request = Request::new(FindGpgKeyRequest {
+            key_id: key_id.to_string(),
+        });
+        self.add_auth(&mut request);
+        
+        let response = self.client.find_gpg_key(request).await?;
+        let resp = response.into_inner();
+        
+        Ok(GpgKeyInfo {
+            found: resp.found,
+            id: resp.id,
+            user_id: resp.user_id,
+            username: resp.username,
+            primary_key_id: resp.primary_key_id,
+            fingerprint: resp.fingerprint,
+            emails: resp.emails,
+            verified: resp.verified,
+            revoked: resp.revoked,
+            expired: resp.expired,
+        })
     }
 }

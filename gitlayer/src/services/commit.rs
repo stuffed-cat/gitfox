@@ -33,6 +33,15 @@ impl CommitServiceImpl {
     }
     
     fn convert_commit(c: &crate::git::commit::CommitInfo) -> Commit {
+        // Extract signature info if present
+        let (signature, signature_status) = if let Some(ref gpg_sig) = c.gpg_signature {
+            // Signature is present - status will be determined by the consumer
+            // who can call the GPG verification service
+            (gpg_sig.signature.clone(), "unverified".to_string())
+        } else {
+            (String::new(), String::new())
+        };
+        
         Commit {
             id: c.id.clone(),
             tree_id: c.tree_id.clone(),
@@ -51,8 +60,8 @@ impl CommitServiceImpl {
             }),
             message: c.message.clone(),
             short_message: c.short_message.clone(),
-            signature: String::new(),
-            signature_status: String::new(),
+            signature,
+            signature_status,
         }
     }
 }
@@ -110,13 +119,16 @@ impl commit_service_server::CommitService for CommitServiceImpl {
             before,
         )?;
         
+        // 计算总数（对于大型仓库可能较慢，但对分页 UI 是必要的）
+        let total_count = CommitOps::count_commits(&repo, revision, path_filter).unwrap_or(0);
+        
         let commit_protos: Vec<Commit> = commits.iter()
             .map(|c| Self::convert_commit(c))
             .collect();
         
         Ok(Response::new(ListCommitsResponse {
             commits: commit_protos,
-            total_count: 0, // TODO: implement
+            total_count: total_count as i32,
             has_more,
         }))
     }
@@ -125,10 +137,37 @@ impl commit_service_server::CommitService for CommitServiceImpl {
     
     async fn stream_commits(
         &self,
-        _request: Request<StreamCommitsRequest>,
+        request: Request<StreamCommitsRequest>,
     ) -> Result<Response<Self::StreamCommitsStream>, Status> {
-        // TODO: Implement streaming
-        Err(Status::unimplemented("Streaming not yet implemented"))
+        let req = request.into_inner();
+        let path = self.get_repo_path(req.repository.as_ref())?;
+        
+        let repo = RepositoryOps::open(&path)?;
+        let revision = if req.revision.is_empty() { "HEAD".to_string() } else { req.revision };
+        let path_filter = if req.path.is_empty() { None } else { Some(req.path) };
+        let limit = if req.limit > 0 { req.limit as usize } else { 1000 };
+        
+        // 获取所有提交（streaming 场景不使用分页）
+        let (commits, _) = CommitOps::list_commits(
+            &repo,
+            &revision,
+            path_filter.as_deref(),
+            limit,
+            0,
+            true,  // include_merges
+            None,  // after
+            None,  // before
+        ).map_err(|e| Status::internal(format!("Failed to list commits: {}", e)))?;
+        
+        // 转换为 proto 格式
+        let commit_protos: Vec<Commit> = commits.iter()
+            .map(|c| Self::convert_commit(c))
+            .collect();
+        
+        // 创建流
+        let stream = tokio_stream::iter(commit_protos.into_iter().map(Ok));
+        
+        Ok(Response::new(Box::pin(stream)))
     }
     
     async fn count_commits(
@@ -149,10 +188,35 @@ impl commit_service_server::CommitService for CommitServiceImpl {
     
     async fn find_commits(
         &self,
-        _request: Request<FindCommitsRequest>,
+        request: Request<FindCommitsRequest>,
     ) -> Result<Response<FindCommitsResponse>, Status> {
-        // TODO: Implement search
-        Err(Status::unimplemented("Search not yet implemented"))
+        let req = request.into_inner();
+        let path = self.get_repo_path(req.repository.as_ref())?;
+        
+        if req.query.is_empty() {
+            return Err(Status::invalid_argument("Search query required"));
+        }
+        
+        let repo = RepositoryOps::open(&path)?;
+        let search_in = if req.search_in.is_empty() { "all" } else { &req.search_in };
+        let limit = if req.limit > 0 { req.limit as usize } else { 50 };
+        let offset = req.offset as usize;
+        
+        let commits = CommitOps::search_commits(
+            &repo,
+            &req.query,
+            search_in,
+            limit,
+            offset,
+        ).map_err(|e| Status::internal(format!("Search failed: {}", e)))?;
+        
+        let commit_protos: Vec<Commit> = commits.iter()
+            .map(|c| Self::convert_commit(c))
+            .collect();
+        
+        Ok(Response::new(FindCommitsResponse {
+            commits: commit_protos,
+        }))
     }
     
     async fn is_ancestor(

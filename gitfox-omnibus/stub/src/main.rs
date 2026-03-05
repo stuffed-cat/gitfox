@@ -1229,24 +1229,40 @@ fn reconfigure_from_toml(data_dir: &Path) -> Result<()> {
     
     println!("\n🔄 Generating component configuration files...\n");
     
-    // 1. gitfox.env (主应用 devops backend)
+    // 1. gitfox.env (主应用 devops backend) - 使用模板
     let gitfox_env_path = data_dir.join("gitfox.env");
-    write_env_file(&gitfox_env_path, &config.to_backend_env())?;
+    // 模板从构建时复制的源位置加载 (.env.example → gitfox.env.template)
+    let backend_template = TemplateAssets::get("gitfox.env.template")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .expect("gitfox.env.template not found in embedded templates");
+    fs::write(&gitfox_env_path, config.to_backend_env_template(&backend_template))?;
     println!("✅ Generated: {}", gitfox_env_path.display());
     
-    // 2. gitlayer.env
+    // 2. gitlayer.env - 使用模板
     let gitlayer_env_path = data_dir.join("gitlayer.env");
-    write_env_file(&gitlayer_env_path, &config.to_gitlayer_env())?;
+    // 模板从构建时复制的源位置加载 (gitlayer/.env.example → gitlayer.env.template)
+    let gitlayer_template = TemplateAssets::get("gitlayer.env.template")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .expect("gitlayer.env.template not found in embedded templates");
+    fs::write(&gitlayer_env_path, config.to_gitlayer_env_template(&gitlayer_template))?;
     println!("✅ Generated: {}", gitlayer_env_path.display());
     
-    // 3. gitfox-shell.env
+    // 3. gitfox-shell.env - 使用模板
     let shell_env_path = data_dir.join("gitfox-shell.env");
-    write_env_file(&shell_env_path, &config.to_shell_env())?;
+    // 模板从构建时复制的源位置加载 (gitfox-shell/.env.example → shell.env.template)
+    let shell_template = TemplateAssets::get("shell.env.template")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .expect("shell.env.template not found in embedded templates");
+    fs::write(&shell_env_path, config.to_shell_env_template(&shell_template))?;
     println!("✅ Generated: {}", shell_env_path.display());
     
-    // 4. workhorse.toml
+    // 4. workhorse.toml - 使用模板
     let workhorse_toml_path = data_dir.join("workhorse.toml");
-    fs::write(&workhorse_toml_path, config.to_workhorse_toml())?;
+    // 模板从构建时复制的源位置加载 (gitfox-workhorse/config.example.toml → workhorse.toml.template)
+    let workhorse_template = TemplateAssets::get("workhorse.toml.template")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .expect("workhorse.toml.template not found in embedded templates");
+    fs::write(&workhorse_toml_path, config.to_workhorse_toml(&workhorse_template))?;
     println!("✅ Generated: {}", workhorse_toml_path.display());
     
     // 5. postgresql.conf（如果启用内置 PostgreSQL）
@@ -1552,31 +1568,36 @@ fn handle_config_command(data_dir: &Path, action: ConfigAction) -> Result<()> {
             
             // 生成 workhorse.toml
             let workhorse_toml_path = data_dir.join("workhorse.toml");
-            let workhorse_content = config.to_workhorse_toml();
+            // 模板从构建时复制的源位置加载 (gitfox-workhorse/config.example.toml → workhorse.toml.template)
+            let workhorse_template = TemplateAssets::get("workhorse.toml.template")
+                .map(|f| String::from_utf8_lossy(&f.data).to_string())
+                .expect("workhorse.toml.template not found in embedded templates");
+            let workhorse_content = config.to_workhorse_toml(&workhorse_template);
             fs::write(&workhorse_toml_path, &workhorse_content)?;
             println!("✅ Generated: {}", workhorse_toml_path.display());
             
-            // 显示各组件的环境变量
-            println!("\n📋 Backend environment variables:");
-            let backend_env = config.to_backend_env();
-            for (key, _) in backend_env.iter().take(5) {
-                println!("   {} = ...", key);
-            }
-            println!("   ... and {} more", backend_env.len().saturating_sub(5));
+            // 显示各组件的配置变量
+            println!("\n📋 Backend configuration variables:");
+            let backend_vars = config.to_backend_vars();
+            println!("   DATABASE_URL = ...");
+            println!("   SERVER_HOST = {}", backend_vars.server_host);
+            println!("   SERVER_PORT = {}", backend_vars.server_port);
+            println!("   GRPC_ADDRESS = {}", backend_vars.grpc_address);
+            println!("   GITLAYER_ADDRESS = {}", backend_vars.gitlayer_address);
             
-            println!("\n📋 GitLayer environment variables:");
-            for (key, value) in config.to_gitlayer_env() {
-                println!("   {} = {}", key, value);
-            }
+            println!("\n📋 GitLayer configuration variables:");
+            let gitlayer_vars = config.to_gitlayer_vars();
+            println!("   GITLAYER_LISTEN_ADDR = {}", gitlayer_vars.gitlayer_listen_addr);
+            println!("   GIT_REPOS_PATH = {}", gitlayer_vars.git_repos_path);
+            println!("   RUST_LOG = {}", gitlayer_vars.rust_log);
             
-            println!("\n📋 Shell environment variables:");
-            for (key, value) in config.to_shell_env() {
-                if key.contains("SECRET") {
-                    println!("   {} = ***", key);
-                } else {
-                    println!("   {} = {}", key, value);
-                }
-            }
+            println!("\n📋 Shell configuration variables:");
+            let shell_vars = config.to_shell_vars();
+            println!("   SSH_LISTEN_ADDR = {}", shell_vars.ssh_listen_addr);
+            println!("   SSH_HOST_KEY_PATH = {}", shell_vars.ssh_host_key_path);
+            println!("   AUTH_GRPC_ADDRESS = {}", shell_vars.auth_grpc_address);
+            println!("   GITLAYER_ADDRESS = {}", shell_vars.gitlayer_address);
+            println!("   GITFOX_SHELL_SECRET = ***");
         }
         
         ConfigAction::Migrate => {

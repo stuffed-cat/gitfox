@@ -92,7 +92,7 @@ impl ProjectService {
 
         // 检查同一命名空间下是否已存在同名项目
         let existing = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM projects WHERE namespace_id = $1 AND LOWER(name) = LOWER($2)"
+            "SELECT COUNT(*) FROM projects WHERE namespace_id = $1 AND name = $2"
         )
         .bind(namespace_id)
         .bind(&req.name)
@@ -156,7 +156,7 @@ impl ProjectService {
             JOIN namespaces n ON p.namespace_id = n.id
             LEFT JOIN projects fp ON p.forked_from_id = fp.id
             LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
-            WHERE LOWER(n.path) = LOWER($1) AND LOWER(p.name) = LOWER($2)
+            WHERE n.path = $1 AND p.name = $2
             "#
         )
         .bind(owner)
@@ -433,7 +433,7 @@ impl ProjectService {
 
         // Check if project with same name already exists in target namespace
         let existing = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM projects WHERE namespace_id = $1 AND LOWER(name) = LOWER($2)"
+            "SELECT COUNT(*) FROM projects WHERE namespace_id = $1 AND name = $2"
         )
         .bind(ns_id)
         .bind(name)
