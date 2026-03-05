@@ -26,12 +26,15 @@
         class="commit-item"
       >
         <div class="commit-main">
-          <router-link
-            :to="`/${project?.owner_name}/${project?.name}/-/commit/${commit.sha}`"
-            class="commit-message"
-          >
-            {{ commit.message.split('\n')[0] }}
-          </router-link>
+          <div class="commit-title">
+            <router-link
+              :to="`/${project?.owner_name}/${project?.name}/-/commit/${commit.sha}`"
+              class="commit-message"
+            >
+              {{ commit.message.split('\n')[0] }}
+            </router-link>
+            <GpgVerificationBadge v-if="commit.gpg_verification" :verification="commit.gpg_verification" />
+          </div>
           <div class="commit-meta">
             <span class="author">{{ commit.author_name }}</span>
             <span class="separator">·</span>
@@ -64,6 +67,7 @@ import api from '@/api'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/zh-cn'
+import GpgVerificationBadge from '@/components/repository/GpgVerificationBadge.vue'
 import type { Project, BranchInfo, CommitInfo } from '@/types'
 
 dayjs.extend(relativeTime)
@@ -193,12 +197,18 @@ watch([() => props.project?.owner_name, () => props.project?.name], () => {
   min-width: 0;
 }
 
+.commit-title {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  margin-bottom: $spacing-xs;
+}
+
 .commit-message {
   display: block;
   color: $text-primary;
   text-decoration: none;
   font-weight: 500;
-  margin-bottom: $spacing-xs;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

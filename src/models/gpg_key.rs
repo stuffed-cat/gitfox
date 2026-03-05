@@ -26,6 +26,13 @@ pub struct GpgKey {
     pub last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Whether this is a system-generated key for WebIDE/API signing
+    /// System keys are hidden from the user's key list
+    #[serde(default)]
+    pub is_system_key: bool,
+    /// Encrypted private key (only for system keys)
+    #[serde(skip_serializing)]
+    pub private_key_encrypted: Option<String>,
 }
 
 /// GPG Key subkey stored in database

@@ -9,6 +9,7 @@ pub mod ci;
 pub mod runner_usage;
 pub mod oauth;
 pub mod gitlayer;
+pub mod gpg_key;
 
 pub use user::UserService;
 pub use project::ProjectService;
@@ -19,3 +20,4 @@ pub use ci_config::{CiConfigParser, CiConfig, JobDefinition};
 pub use ci::{CiService, PipelineTriggerResult};
 pub use runner_usage::RunnerUsageService;
 pub use oauth::OAuthService;
+pub use gpg_key::GpgKeyService;

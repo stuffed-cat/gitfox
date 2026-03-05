@@ -15,7 +15,7 @@ use crate::models::{
     UserInfo, VerifyTwoFactorRequest, WebAuthnAuthStartRequest, WebAuthnAuthFinishRequest,
     TokenScope,
 };
-use crate::services::{two_factor, SmtpService, SystemConfigService, UserService};
+use crate::services::{two_factor, SmtpService, SystemConfigService, UserService, GpgKeyService};
 
 pub async fn register(
     pool: web::Data<PgPool>,
@@ -24,6 +24,23 @@ pub async fn register(
     body: web::Json<CreateUserRequest>,
 ) -> AppResult<HttpResponse> {
     let user = UserService::create_user(pool.get_ref(), body.into_inner()).await?;
+    
+    // Create system GPG key for the user (used for WebIDE/API commits)
+    // This is done asynchronously and failure shouldn't block registration
+    let pool_clone = pool.clone();
+    let user_id = user.id;
+    let user_email = user.email.clone();
+    let username = user.username.clone();
+    tokio::spawn(async move {
+        if let Err(e) = GpgKeyService::get_or_create_system_key(
+            pool_clone.get_ref(),
+            user_id,
+            &user_email,
+            &username,
+        ).await {
+            log::warn!("Failed to create system GPG key for user {}: {}", user_id, e);
+        }
+    });
     
     // Check if email confirmation is required
     let require_email_confirmation = SystemConfigService::get(pool.get_ref(), redis.get_ref(), "require_email_confirmation")

@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/smarthttp.proto",
                 "proto/operations.proto",
                 "proto/health.proto",
+                "proto/gpg.proto",
             ],
             &["proto"],
         )?;

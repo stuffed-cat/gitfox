@@ -56,6 +56,9 @@ message CreateCommitRequest {
     bool create_branch = 7;
     // Parent commit (for conflict detection)
     string expected_parent = 8;
+    // GPG private key for signing (ASCII armored)
+    // If provided, the commit will be GPG signed
+    string gpg_private_key = 9;
 }
 
 message CreateCommitResponse {
@@ -142,6 +145,8 @@ message WriteFileRequest {
     Signature committer = 6;
     string message = 7;
     bool create_branch = 8;
+    // GPG private key for signing (ASCII armored)
+    string gpg_private_key = 9;
 }
 
 message WriteFileResponse {
@@ -158,6 +163,8 @@ message DeleteFileRequest {
     Signature author = 4;
     Signature committer = 5;
     string message = 6;
+    // GPG private key for signing (ASCII armored)
+    string gpg_private_key = 7;
 }
 
 message DeleteFileResponse {
@@ -174,6 +181,8 @@ message MoveFileRequest {
     Signature author = 5;
     Signature committer = 6;
     string message = 7;
+    // GPG private key for signing (ASCII armored)
+    string gpg_private_key = 8;
 }
 
 message MoveFileResponse {

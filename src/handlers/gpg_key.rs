@@ -21,8 +21,9 @@ pub async fn list_gpg_keys(
     pool: web::Data<PgPool>,
     auth: AuthenticatedUser,
 ) -> Result<HttpResponse, AppError> {
+    // Filter out system keys - they should not be visible to users
     let keys = sqlx::query_as::<_, GpgKey>(
-        r#"SELECT * FROM gpg_keys WHERE user_id = $1 ORDER BY created_at DESC"#,
+        r#"SELECT * FROM gpg_keys WHERE user_id = $1 AND is_system_key = false ORDER BY created_at DESC"#,
     )
     .bind(auth.user_id)
     .fetch_all(pool.get_ref())

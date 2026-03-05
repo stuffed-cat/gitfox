@@ -35,13 +35,13 @@ glob = "0.3"
 thiserror = "1.0"
 anyhow = "1.0"
 dotenv = "0.15"
+tempfile = "3"
 
 [build-dependencies]
 tonic-build = "0.12"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
-tempfile = "3"
 
 [[bench]]
 name = "smarthttp_bench"

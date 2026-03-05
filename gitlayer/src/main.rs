@@ -18,6 +18,7 @@ use gitlayer::services::{
     smarthttp::{SmartHttpServiceImpl, SshServiceImpl},
     operations::OperationServiceImpl,
     health::HealthServiceImpl,
+    gpg::GpgServiceImpl,
 };
 use gitlayer::proto::{
     repository_service_server::RepositoryServiceServer,
@@ -30,6 +31,7 @@ use gitlayer::proto::{
     ssh_service_server::SshServiceServer,
     operation_service_server::OperationServiceServer,
     health_service_server::HealthServiceServer,
+    gpg_service_server::GpgServiceServer,
 };
 
 #[tokio::main]
@@ -63,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ssh_service = SshServiceImpl::new(config.clone());
     let operation_service = OperationServiceImpl::new(config.clone());
     let health_service = HealthServiceImpl::new();
+    let gpg_service = GpgServiceImpl::new(config.clone());
 
     let addr: SocketAddr = config.listen_addr.parse()?;
     
@@ -79,6 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_service(SshServiceServer::new(ssh_service))
         .add_service(OperationServiceServer::new(operation_service))
         .add_service(HealthServiceServer::new(health_service))
+        .add_service(GpgServiceServer::new(gpg_service))
         .serve(addr)
         .await?;
 

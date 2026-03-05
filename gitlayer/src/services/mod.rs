@@ -9,3 +9,4 @@ pub mod diff;
 pub mod smarthttp;
 pub mod operations;
 pub mod health;
+pub mod gpg;

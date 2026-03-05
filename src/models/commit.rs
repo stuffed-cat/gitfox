@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 
-use super::repository::DiffInfo;
+use super::repository::{DiffInfo, GpgVerificationInfo};
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Commit {
@@ -34,6 +34,9 @@ pub struct CommitDetail {
     pub parent_shas: Vec<String>,
     pub stats: CommitStats,
     pub diffs: Vec<DiffInfo>,
+    /// GPG signature verification info
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpg_verification: Option<GpgVerificationInfo>,
 }
 
 #[derive(Debug, Serialize)]

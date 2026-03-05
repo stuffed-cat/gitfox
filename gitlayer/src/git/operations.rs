@@ -1,9 +1,11 @@
 //! Write operations (create commit, merge, etc.)
 
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use git2::{Repository, Signature as GitSignature, ObjectType, IndexAddOption, MergeOptions, build::CheckoutBuilder, Oid};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::error::{GitLayerError, Result};
 
@@ -26,6 +28,7 @@ pub struct OperationOps;
 
 impl OperationOps {
     /// Create a commit with file actions
+    /// If gpg_private_key is provided, the commit will be GPG signed
     pub fn create_commit(
         repo: &Repository,
         branch: &str,
@@ -35,7 +38,21 @@ impl OperationOps {
         actions: &[FileAction],
         create_branch: bool,
     ) -> Result<String> {
-        info!("Creating commit on branch {} with {} actions", branch, actions.len());
+        Self::create_commit_with_signature(repo, branch, author, committer, message, actions, create_branch, None)
+    }
+
+    /// Create a GPG-signed commit with file actions
+    pub fn create_commit_with_signature(
+        repo: &Repository,
+        branch: &str,
+        author: &SignatureInfo,
+        committer: &SignatureInfo,
+        message: &str,
+        actions: &[FileAction],
+        create_branch: bool,
+        gpg_private_key: Option<&str>,
+    ) -> Result<String> {
+        info!("Creating commit on branch {} with {} actions (signed: {})", branch, actions.len(), gpg_private_key.is_some());
         
         let author_sig = GitSignature::now(&author.name, &author.email)?;
         let committer_sig = GitSignature::now(&committer.name, &committer.email)?;
@@ -139,16 +156,130 @@ impl OperationOps {
         
         // Create commit
         let parents: Vec<&git2::Commit> = parent.as_ref().map(|p| vec![p]).unwrap_or_default();
-        let commit_id = repo.commit(
-            Some(&branch_ref),
-            &author_sig,
-            &committer_sig,
-            message,
-            &tree,
-            &parents,
-        )?;
+        
+        let commit_id = if let Some(private_key) = gpg_private_key {
+            // Create signed commit
+            Self::create_signed_commit(
+                repo,
+                &branch_ref,
+                &author_sig,
+                &committer_sig,
+                message,
+                &tree,
+                &parents,
+                private_key,
+            )?
+        } else {
+            // Create unsigned commit
+            repo.commit(
+                Some(&branch_ref),
+                &author_sig,
+                &committer_sig,
+                message,
+                &tree,
+                &parents,
+            )?
+        };
         
         Ok(commit_id.to_string())
+    }
+
+    /// Create a GPG-signed commit using git2's commit_create_buffer and commit_signed
+    fn create_signed_commit(
+        repo: &Repository,
+        branch_ref: &str,
+        author_sig: &GitSignature,
+        committer_sig: &GitSignature,
+        message: &str,
+        tree: &git2::Tree,
+        parents: &[&git2::Commit],
+        private_key: &str,
+    ) -> Result<Oid> {
+        // Create commit buffer (the content that will be signed)
+        let commit_buf = repo.commit_create_buffer(
+            author_sig,
+            committer_sig,
+            message,
+            tree,
+            parents,
+        )?;
+
+        let commit_content = String::from_utf8_lossy(&commit_buf).to_string();
+
+        // Sign the commit content using GPG
+        let signature = Self::sign_with_gpg(&commit_content, private_key)?;
+
+        // Create the signed commit
+        let commit_id = repo.commit_signed(&commit_content, &signature, Some("gpgsig"))?;
+
+        // Update the branch ref to point to the new commit
+        repo.reference(
+            branch_ref,
+            commit_id,
+            true,
+            &format!("commit: {}", message.lines().next().unwrap_or("")),
+        )?;
+
+        Ok(commit_id)
+    }
+
+    /// Sign data using a GPG private key
+    fn sign_with_gpg(data: &str, private_key: &str) -> Result<String> {
+        let temp_dir = tempfile::tempdir().map_err(|e| {
+            GitLayerError::Internal(format!("Failed to create temp directory: {}", e))
+        })?;
+
+        let gpg_home = temp_dir.path();
+
+        // Import the private key
+        let mut import_cmd = Command::new("gpg")
+            .args([
+                "--homedir",
+                gpg_home.to_str().ok_or_else(|| GitLayerError::Internal("Invalid path".to_string()))?,
+                "--batch",
+                "--import",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| GitLayerError::Internal(format!("Failed to run gpg: {}", e)))?;
+
+        if let Some(ref mut stdin) = import_cmd.stdin {
+            let _ = stdin.write_all(private_key.as_bytes());
+        }
+        let _ = import_cmd.wait();
+
+        // Sign the data
+        let mut sign_cmd = Command::new("gpg")
+            .args([
+                "--homedir",
+                gpg_home.to_str().ok_or_else(|| GitLayerError::Internal("Invalid path".to_string()))?,
+                "--batch",
+                "--armor",
+                "--detach-sign",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| GitLayerError::Internal(format!("Failed to run gpg: {}", e)))?;
+
+        if let Some(ref mut stdin) = sign_cmd.stdin {
+            stdin.write_all(data.as_bytes())
+                .map_err(|e| GitLayerError::Internal(format!("Failed to write to gpg: {}", e)))?;
+        }
+
+        let sign_output = sign_cmd.wait_with_output()
+            .map_err(|e| GitLayerError::Internal(format!("Failed to wait for gpg: {}", e)))?;
+
+        if sign_output.status.success() {
+            Ok(String::from_utf8_lossy(&sign_output.stdout).to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&sign_output.stderr);
+            warn!("GPG signing failed: {}", stderr);
+            Err(GitLayerError::Internal(format!("GPG signing failed: {}", stderr)))
+        }
     }
     
     /// Merge branches
@@ -333,6 +464,7 @@ impl OperationOps {
         committer: &SignatureInfo,
         message: &str,
         create_branch: bool,
+        gpg_private_key: Option<&str>,
     ) -> Result<(String, String)> {
         let actions = vec![FileAction {
             action: "update".to_string(),
@@ -342,7 +474,7 @@ impl OperationOps {
             mode: Some(0o100644),
         }];
         
-        let commit_id = Self::create_commit(repo, branch, author, committer, message, &actions, create_branch)?;
+        let commit_id = Self::create_commit_with_signature(repo, branch, author, committer, message, &actions, create_branch, gpg_private_key)?;
         
         // Get blob ID
         let commit = repo.find_commit(Oid::from_str(&commit_id)?)?;
@@ -361,6 +493,7 @@ impl OperationOps {
         author: &SignatureInfo,
         committer: &SignatureInfo,
         message: &str,
+        gpg_private_key: Option<&str>,
     ) -> Result<String> {
         let actions = vec![FileAction {
             action: "delete".to_string(),
@@ -370,7 +503,7 @@ impl OperationOps {
             mode: None,
         }];
         
-        Self::create_commit(repo, branch, author, committer, message, &actions, false)
+        Self::create_commit_with_signature(repo, branch, author, committer, message, &actions, false, gpg_private_key)
     }
     
     /// Move/rename a file
@@ -382,6 +515,7 @@ impl OperationOps {
         author: &SignatureInfo,
         committer: &SignatureInfo,
         message: &str,
+        gpg_private_key: Option<&str>,
     ) -> Result<String> {
         let actions = vec![FileAction {
             action: "move".to_string(),
@@ -391,7 +525,7 @@ impl OperationOps {
             mode: None,
         }];
         
-        Self::create_commit(repo, branch, author, committer, message, &actions, false)
+        Self::create_commit_with_signature(repo, branch, author, committer, message, &actions, false, gpg_private_key)
     }
     
     /// Squash multiple commits into one

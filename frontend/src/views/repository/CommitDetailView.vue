@@ -6,7 +6,10 @@
     
     <template v-else-if="commit">
       <div class="commit-header">
-        <h2>{{ commit.message.split('\n')[0] }}</h2>
+        <div class="commit-title-row">
+          <h2>{{ commit.message.split('\n')[0] }}</h2>
+          <GpgVerificationBadge v-if="commit.gpg_verification" :verification="commit.gpg_verification" />
+        </div>
         <pre v-if="commit.message.includes('\n')" class="commit-body">{{ commit.message.split('\n').slice(1).join('\n') }}</pre>
         
         <div class="commit-info">
@@ -118,6 +121,7 @@ import { useRoute } from 'vue-router'
 import api from '@/api'
 import dayjs from 'dayjs'
 import UnifiedDiffViewer from '@/components/diff/UnifiedDiffViewer.vue'
+import GpgVerificationBadge from '@/components/repository/GpgVerificationBadge.vue'
 import { navIcons } from '@/navigation/icons'
 import type { Project, CommitDetail } from '@/types'
 
@@ -289,6 +293,17 @@ watch([() => props.project?.owner_name, () => props.project?.name, () => route.p
   
   h2 {
     margin-bottom: $spacing-md;
+  }
+}
+
+.commit-title-row {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  flex-wrap: wrap;
+  
+  h2 {
+    margin: 0;
   }
 }
 

@@ -65,7 +65,14 @@ impl operation_service_server::OperationService for OperationServiceImpl {
             })
             .collect();
         
-        match OperationOps::create_commit(&repo, &req.branch, &author, &committer, &req.message, &actions, req.create_branch) {
+        // Use GPG signing if private key is provided
+        let gpg_key = if req.gpg_private_key.is_empty() {
+            None
+        } else {
+            Some(req.gpg_private_key.as_str())
+        };
+        
+        match OperationOps::create_commit_with_signature(&repo, &req.branch, &author, &committer, &req.message, &actions, req.create_branch, gpg_key) {
             Ok(commit_id) => Ok(Response::new(CreateCommitResponse {
                 success: true,
                 commit_id,
@@ -197,8 +204,9 @@ impl operation_service_server::OperationService for OperationServiceImpl {
         let repo = RepositoryOps::open(&path)?;
         let author = Self::convert_signature(req.author.as_ref());
         let committer = Self::convert_signature(req.committer.as_ref());
+        let gpg_key = if req.gpg_private_key.is_empty() { None } else { Some(req.gpg_private_key.as_str()) };
         
-        match OperationOps::write_file(&repo, &req.branch, &req.path, &req.content, &author, &committer, &req.message, req.create_branch) {
+        match OperationOps::write_file(&repo, &req.branch, &req.path, &req.content, &author, &committer, &req.message, req.create_branch, gpg_key) {
             Ok((commit_id, blob_id)) => Ok(Response::new(WriteFileResponse {
                 success: true,
                 commit_id,
@@ -224,8 +232,9 @@ impl operation_service_server::OperationService for OperationServiceImpl {
         let repo = RepositoryOps::open(&path)?;
         let author = Self::convert_signature(req.author.as_ref());
         let committer = Self::convert_signature(req.committer.as_ref());
+        let gpg_key = if req.gpg_private_key.is_empty() { None } else { Some(req.gpg_private_key.as_str()) };
         
-        match OperationOps::delete_file(&repo, &req.branch, &req.path, &author, &committer, &req.message) {
+        match OperationOps::delete_file(&repo, &req.branch, &req.path, &author, &committer, &req.message, gpg_key) {
             Ok(commit_id) => Ok(Response::new(DeleteFileResponse {
                 success: true,
                 commit_id,
@@ -249,8 +258,9 @@ impl operation_service_server::OperationService for OperationServiceImpl {
         let repo = RepositoryOps::open(&path)?;
         let author = Self::convert_signature(req.author.as_ref());
         let committer = Self::convert_signature(req.committer.as_ref());
+        let gpg_key = if req.gpg_private_key.is_empty() { None } else { Some(req.gpg_private_key.as_str()) };
         
-        match OperationOps::move_file(&repo, &req.branch, &req.old_path, &req.new_path, &author, &committer, &req.message) {
+        match OperationOps::move_file(&repo, &req.branch, &req.old_path, &req.new_path, &author, &committer, &req.message, gpg_key) {
             Ok(commit_id) => Ok(Response::new(MoveFileResponse {
                 success: true,
                 commit_id,

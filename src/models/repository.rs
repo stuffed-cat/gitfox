@@ -67,6 +67,26 @@ pub struct CommitInfo {
     pub committer_name: String,
     pub committer_email: String,
     pub committed_date: i64,
+    /// GPG signature verification info (populated when verification is performed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpg_verification: Option<GpgVerificationInfo>,
+}
+
+/// GPG signature verification information for commits
+#[derive(Debug, Serialize, Clone)]
+pub struct GpgVerificationInfo {
+    /// Verification status: verified, unverified, bad_email, unknown_key, bad_signature, expired_key, revoked_key, no_signature
+    pub status: String,
+    /// Human-readable verification message
+    pub message: Option<String>,
+    /// GPG key ID that created the signature
+    pub key_id: Option<String>,
+    /// User ID of the signer (if key belongs to a user)
+    pub signer_user_id: Option<i64>,
+    /// Username of the signer 
+    pub signer_username: Option<String>,
+    /// Whether the signature is verified (signed by a verified key with matching email)
+    pub verified: bool,
 }
 
 #[derive(Debug, Serialize)]

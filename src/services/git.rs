@@ -305,6 +305,7 @@ impl GitService {
                 files_changed: diffs.len() as u32,
             },
             diffs,
+            gpg_verification: None, // Will be populated by verification service if needed
         })
     }
 
@@ -702,6 +703,7 @@ impl GitService {
             committer_name: commit.committer().name().unwrap_or("").to_string(),
             committer_email: commit.committer().email().unwrap_or("").to_string(),
             committed_date: commit.committer().when().seconds(),
+            gpg_verification: None, // Will be populated by verification service if needed
         }
     }
 

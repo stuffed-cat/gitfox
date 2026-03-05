@@ -639,6 +639,29 @@ class ApiClient {
     },
   }
 
+  // GPG Keys
+  gpgKeys = {
+    list: async (): Promise<import('@/types').GpgKey[]> => {
+      const response = await this.client.get('/user/gpg_keys')
+      return response.data
+    },
+    get: async (id: number): Promise<import('@/types').GpgKey> => {
+      const response = await this.client.get(`/user/gpg_keys/${id}`)
+      return response.data
+    },
+    create: async (data: import('@/types').CreateGpgKeyRequest): Promise<import('@/types').GpgKey> => {
+      const response = await this.client.post('/user/gpg_keys', data)
+      return response.data
+    },
+    delete: async (id: number): Promise<void> => {
+      await this.client.delete(`/user/gpg_keys/${id}`)
+    },
+    revoke: async (id: number): Promise<{ message: string }> => {
+      const response = await this.client.post(`/user/gpg_keys/${id}/revoke`)
+      return response.data
+    },
+  }
+
   // OAuth Applications (GitFox as OAuth Provider)
   oauthApplications = {
     list: async (): Promise<OAuthApplication[]> => {

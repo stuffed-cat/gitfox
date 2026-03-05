@@ -360,7 +360,7 @@ cd frontend && npm run type-check
 ## 代码约定
 
 ### Rust 后端
-
+Gitness 
 **错误处理** ([src/error.rs](src/error.rs)):
 ```rust
 pub type AppResult<T> = Result<T, AppError>;

@@ -16,12 +16,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &["gitlayer/proto"],
         )?;
 
-    // 编译 repository.proto - GitLayer 仓库服务（作为客户端）
+    // 编译 GitLayer 服务（作为客户端）
+    // 包括所有 Git 操作服务
     tonic_build::configure()
         .build_server(false) // 不作为服务端
         .build_client(true)  // 主应用作为客户端调用 GitLayer
         .compile_protos(
-            &["gitlayer/proto/repository.proto"],
+            &[
+                "gitlayer/proto/repository.proto",
+                "gitlayer/proto/ref.proto",
+                "gitlayer/proto/commit.proto",
+                "gitlayer/proto/tree.proto",
+                "gitlayer/proto/blob.proto",
+                "gitlayer/proto/diff.proto",
+                "gitlayer/proto/gpg.proto",
+                "gitlayer/proto/operations.proto",
+            ],
             &["gitlayer/proto"],
         )?;
 
@@ -29,6 +39,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=gitlayer/proto/auth.proto");
     println!("cargo:rerun-if-changed=gitlayer/proto/lfs.proto");
     println!("cargo:rerun-if-changed=gitlayer/proto/repository.proto");
+    println!("cargo:rerun-if-changed=gitlayer/proto/ref.proto");
+    println!("cargo:rerun-if-changed=gitlayer/proto/commit.proto");
+    println!("cargo:rerun-if-changed=gitlayer/proto/tree.proto");
+    println!("cargo:rerun-if-changed=gitlayer/proto/blob.proto");
+    println!("cargo:rerun-if-changed=gitlayer/proto/diff.proto");
+    println!("cargo:rerun-if-changed=gitlayer/proto/gpg.proto");
+    println!("cargo:rerun-if-changed=gitlayer/proto/operations.proto");
 
     Ok(())
 }

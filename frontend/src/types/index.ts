@@ -122,12 +122,23 @@ export interface CommitInfo {
   committer_name: string
   committer_email: string
   committed_date: number
+  gpg_verification?: GpgVerificationInfo
+}
+
+export interface GpgVerificationInfo {
+  status: 'verified' | 'unverified' | 'bad_email' | 'unknown_key' | 'bad_signature' | 'expired_key' | 'revoked_key' | 'no_signature'
+  message?: string
+  key_id?: string
+  signer_user_id?: number
+  signer_username?: string
+  verified: boolean
 }
 
 export interface CommitDetail extends CommitInfo {
   parent_shas: string[]
   stats: CommitStats
   diffs: DiffInfo[]
+  gpg_verification?: GpgVerificationInfo
 }
 
 export interface CommitStats {
@@ -731,6 +742,49 @@ export interface WebAuthnAuthFinishRequest {
   temporary_token: string
   state_key: string
   credential: any // PublicKeyCredential
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GPG Key Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** GPG Key information */
+export interface GpgKey {
+  id: number
+  primary_key_id: string
+  fingerprint: string
+  key_algorithm: string
+  key_size?: number
+  emails: string[]
+  can_sign: boolean
+  can_encrypt: boolean
+  can_certify: boolean
+  key_created_at?: string
+  key_expires_at?: string
+  verified: boolean
+  revoked: boolean
+  subkeys: GpgKeySubkey[]
+  last_used_at?: string
+  created_at: string
+}
+
+/** GPG Key subkey information */
+export interface GpgKeySubkey {
+  id: number
+  key_id: string
+  fingerprint: string
+  key_algorithm: string
+  key_size?: number
+  can_sign: boolean
+  can_encrypt: boolean
+  key_created_at?: string
+  key_expires_at?: string
+  revoked: boolean
+}
+
+/** Request to add a new GPG key */
+export interface CreateGpgKeyRequest {
+  key: string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

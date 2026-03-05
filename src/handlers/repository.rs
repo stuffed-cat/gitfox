@@ -1,13 +1,32 @@
 use actix_web::{web, HttpResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::path::PathBuf;
 
 use crate::config::AppConfig;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::middleware::AuthenticatedUser;
 use crate::models::{BrowseQuery, FileQuery};
-use crate::services::{GitService, ProjectService};
-use crate::services::git::{FileChange, FileChangeAction};
+use crate::services::{GitService, GpgKeyService, ProjectService};
+use crate::services::gitlayer::{
+    OperationServiceClient, Repository as GrpcRepository, Signature as GrpcSignature,
+    WriteFileRequest, DeleteFileRequest as GrpcDeleteFileRequest, CreateCommitRequest, FileAction as GrpcFileAction,
+};
+
+/// Helper to create a gRPC Signature with current timestamp
+fn make_signature(name: &str, email: &str) -> GrpcSignature {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    GrpcSignature {
+        name: name.to_string(),
+        email: email.to_string(),
+        timestamp,
+        timezone: "+0000".to_string(),
+    }
+}
 
 /// 的路径参数
 #[derive(Debug, serde::Deserialize)]
@@ -219,24 +238,57 @@ pub async fn create_file(
     ).await?;
     
     if !has_write_access {
-        return Err(crate::error::AppError::Forbidden(
+        return Err(AppError::Forbidden(
             "You do not have write access to this repository".to_string()
         ));
     }
     
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    
-    let sha = GitService::commit_file_change(
-        &repo,
-        &body.branch,
-        &path.filepath,
-        &body.content,
-        &body.commit_message,
-        &auth.username,
+    // Get user's system GPG key for signing
+    let gpg_key = GpgKeyService::get_or_create_system_key(
+        pool.get_ref(),
+        auth.user_id,
         &format!("{}@gitfox.local", auth.username),
-    )?;
+        &auth.username,
+    ).await?;
+    let gpg_private_key = gpg_key.private_key_encrypted.unwrap_or_default();
     
-    Ok(HttpResponse::Created().json(CommitResponse { sha }))
+    // Connect to GitLayer
+    let gitlayer_address = std::env::var("GITLAYER_URL")
+        .unwrap_or_else(|_| "http://[::1]:50052".to_string());
+    
+    let mut client = OperationServiceClient::connect(gitlayer_address)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+    
+    // Build repository path
+    let base_path = PathBuf::from(&config.git_repos_path);
+    let repo_path = base_path.join(format!("{}/{}.git", project.owner_name, project.name));
+    
+    let request = WriteFileRequest {
+        repository: Some(GrpcRepository {
+            storage_path: repo_path.to_string_lossy().to_string(),
+            relative_path: String::new(),
+        }),
+        branch: body.branch.clone(),
+        path: path.filepath.clone(),
+        content: body.content.as_bytes().to_vec(),
+        author: Some(make_signature(&auth.username, &format!("{}@gitfox.local", auth.username))),
+        committer: Some(make_signature(&auth.username, &format!("{}@gitfox.local", auth.username))),
+        message: body.commit_message.clone(),
+        create_branch: false,
+        gpg_private_key,
+    };
+    
+    let response = client.write_file(request)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to create file: {}", e)))?
+        .into_inner();
+    
+    if !response.success {
+        return Err(AppError::InternalError(format!("Create file failed: {}", response.message)));
+    }
+    
+    Ok(HttpResponse::Created().json(CommitResponse { sha: response.commit_id }))
 }
 
 /// PUT /projects/:namespace/:project/repository/files/:filepath
@@ -255,19 +307,52 @@ pub async fn update_file(
         &path.project,
     ).await?;
     
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    
-    let sha = GitService::commit_file_change(
-        &repo,
-        &body.branch,
-        &path.filepath,
-        &body.content,
-        &body.commit_message,
-        &auth.username,
+    // Get user's system GPG key for signing
+    let gpg_key = GpgKeyService::get_or_create_system_key(
+        pool.get_ref(),
+        auth.user_id,
         &format!("{}@gitfox.local", auth.username),
-    )?;
+        &auth.username,
+    ).await?;
+    let gpg_private_key = gpg_key.private_key_encrypted.unwrap_or_default();
     
-    Ok(HttpResponse::Ok().json(CommitResponse { sha }))
+    // Connect to GitLayer
+    let gitlayer_address = std::env::var("GITLAYER_URL")
+        .unwrap_or_else(|_| "http://[::1]:50052".to_string());
+    
+    let mut client = OperationServiceClient::connect(gitlayer_address)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+    
+    // Build repository path
+    let base_path = PathBuf::from(&config.git_repos_path);
+    let repo_path = base_path.join(format!("{}/{}.git", project.owner_name, project.name));
+    
+    let request = WriteFileRequest {
+        repository: Some(GrpcRepository {
+            storage_path: repo_path.to_string_lossy().to_string(),
+            relative_path: String::new(),
+        }),
+        branch: body.branch.clone(),
+        path: path.filepath.clone(),
+        content: body.content.as_bytes().to_vec(),
+        author: Some(make_signature(&auth.username, &format!("{}@gitfox.local", auth.username))),
+        committer: Some(make_signature(&auth.username, &format!("{}@gitfox.local", auth.username))),
+        message: body.commit_message.clone(),
+        create_branch: false,
+        gpg_private_key,
+    };
+    
+    let response = client.write_file(request)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to update file: {}", e)))?
+        .into_inner();
+    
+    if !response.success {
+        return Err(AppError::InternalError(format!("Update file failed: {}", response.message)));
+    }
+    
+    Ok(HttpResponse::Ok().json(CommitResponse { sha: response.commit_id }))
 }
 
 /// DELETE /projects/:namespace/:project/repository/files/:filepath
@@ -286,18 +371,50 @@ pub async fn delete_file(
         &path.project,
     ).await?;
     
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
-    
-    let sha = GitService::delete_file_commit(
-        &repo,
-        &query.branch,
-        &path.filepath,
-        &query.commit_message,
-        &auth.username,
+    // Get user's system GPG key for signing
+    let gpg_key = GpgKeyService::get_or_create_system_key(
+        pool.get_ref(),
+        auth.user_id,
         &format!("{}@gitfox.local", auth.username),
-    )?;
+        &auth.username,
+    ).await?;
+    let gpg_private_key = gpg_key.private_key_encrypted.unwrap_or_default();
     
-    Ok(HttpResponse::Ok().json(CommitResponse { sha }))
+    // Connect to GitLayer
+    let gitlayer_address = std::env::var("GITLAYER_URL")
+        .unwrap_or_else(|_| "http://[::1]:50052".to_string());
+    
+    let mut client = OperationServiceClient::connect(gitlayer_address)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+    
+    // Build repository path
+    let base_path = PathBuf::from(&config.git_repos_path);
+    let repo_path = base_path.join(format!("{}/{}.git", project.owner_name, project.name));
+    
+    let request = GrpcDeleteFileRequest {
+        repository: Some(GrpcRepository {
+            storage_path: repo_path.to_string_lossy().to_string(),
+            relative_path: String::new(),
+        }),
+        branch: query.branch.clone(),
+        path: path.filepath.clone(),
+        author: Some(make_signature(&auth.username, &format!("{}@gitfox.local", auth.username))),
+        committer: Some(make_signature(&auth.username, &format!("{}@gitfox.local", auth.username))),
+        message: query.commit_message.clone(),
+        gpg_private_key,
+    };
+    
+    let response = client.delete_file(request)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to delete file: {}", e)))?
+        .into_inner();
+    
+    if !response.success {
+        return Err(AppError::InternalError(format!("Delete file failed: {}", response.message)));
+    }
+    
+    Ok(HttpResponse::Ok().json(CommitResponse { sha: response.commit_id }))
 }
 
 /// POST /projects/:namespace/:project/repository/commits/batch
@@ -316,33 +433,64 @@ pub async fn batch_commit(
         &path.project,
     ).await?;
     
-    let repo = GitService::open_repository(config.get_ref(), &project.owner_name, &project.name)?;
+    // Get user's system GPG key for signing
+    let gpg_key = GpgKeyService::get_or_create_system_key(
+        pool.get_ref(),
+        auth.user_id,
+        &format!("{}@gitfox.local", auth.username),
+        &auth.username,
+    ).await?;
+    let gpg_private_key = gpg_key.private_key_encrypted.unwrap_or_default();
     
-    // Convert FileAction to FileChange
-    let changes: Vec<FileChange> = body.actions.iter().map(|action| {
-        let file_action = match action.action.as_str() {
-            "create" => FileChangeAction::Create,
-            "update" => FileChangeAction::Update,
-            "delete" => FileChangeAction::Delete,
-            _ => FileChangeAction::Update,
-        };
-        FileChange {
+    // Connect to GitLayer
+    let gitlayer_address = std::env::var("GITLAYER_URL")
+        .unwrap_or_else(|_| "http://[::1]:50052".to_string());
+    
+    let mut client = OperationServiceClient::connect(gitlayer_address)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+    
+    // Build repository path
+    let base_path = PathBuf::from(&config.git_repos_path);
+    let repo_path = base_path.join(format!("{}/{}.git", project.owner_name, project.name));
+    
+    // Convert FileAction to gRPC FileAction
+    let actions: Vec<GrpcFileAction> = body.actions.iter().map(|action| {
+        GrpcFileAction {
+            action: action.action.clone(),
             path: action.file_path.clone(),
-            action: file_action,
-            content: action.content.clone(),
+            content: action.content.as_ref().map(|c| c.as_bytes().to_vec()).unwrap_or_default(),
+            previous_path: String::new(),
+            mode: 0o100644,
+            expected_blob_id: String::new(),
         }
     }).collect();
     
-    let sha = GitService::batch_commit_changes(
-        &repo,
-        &body.branch,
-        changes,
-        &body.commit_message,
-        &auth.username,
-        &format!("{}@gitfox.local", auth.username),
-    )?;
+    let request = CreateCommitRequest {
+        repository: Some(GrpcRepository {
+            storage_path: repo_path.to_string_lossy().to_string(),
+            relative_path: String::new(),
+        }),
+        branch: body.branch.clone(),
+        author: Some(make_signature(&auth.username, &format!("{}@gitfox.local", auth.username))),
+        committer: Some(make_signature(&auth.username, &format!("{}@gitfox.local", auth.username))),
+        message: body.commit_message.clone(),
+        actions,
+        create_branch: false,
+        expected_parent: String::new(),
+        gpg_private_key,
+    };
     
-    Ok(HttpResponse::Created().json(CommitResponse { sha }))
+    let response = client.create_commit(request)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to create commit: {}", e)))?
+        .into_inner();
+    
+    if !response.success {
+        return Err(AppError::InternalError(format!("Batch commit failed: {}", response.message)));
+    }
+    
+    Ok(HttpResponse::Created().json(CommitResponse { sha: response.commit_id }))
 }
 
 /// Check if user has write permission to a project

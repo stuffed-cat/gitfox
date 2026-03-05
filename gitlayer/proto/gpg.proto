@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package gitlayer;
+
+// GPG service handles GPG key operations and signature verification
+service GpgService {
+    // Verify a GPG signature
+    rpc VerifySignature(VerifySignatureRequest) returns (VerifySignatureResponse);
+    
+    // Sign data with a GPG key
+    rpc Sign(SignRequest) returns (SignResponse);
+    
+    // Get key info from signature
+    rpc GetKeyInfo(GetKeyInfoRequest) returns (GetKeyInfoResponse);
+}
+
+// Verification status
+enum GpgVerificationStatus {
+    GPG_STATUS_UNSPECIFIED = 0;
+    GPG_STATUS_VERIFIED = 1;           // Signature is valid and key is trusted
+    GPG_STATUS_UNVERIFIED = 2;         // Signature is valid but key is not in our database
+    GPG_STATUS_BAD_SIGNATURE = 3;      // Signature is invalid
+    GPG_STATUS_UNKNOWN_KEY = 4;        // Cannot find the key to verify
+    GPG_STATUS_BAD_EMAIL = 5;          // Key email doesn't match committer
+    GPG_STATUS_EXPIRED_KEY = 6;        // Key has expired
+    GPG_STATUS_REVOKED_KEY = 7;        // Key has been revoked
+    GPG_STATUS_NO_SIGNATURE = 8;       // No signature present
+}
+
+message VerifySignatureRequest {
+    // The GPG signature (ASCII armored)
+    string signature = 1;
+    // The signed data
+    string signed_data = 2;
+    // Optional: committer email for additional validation
+    string committer_email = 3;
+    // Optional: list of trusted public keys to verify against
+    repeated string trusted_keys = 4;
+}
+
+message VerifySignatureResponse {
+    GpgVerificationStatus status = 1;
+    // Human-readable status message
+    string message = 2;
+    // Key ID used for signing (if extractable)
+    string key_id = 3;
+    // Key fingerprint (if extractable)
+    string fingerprint = 4;
+    // Signer name from key (if available)
+    string signer_name = 5;
+    // Signer email from key (if available)
+    string signer_email = 6;
+    // When the signature was created
+    int64 signature_timestamp = 7;
+}
+
+message SignRequest {
+    // The data to sign
+    string data = 1;
+    // The private key (ASCII armored)
+    string private_key = 2;
+}
+
+message SignResponse {
+    bool success = 1;
+    // The detached signature (ASCII armored)
+    string signature = 2;
+    string error_message = 3;
+}
+
+message GetKeyInfoRequest {
+    // A GPG public key (ASCII armored)
+    string public_key = 1;
+}
+
+message GetKeyInfoResponse {
+    bool success = 1;
+    // Primary key ID
+    string key_id = 2;
+    // Full fingerprint
+    string fingerprint = 3;
+    // Key algorithm (RSA, DSA, EdDSA, etc.)
+    string algorithm = 4;
+    // Key size in bits
+    int32 key_size = 5;
+    // Creation timestamp
+    int64 created_at = 6;
+    // Expiration timestamp (0 if no expiration)
+    int64 expires_at = 7;
+    // List of email UIDs
+    repeated string emails = 8;
+    // Capabilities
+    bool can_sign = 9;
+    bool can_encrypt = 10;
+    bool can_certify = 11;
+    string error_message = 12;
+}

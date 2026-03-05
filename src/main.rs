@@ -52,6 +52,17 @@ async fn main() -> std::io::Result<()> {
         log::error!("Failed to seed initial admin: {}", e);
     }
 
+    // Ensure all existing users have system GPG keys (for WebIDE/API signing)
+    // This is done in background to not block startup
+    let gpg_pool = pg_pool.clone();
+    tokio::spawn(async move {
+        match services::GpgKeyService::ensure_all_users_have_system_keys(&gpg_pool).await {
+            Ok(count) if count > 0 => log::info!("Created system GPG keys for {} existing users", count),
+            Ok(_) => log::debug!("All users already have system GPG keys"),
+            Err(e) => log::warn!("Error ensuring system GPG keys: {}", e),
+        }
+    });
+
     // Auto-configure WebIDE OAuth2 application if enabled
     if let Err(e) = services::OAuthService::auto_configure_webide_oauth(&pg_pool, &config).await {
         log::error!("Failed to auto-configure WebIDE OAuth2: {}", e);
