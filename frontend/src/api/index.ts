@@ -6,6 +6,7 @@ import type {
   RegisterRequest,
   Project,
   CreateProjectRequest,
+  UpdateProjectRequest,
   ProjectStats,
   ProjectMember,
   RepositoryInfo,
@@ -244,7 +245,7 @@ class ApiClient {
       const response = await this.client.post('/projects', data)
       return response.data
     },
-    update: async (path: ProjectPath, data: Partial<CreateProjectRequest>): Promise<Project> => {
+    update: async (path: ProjectPath, data: UpdateProjectRequest): Promise<Project> => {
       const response = await this.client.put(this.projectPath(path), data)
       return response.data
     },

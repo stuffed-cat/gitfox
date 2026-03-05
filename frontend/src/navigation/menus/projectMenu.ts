@@ -135,16 +135,52 @@ export function createProjectMenuConfig(context: NavContext): NavSection[] {
       title: '设置',
       items: [
         { 
-          id: 'settings', 
+          id: 'settings-general', 
           label: '通用', 
           to: `${basePath}/-/settings`, 
-          icon: 'settings' 
+          icon: 'settings',
+          activeMatch: (path) => path === `${basePath}/-/settings` || path === `${basePath}/-/settings/`
+        },
+        { 
+          id: 'settings-repository', 
+          label: '仓库', 
+          to: `${basePath}/-/settings/repository`, 
+          icon: 'repository',
+          activeMatch: /\/-\/settings\/repository/
+        },
+        { 
+          id: 'settings-cicd', 
+          label: 'CI/CD', 
+          to: `${basePath}/-/settings/ci_cd`, 
+          icon: 'pipeline',
+          activeMatch: /\/-\/settings\/ci_cd/
+        },
+        { 
+          id: 'settings-members', 
+          label: '成员', 
+          to: `${basePath}/-/settings/members`, 
+          icon: 'members',
+          activeMatch: /\/-\/settings\/members/
+        },
+        { 
+          id: 'settings-hooks', 
+          label: 'Webhooks', 
+          to: `${basePath}/-/settings/hooks`, 
+          icon: 'webhook',
+          activeMatch: /\/-\/settings\/hooks/
+        },
+        { 
+          id: 'settings-tokens', 
+          label: '访问令牌', 
+          to: `${basePath}/-/settings/access_tokens`, 
+          icon: 'key',
+          activeMatch: /\/-\/settings\/access_tokens/
         },
         { 
           id: 'runners', 
-          label: 'CI/CD Runners', 
+          label: 'Runners', 
           to: `${basePath}/-/runners`, 
-          icon: 'pipeline',
+          icon: 'runner',
           activeMatch: /\/-\/runners/
         },
       ]

@@ -386,7 +386,38 @@ const routes = [
       {
         path: '-/settings',
         name: 'ProjectSettings',
-        component: () => import('@/views/projects/ProjectSettingsView.vue')
+        component: () => import('@/views/projects/settings/ProjectGeneralSettingsView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: '-/settings/repository',
+        name: 'ProjectRepositorySettings',
+        component: () => import('@/views/projects/settings/ProjectRepositorySettingsView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: '-/settings/ci_cd',
+        name: 'ProjectCiCdSettings',
+        component: () => import('@/views/projects/settings/ProjectCiCdSettingsView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: '-/settings/members',
+        name: 'ProjectMembersSettings',
+        component: () => import('@/views/projects/settings/ProjectMembersSettingsView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: '-/settings/hooks',
+        name: 'ProjectWebhooksSettings',
+        component: () => import('@/views/projects/settings/ProjectWebhooksSettingsView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
+        path: '-/settings/access_tokens',
+        name: 'ProjectAccessTokensSettings',
+        component: () => import('@/views/projects/settings/ProjectAccessTokensSettingsView.vue'),
+        meta: { requiresAuth: true }
       },
       {
         path: '-/forks/new',

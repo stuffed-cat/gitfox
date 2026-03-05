@@ -64,6 +64,13 @@ export interface CreateProjectRequest {
   namespace_id?: number
 }
 
+/** Request for updating project settings (matches backend UpdateProjectRequest) */
+export interface UpdateProjectRequest {
+  name?: string
+  description?: string
+  visibility?: 'public' | 'private' | 'internal'
+}
+
 /** Namespace option for project creation */
 export interface NamespaceOption {
   id: number
