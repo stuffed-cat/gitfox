@@ -15,6 +15,7 @@ use crate::middleware::auth::AuthenticatedUser;
 pub struct ListQuery {
     pub page: Option<u32>,
     pub per_page: Option<u32>,
+    pub search: Option<String>,
 }
 
 pub async fn list_users(
@@ -24,7 +25,11 @@ pub async fn list_users(
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(20);
     
-    let users = UserService::list_users(pool.get_ref(), page, per_page).await?;
+    let users = if let Some(search) = &query.search {
+        UserService::search_users(pool.get_ref(), search, page, per_page).await?
+    } else {
+        UserService::list_users(pool.get_ref(), page, per_page).await?
+    };
     let user_infos: Vec<UserInfo> = users.into_iter().map(UserInfo::from).collect();
     
     Ok(HttpResponse::Ok().json(user_infos))

@@ -38,6 +38,14 @@ export interface Project {
   description?: string
   visibility: 'public' | 'private' | 'internal'
   owner_id: string
+  namespace_id?: string
+  default_branch: string
+  archived: boolean
+  issues_enabled: boolean
+  merge_requests_enabled: boolean
+  pipelines_enabled: boolean
+  packages_enabled: boolean
+  wiki_enabled: boolean
   owner_name?: string
   owner_avatar?: string
   created_at: string
@@ -69,6 +77,14 @@ export interface UpdateProjectRequest {
   name?: string
   description?: string
   visibility?: 'public' | 'private' | 'internal'
+  default_branch?: string
+  archived?: boolean
+  issues_enabled?: boolean
+  merge_requests_enabled?: boolean
+  pipelines_enabled?: boolean
+  packages_enabled?: boolean
+  wiki_enabled?: boolean
+  namespace_id?: number
 }
 
 /** Namespace option for project creation */
@@ -344,6 +360,17 @@ export interface Webhook {
   is_active: boolean
   created_at: string
   updated_at: string
+}
+
+export interface WebhookDelivery {
+  id: string
+  webhook_id: string
+  event: string
+  payload: Record<string, unknown>
+  response_status?: number
+  response_body?: string
+  delivered_at?: string
+  created_at: string
 }
 
 export interface CreateWebhookRequest {
@@ -857,4 +884,144 @@ export interface NpmPackageMetadata {
   dependencies?: Record<string, string>
   dev_dependencies?: Record<string, string>
   peer_dependencies?: Record<string, string>
+}
+
+// ===================================================
+// Project Settings Types
+// ===================================================
+
+// Branch Protection Rules
+export interface BranchProtectionRule {
+  id: number
+  project_id: number
+  branch_pattern: string
+  require_review: boolean
+  required_reviewers: number
+  require_ci_pass: boolean
+  allow_force_push: boolean
+  allow_deletion: boolean
+  created_at: string
+}
+
+export interface CreateBranchProtectionRequest {
+  branch_pattern: string
+  require_review?: boolean
+  required_reviewers?: number
+  require_ci_pass?: boolean
+  allow_force_push?: boolean
+  allow_deletion?: boolean
+}
+
+export interface UpdateBranchProtectionRequest {
+  require_review?: boolean
+  required_reviewers?: number
+  require_ci_pass?: boolean
+  allow_force_push?: boolean
+  allow_deletion?: boolean
+}
+
+// CI/CD Variables
+export interface CiVariable {
+  id: number
+  project_id: number
+  key: string
+  protected: boolean
+  masked: boolean
+  file: boolean
+  environment_scope: string
+  created_at: string
+}
+
+export interface CreateCiVariableRequest {
+  key: string
+  value: string
+  protected?: boolean
+  masked?: boolean
+  file?: boolean
+  environment_scope?: string
+}
+
+export interface UpdateCiVariableRequest {
+  value?: string
+  protected?: boolean
+  masked?: boolean
+}
+
+// Pipeline Triggers
+export interface PipelineTrigger {
+  id: number
+  project_id: number
+  token: string  // masked token for display
+  description: string
+  owner_username: string
+  created_at: string
+  last_used_at?: string
+}
+
+export interface CreatePipelineTriggerRequest {
+  description: string
+}
+
+export interface CreatePipelineTriggerResponse {
+  id: number
+  project_id: number
+  token: string  // full token (only shown at creation)
+  description: string
+  owner_username: string
+  created_at: string
+}
+
+// Deploy Keys
+export interface DeployKey {
+  id: number
+  project_id: number
+  title: string
+  key_type: string
+  fingerprint: string
+  can_push: boolean
+  created_at: string
+  last_used_at?: string
+}
+
+export interface CreateDeployKeyRequest {
+  title: string
+  key: string  // public SSH key
+  can_push?: boolean
+}
+
+export interface UpdateDeployKeyRequest {
+  title?: string
+  can_push?: boolean
+}
+
+// Project Access Tokens
+export interface ProjectAccessToken {
+  id: number
+  project_id: number
+  name: string
+  scopes: string[]
+  role: string
+  created_by_username: string
+  expires_at?: string
+  last_used_at?: string
+  created_at: string
+  revoked: boolean
+}
+
+export interface CreateProjectAccessTokenRequest {
+  name: string
+  scopes: string[]
+  role?: string
+  expires_at?: string
+}
+
+export interface CreateProjectAccessTokenResponse {
+  id: number
+  project_id: number
+  name: string
+  token: string  // full token (only shown at creation)
+  scopes: string[]
+  role: string
+  expires_at?: string
+  created_at: string
 }

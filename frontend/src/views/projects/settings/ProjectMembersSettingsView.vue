@@ -360,20 +360,11 @@ async function searchUsers() {
   
   searchTimeout = window.setTimeout(async () => {
     try {
-      // TODO: 后端 API 尚未支持用户搜索
-      // 需要在后端添加 /users?search=xxx 支持
-      // 目前使用 list 获取前几页用户进行本地过滤
-      const users = await api.users.list(1, 50)
-      // 本地过滤匹配用户名
-      const searchTerm = inviteForm.username.toLowerCase()
-      const filtered = users.filter(u => 
-        u.username.toLowerCase().includes(searchTerm) ||
-        u.email?.toLowerCase().includes(searchTerm) ||
-        u.display_name?.toLowerCase().includes(searchTerm)
-      )
+      // 使用后端 API 的搜索功能
+      const users = await api.users.search(inviteForm.username, 20)
       // 过滤已经是成员的用户
       const memberIds = new Set(members.value.map(m => m.user_id))
-      searchResults.value = filtered.filter(u => !memberIds.has(u.id)).slice(0, 5)
+      searchResults.value = users.filter(u => !memberIds.has(u.id)).slice(0, 5)
     } catch (error) {
       console.error('Failed to search users:', error)
     }
@@ -414,16 +405,13 @@ async function inviteMember() {
 async function updateMemberRole(member: ProjectMember, newRole: string) {
   if (!props.project?.owner_name || !props.project?.name) return
   
+  const path = { namespace: props.project.owner_name, project: props.project.name }
+  
   try {
-    // TODO: 后端 API 尚未支持更新成员角色
-    // 需要添加 PUT /projects/{ns}/{proj}/members/{user_id} 端点
-    // const path = { namespace: props.project.owner_name, project: props.project.name }
-    // await api.projects.updateMember(path, member.user_id, { role: newRole })
-    
-    // 本地更新（演示用）
+    await api.projects.updateMemberRole(path, parseInt(member.user_id), newRole)
+    // 本地更新
     member.role = newRole as ProjectMember['role']
-    
-    alert('角色已更新（仅本地预览，API 即将支持）')
+    alert('角色已更新')
   } catch (error) {
     console.error('Failed to update member role:', error)
     alert('更新角色失败')

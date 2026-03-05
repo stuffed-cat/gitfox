@@ -105,9 +105,15 @@ impl ProjectService {
 
         let project = sqlx::query_as::<_, ProjectWithOwner>(
             r#"
-            INSERT INTO projects (name, description, visibility, owner_id, namespace_id, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $6)
-            RETURNING id, name, description, visibility, owner_id, created_at, updated_at,
+            INSERT INTO projects (name, description, visibility, owner_id, namespace_id, 
+                                  default_branch, archived, issues_enabled, merge_requests_enabled,
+                                  pipelines_enabled, packages_enabled, wiki_enabled, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, 'main', false, true, true, true, true, true, $6, $6)
+            RETURNING id, name, description, visibility, owner_id, namespace_id,
+                'main' as default_branch, false as archived,
+                true as issues_enabled, true as merge_requests_enabled, true as pipelines_enabled,
+                true as packages_enabled, true as wiki_enabled,
+                created_at, updated_at,
                 $7 as owner_name,
                 $8 as owner_avatar,
                 0 as stars_count,
@@ -148,7 +154,11 @@ impl ProjectService {
         // 先尝试通过命名空间路径查找
         sqlx::query_as::<_, ProjectWithOwner>(
             r#"
-            SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+            SELECT p.id, p.name, p.description, p.visibility, p.owner_id, 
+                   p.namespace_id, p.default_branch, p.archived,
+                   p.issues_enabled, p.merge_requests_enabled, p.pipelines_enabled,
+                   p.packages_enabled, p.wiki_enabled,
+                   p.created_at, p.updated_at,
                    n.path as owner_name, n.avatar_url as owner_avatar,
                    p.stars_count, p.forks_count, p.forked_from_id,
                    fn.path as forked_from_namespace, fp.name as forked_from_name
@@ -182,7 +192,11 @@ impl ProjectService {
             // 4. Projects in groups the user is a member of
             sqlx::query_as::<_, ProjectWithOwner>(
                 r#"
-                SELECT DISTINCT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+                SELECT DISTINCT p.id, p.name, p.description, p.visibility, p.owner_id,
+                       p.namespace_id, p.default_branch, p.archived,
+                       p.issues_enabled, p.merge_requests_enabled, p.pipelines_enabled,
+                       p.packages_enabled, p.wiki_enabled,
+                       p.created_at, p.updated_at,
                        n.path as owner_name, n.avatar_url as owner_avatar,
                        p.stars_count, p.forks_count, p.forked_from_id,
                        fn.path as forked_from_namespace, fp.name as forked_from_name
@@ -209,7 +223,11 @@ impl ProjectService {
         } else {
             sqlx::query_as::<_, ProjectWithOwner>(
                 r#"
-                SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+                SELECT p.id, p.name, p.description, p.visibility, p.owner_id,
+                       p.namespace_id, p.default_branch, p.archived,
+                       p.issues_enabled, p.merge_requests_enabled, p.pipelines_enabled,
+                       p.packages_enabled, p.wiki_enabled,
+                       p.created_at, p.updated_at,
                        n.path as owner_name, n.avatar_url as owner_avatar,
                        p.stars_count, p.forks_count, p.forked_from_id,
                        fn.path as forked_from_namespace, fp.name as forked_from_name
@@ -242,6 +260,14 @@ impl ProjectService {
             SET name = COALESCE($2, name),
                 description = COALESCE($3, description),
                 visibility = COALESCE($4, visibility),
+                default_branch = COALESCE($5, default_branch),
+                archived = COALESCE($6, archived),
+                issues_enabled = COALESCE($7, issues_enabled),
+                merge_requests_enabled = COALESCE($8, merge_requests_enabled),
+                pipelines_enabled = COALESCE($9, pipelines_enabled),
+                packages_enabled = COALESCE($10, packages_enabled),
+                wiki_enabled = COALESCE($11, wiki_enabled),
+                namespace_id = COALESCE($12, namespace_id),
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -251,6 +277,14 @@ impl ProjectService {
         .bind(req.name)
         .bind(req.description)
         .bind(req.visibility)
+        .bind(req.default_branch)
+        .bind(req.archived)
+        .bind(req.issues_enabled)
+        .bind(req.merge_requests_enabled)
+        .bind(req.pipelines_enabled)
+        .bind(req.packages_enabled)
+        .bind(req.wiki_enabled)
+        .bind(req.namespace_id)
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
@@ -297,6 +331,30 @@ impl ProjectService {
         Ok(member)
     }
 
+    pub async fn update_member_role(
+        pool: &PgPool,
+        project_id: i64,
+        user_id: i64,
+        role: MemberRole,
+    ) -> AppResult<ProjectMember> {
+        let member = sqlx::query_as::<_, ProjectMember>(
+            r#"
+            UPDATE project_members
+            SET role = $3
+            WHERE project_id = $1 AND user_id = $2
+            RETURNING *
+            "#
+        )
+        .bind(project_id)
+        .bind(user_id)
+        .bind(role)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Member not found".to_string()))?;
+
+        Ok(member)
+    }
+
     pub async fn remove_member(pool: &PgPool, project_id: i64, user_id: i64) -> AppResult<()> {
         sqlx::query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2")
             .bind(project_id)
@@ -328,6 +386,42 @@ impl ProjectService {
         .await?;
 
         Ok(role)
+    }
+
+    /// Check if user has at least the specified access level
+    /// Role hierarchy: Owner > Maintainer > Developer > Reporter > Guest
+    pub async fn check_project_access(pool: &PgPool, project_id: i64, user_id: i64, required_role: &str) -> AppResult<()> {
+        let role = Self::get_member_role(pool, project_id, user_id).await?;
+        
+        let role_level = |r: &MemberRole| -> i32 {
+            match r {
+                MemberRole::Owner => 50,
+                MemberRole::Maintainer => 40,
+                MemberRole::Developer => 30,
+                MemberRole::Reporter => 20,
+                MemberRole::Guest => 10,
+            }
+        };
+        
+        let required_level = match required_role.to_lowercase().as_str() {
+            "owner" => 50,
+            "maintainer" => 40,
+            "developer" => 30,
+            "reporter" => 20,
+            "guest" => 10,
+            _ => 40, // Default to maintainer for unknown roles
+        };
+        
+        match role {
+            Some(r) if role_level(&r) >= required_level => Ok(()),
+            Some(_) => Err(AppError::Forbidden(format!(
+                "Requires at least '{}' role for this action",
+                required_role
+            ))),
+            None => Err(AppError::Forbidden(
+                "You don't have access to this project".to_string()
+            )),
+        }
     }
 
     pub async fn get_project_stats(pool: &PgPool, project_id: i64) -> AppResult<ProjectStats> {
@@ -447,9 +541,15 @@ impl ProjectService {
         // Create the forked project
         let project = sqlx::query_as::<_, ProjectWithOwner>(
             r#"
-            INSERT INTO projects (name, description, visibility, owner_id, namespace_id, forked_from_id, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-            RETURNING id, name, description, visibility, owner_id, created_at, updated_at,
+            INSERT INTO projects (name, description, visibility, owner_id, namespace_id, forked_from_id, 
+                                  default_branch, archived, issues_enabled, merge_requests_enabled, 
+                                  pipelines_enabled, packages_enabled, wiki_enabled, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, 'main', false, true, true, true, true, true, $7, $7)
+            RETURNING id, name, description, visibility, owner_id, namespace_id,
+                'main' as default_branch, false as archived, 
+                true as issues_enabled, true as merge_requests_enabled, true as pipelines_enabled,
+                true as packages_enabled, true as wiki_enabled,
+                created_at, updated_at,
                 $8 as owner_name,
                 $9 as owner_avatar,
                 0 as stars_count,
@@ -483,7 +583,11 @@ impl ProjectService {
     pub async fn list_forks(pool: &PgPool, project_id: i64) -> AppResult<Vec<ProjectWithOwner>> {
         let forks = sqlx::query_as::<_, ProjectWithOwner>(
             r#"
-            SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+            SELECT p.id, p.name, p.description, p.visibility, p.owner_id,
+                   p.namespace_id, p.default_branch, p.archived,
+                   p.issues_enabled, p.merge_requests_enabled, p.pipelines_enabled,
+                   p.packages_enabled, p.wiki_enabled,
+                   p.created_at, p.updated_at,
                    n.path as owner_name, n.avatar_url as owner_avatar,
                    p.stars_count, p.forks_count, p.forked_from_id,
                    fn.path as forked_from_namespace, fp.name as forked_from_name
@@ -540,7 +644,11 @@ impl ProjectService {
                 SELECT p.id FROM projects p
                 INNER JOIN fork_tree ft ON p.forked_from_id = ft.id
             )
-            SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+            SELECT p.id, p.name, p.description, p.visibility, p.owner_id,
+                   p.namespace_id, p.default_branch, p.archived,
+                   p.issues_enabled, p.merge_requests_enabled, p.pipelines_enabled,
+                   p.packages_enabled, p.wiki_enabled,
+                   p.created_at, p.updated_at,
                    n.path as owner_name, n.avatar_url as owner_avatar,
                    p.stars_count, p.forks_count, p.forked_from_id,
                    fn.path as forked_from_namespace, fp.name as forked_from_name

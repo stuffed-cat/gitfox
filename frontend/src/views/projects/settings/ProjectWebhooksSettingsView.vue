@@ -188,24 +188,19 @@
           <div class="delivery-list">
             <div v-for="delivery in recentDeliveries" :key="delivery.id" class="delivery-item">
               <div class="delivery-header" @click="toggleDeliveryDetail(delivery)">
-                <span class="delivery-status" :class="delivery.response_code < 400 ? 'success' : 'error'">
-                  {{ delivery.response_code }}
+                <span class="delivery-status" :class="(delivery.response_status ?? 0) < 400 ? 'success' : 'error'">
+                  {{ delivery.response_status ?? '待投递' }}
                 </span>
                 <span class="delivery-event">{{ eventLabels[delivery.event] || delivery.event }}</span>
-                <span class="delivery-time">{{ formatDateTime(delivery.triggered_at) }}</span>
-                <span class="delivery-duration">{{ delivery.duration_ms }}ms</span>
+                <span class="delivery-time">{{ formatDateTime(delivery.delivered_at || delivery.created_at) }}</span>
               </div>
               
               <div v-if="delivery.expanded" class="delivery-detail">
                 <div class="detail-section">
-                  <h4>请求头</h4>
-                  <pre><code>{{ formatJson(delivery.request_headers) }}</code></pre>
+                  <h4>请求载荷</h4>
+                  <pre><code>{{ formatJson(delivery.payload) }}</code></pre>
                 </div>
-                <div class="detail-section">
-                  <h4>请求体</h4>
-                  <pre><code>{{ formatJson(delivery.request_body) }}</code></pre>
-                </div>
-                <div class="detail-section">
+                <div v-if="delivery.response_body" class="detail-section">
                   <h4>响应</h4>
                   <pre><code>{{ delivery.response_body }}</code></pre>
                 </div>
@@ -229,18 +224,10 @@
 <script setup lang="ts">
 import { ref, reactive, watch } from 'vue'
 import api from '@/api'
-import type { Project, Webhook } from '@/types'
+import type { Project, Webhook, WebhookDelivery as WebhookDeliveryType } from '@/types'
 
-interface WebhookDelivery {
-  id: string
-  webhook_id: string
-  event: string
-  request_headers: Record<string, string>
-  request_body: object
-  response_code: number
-  response_body: string
-  duration_ms: number
-  triggered_at: string
+// 扩展 WebhookDelivery 类型添加 expanded 字段用于 UI
+interface WebhookDelivery extends WebhookDeliveryType {
   expanded?: boolean
 }
 
@@ -394,22 +381,42 @@ async function deleteWebhook(webhookId: string) {
   }
 }
 
-async function viewRecentDeliveries(_webhook: ExtendedWebhook) {
-  // TODO: 后端 API 尚未支持投递历史查询
-  // 需要添加 GET /projects/{ns}/{proj}/hooks/{id}/deliveries 端点
-  // recentDeliveries.value = await api.webhooks.listDeliveries(path, webhook.id)
-  recentDeliveries.value = []
-  showDeliveries.value = true
+async function viewRecentDeliveries(webhook: ExtendedWebhook) {
+  if (!props.project?.owner_name || !props.project?.name) return
+  
+  const path = { namespace: props.project.owner_name, project: props.project.name }
+  
+  try {
+    const data = await api.webhooks.listDeliveries(path, webhook.id)
+    recentDeliveries.value = data.map(d => ({ ...d, expanded: false }))
+    showDeliveries.value = true
+  } catch (error) {
+    console.error('Failed to load deliveries:', error)
+    recentDeliveries.value = []
+    showDeliveries.value = true
+  }
 }
 
 function toggleDeliveryDetail(delivery: WebhookDelivery) {
   delivery.expanded = !delivery.expanded
 }
 
-async function redeliverWebhook(_delivery: WebhookDelivery) {
-  // TODO: 后端 API 尚未支持重新投递
-  // 需要添加 POST /projects/{ns}/{proj}/hooks/{id}/deliveries/{delivery_id}/retry 端点
-  alert('重新投递功能即将实现')
+async function redeliverWebhook(delivery: WebhookDelivery) {
+  if (!props.project?.owner_name || !props.project?.name) return
+  if (!confirm('确定要重新投递此 Webhook 吗？')) return
+  
+  const path = { namespace: props.project.owner_name, project: props.project.name }
+  
+  try {
+    await api.webhooks.retryDelivery(path, delivery.webhook_id, delivery.id)
+    alert('已重新投递')
+    // 重新加载投递记录
+    const data = await api.webhooks.listDeliveries(path, delivery.webhook_id)
+    recentDeliveries.value = data.map(d => ({ ...d, expanded: false }))
+  } catch (error) {
+    console.error('Failed to redeliver webhook:', error)
+    alert('重新投递失败')
+  }
 }
 
 watch([() => props.project?.owner_name, () => props.project?.name], () => {

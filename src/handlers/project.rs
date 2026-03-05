@@ -255,6 +255,50 @@ pub async fn remove_member(
     Ok(HttpResponse::NoContent().finish())
 }
 
+/// Request body for updating member role
+#[derive(Debug, serde::Deserialize)]
+pub struct UpdateMemberRoleRequest {
+    pub role: MemberRole,
+}
+
+pub async fn update_member_role(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<AppConfig>,
+    path: web::Path<MemberPath>,
+    body: web::Json<UpdateMemberRoleRequest>,
+) -> AppResult<HttpResponse> {
+    // 验证用户认证
+    let service_req = actix_web::dev::ServiceRequest::from_request(req.clone());
+    let claims = validate_token(&service_req, config.get_ref()).await?;
+    
+    let path = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(
+        pool.get_ref(), 
+        &path.namespace, 
+        &path.project
+    ).await?;
+    
+    // 检查用户是否有管理权限（owner 或 maintainer）
+    if !check_admin_permission(pool.get_ref(), claims.user_id, project.id, project.owner_id).await? {
+        return Err(AppError::Forbidden("You don't have permission to manage members".to_string()));
+    }
+    
+    // 不允许修改 owner 的角色
+    if path.user_id == project.owner_id {
+        return Err(AppError::BadRequest("Cannot modify the project owner's role".to_string()));
+    }
+    
+    let member = ProjectService::update_member_role(
+        pool.get_ref(),
+        project.id,
+        path.user_id,
+        body.role.clone(),
+    ).await?;
+    
+    Ok(HttpResponse::Ok().json(member))
+}
+
 /// 检查用户是否有项目的管理权限
 /// 只有 owner 和 maintainer 可以管理项目
 async fn check_admin_permission(

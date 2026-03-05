@@ -271,12 +271,24 @@ async function loadSettings() {
       basicForm.name = props.project.name
       basicForm.description = props.project.description || ''
       basicForm.visibility = props.project.visibility
+      
+      // 初始化功能开关
+      features.issues_enabled = props.project.issues_enabled ?? true
+      features.merge_requests_enabled = props.project.merge_requests_enabled ?? true
+      features.pipelines_enabled = props.project.pipelines_enabled ?? true
+      features.packages_enabled = props.project.packages_enabled ?? true
+      features.wiki_enabled = props.project.wiki_enabled ?? false
+      
+      // 初始化归档状态
+      isArchived.value = props.project.archived ?? false
     }
     
     // 找到默认分支
     const defaultBranch = branchData.find(b => b.is_default)
     if (defaultBranch) {
       advancedForm.default_branch = defaultBranch.name
+    } else if (props.project?.default_branch) {
+      advancedForm.default_branch = props.project.default_branch
     }
   } catch (error) {
     console.error('Failed to load settings:', error)
@@ -301,36 +313,63 @@ async function saveBasicInfo() {
 }
 
 async function saveFeatures() {
-  // TODO: 后端 API 尚未支持功能开关设置
-  // 等待后端实现后启用此功能
-  console.log('Features to save:', features)
-  alert('功能开关设置即将支持')
+  if (!projectPath.value) return
+  
+  try {
+    await api.projects.update(projectPath.value, {
+      issues_enabled: features.issues_enabled,
+      merge_requests_enabled: features.merge_requests_enabled,
+      pipelines_enabled: features.pipelines_enabled,
+      packages_enabled: features.packages_enabled,
+      wiki_enabled: features.wiki_enabled
+    })
+  } catch (error) {
+    console.error('Failed to save features:', error)
+    alert('保存功能设置失败')
+  }
 }
 
 async function saveAdvanced() {
-  // TODO: 后端 API 尚未支持默认分支设置
-  // 等待后端实现后启用此功能
-  console.log('Advanced settings to save:', advancedForm)
-  alert('高级设置即将支持')
+  if (!projectPath.value) return
+  
+  try {
+    await api.projects.update(projectPath.value, {
+      default_branch: advancedForm.default_branch
+    })
+  } catch (error) {
+    console.error('Failed to save advanced settings:', error)
+    alert('保存高级设置失败')
+  }
 }
 
 async function archiveProject() {
   if (!projectPath.value) return
   if (!confirm('确定要归档此项目吗？归档后项目将变为只读状态。')) return
   
-  // TODO: 后端 API 尚未支持归档功能
-  // 等待后端实现后启用此功能
-  alert('项目归档功能即将支持')
+  try {
+    await api.projects.update(projectPath.value, { archived: true })
+    isArchived.value = true
+    alert('项目已归档')
+  } catch (error) {
+    console.error('Failed to archive project:', error)
+    alert('归档项目失败')
+  }
 }
 
 async function transferProject() {
   if (!projectPath.value || !transferTarget.value) return
   
-  // TODO: 后端 API 尚未支持项目转移功能
-  // 等待后端实现后启用此功能
-  console.log('Transfer to namespace_id:', transferTarget.value)
-  alert('项目转移功能即将支持')
-  showTransferModal.value = false
+  try {
+    await api.projects.update(projectPath.value, {
+      namespace_id: transferTarget.value
+    })
+    showTransferModal.value = false
+    // 转移成功后刷新页面
+    window.location.reload()
+  } catch (error) {
+    console.error('Failed to transfer project:', error)
+    alert('项目转移失败')
+  }
 }
 
 async function deleteProject() {

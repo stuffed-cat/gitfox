@@ -198,3 +198,92 @@ pub async fn test_webhook(
         "delivery_id": delivery.id
     })))
 }
+
+/// List deliveries for a webhook
+pub async fn list_deliveries(
+    pool: web::Data<PgPool>,
+    path: web::Path<(String, String, i64)>,
+) -> AppResult<HttpResponse> {
+    let (namespace, project_name, webhook_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
+    
+    // Verify webhook exists and belongs to the project
+    let _webhook = sqlx::query_as::<_, Webhook>(
+        "SELECT * FROM webhooks WHERE id = $1 AND project_id = $2"
+    )
+    .bind(webhook_id)
+    .bind(project.id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Webhook not found".to_string()))?;
+    
+    let deliveries = sqlx::query_as::<_, WebhookDelivery>(
+        "SELECT * FROM webhook_deliveries WHERE webhook_id = $1 ORDER BY created_at DESC LIMIT 50"
+    )
+    .bind(webhook_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+    
+    Ok(HttpResponse::Ok().json(deliveries))
+}
+
+/// Retry a webhook delivery
+pub async fn retry_delivery(
+    pool: web::Data<PgPool>,
+    queue: web::Data<RedisMessageQueue>,
+    path: web::Path<(String, String, i64, i64)>,
+) -> AppResult<HttpResponse> {
+    let (namespace, project_name, webhook_id, delivery_id) = path.into_inner();
+    let project = ProjectService::get_project_by_owner_and_name(pool.get_ref(), &namespace, &project_name).await?;
+    
+    // Get the webhook
+    let webhook = sqlx::query_as::<_, Webhook>(
+        "SELECT * FROM webhooks WHERE id = $1 AND project_id = $2"
+    )
+    .bind(webhook_id)
+    .bind(project.id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Webhook not found".to_string()))?;
+    
+    // Get the original delivery
+    let original_delivery = sqlx::query_as::<_, WebhookDelivery>(
+        "SELECT * FROM webhook_deliveries WHERE id = $1 AND webhook_id = $2"
+    )
+    .bind(delivery_id)
+    .bind(webhook_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Delivery not found".to_string()))?;
+    
+    // Create a new delivery record
+    let now = Utc::now();
+    let new_delivery: WebhookDelivery = sqlx::query_as(
+        r#"
+        INSERT INTO webhook_deliveries (webhook_id, event, payload, created_at)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+        "#
+    )
+    .bind(webhook.id)
+    .bind(&original_delivery.event)
+    .bind(&original_delivery.payload)
+    .bind(now)
+    .fetch_one(pool.get_ref())
+    .await?;
+    
+    // Queue the retry
+    let message = WebhookDeliveryMessage {
+        webhook_id: webhook.id,
+        delivery_id: new_delivery.id,
+        url: webhook.url.clone(),
+        payload: original_delivery.payload.clone(),
+        secret: webhook.secret.clone(),
+    };
+    queue.publish(QUEUE_WEBHOOK, &message).await?;
+    
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "message": "Webhook delivery retry queued",
+        "delivery_id": new_delivery.id
+    })))
+}

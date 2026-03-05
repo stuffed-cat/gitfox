@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::services::CiService;
+use crate::services::gitlayer::{CommitServiceClient, IsAncestorRequest, Repository};
 
 // 导入生成的 proto 代码
 pub mod auth_proto {
@@ -635,11 +636,25 @@ impl AuthService for AuthServiceImpl {
         let branch_name = req.ref_name.trim_start_matches("refs/heads/");
         
         // 检查变更类型
+        let is_creation = req.change_type == "create" 
+            || req.old_sha == "0000000000000000000000000000000000000000";
         let is_deletion = req.change_type == "delete" 
             || req.new_sha == "0000000000000000000000000000000000000000";
-        // 注意: 强制推送检测需要 git 历史访问，这里简化为只检查 change_type
-        // 完整的强制推送检测应该在 GitLayer 或 git hook 中实现
-        let is_force_push = false; // 由 GitLayer 在实际 git 操作时检测
+        
+        // 检测强制推送：当 old_sha 不是 new_sha 的祖先时（非 fast-forward）
+        // 创建和删除操作不视为强制推送
+        let is_force_push = if is_creation || is_deletion {
+            false
+        } else {
+            // 构建仓库磁盘路径
+            let repo_disk_path = format!(
+                "{}/{}/{}.git",
+                self.config.git_repos_path, namespace, project_name
+            );
+            // 调用 GitLayer 检查祖先关系
+            // 如果检测失败，直接拒绝推送 - 不传播损坏
+            self.check_force_push(&repo_disk_path, &req.old_sha, &req.new_sha).await?
+        };
 
         // 查询分支保护规则
         let rules = sqlx::query_as::<_, (String, bool, i32, bool, bool, bool)>(
@@ -1381,6 +1396,61 @@ impl AuthServiceImpl {
     // ========================================
     // 分支保护辅助方法
     // ========================================
+
+    /// 检测是否为强制推送（non-fast-forward push）
+    /// 
+    /// 强制推送定义：新的 commit 不是旧 commit 的后代
+    /// 即 old_sha 不是 new_sha 的祖先
+    /// 
+    /// # Arguments
+    /// * `repo_path` - 仓库磁盘路径（如 "./repos/namespace/project.git"）
+    /// * `old_sha` - 更新前的 commit SHA
+    /// * `new_sha` - 更新后的 commit SHA
+    /// 
+    /// # Returns
+    /// * `Ok(true)` - 是强制推送
+    /// * `Ok(false)` - 不是强制推送（fast-forward）
+    /// * `Err` - 检测失败
+    async fn check_force_push(
+        &self,
+        repo_path: &str,
+        old_sha: &str,
+        new_sha: &str,
+    ) -> Result<bool, Status> {
+        // 获取 GitLayer 地址
+        let gitlayer_addr = self.config.gitlayer_address.clone()
+            .ok_or_else(|| Status::internal("GitLayer address not configured"))?;
+        
+        // 连接 GitLayer CommitService
+        let mut client = CommitServiceClient::connect(gitlayer_addr)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to connect to GitLayer: {}", e)))?;
+        
+        // 检查 old_sha 是否是 new_sha 的祖先
+        // 如果 old_sha 是 new_sha 的祖先，则这是一个 fast-forward push，不是强制推送
+        // 如果 old_sha 不是 new_sha 的祖先，则这是一个 non-fast-forward (force) push
+        let request = IsAncestorRequest {
+            repository: Some(Repository {
+                storage_path: repo_path.to_string(),
+                relative_path: String::new(),  // storage_path 已包含完整路径
+            }),
+            ancestor: old_sha.to_string(),
+            descendant: new_sha.to_string(),
+        };
+        
+        let response = client.is_ancestor(request)
+            .await
+            .map_err(|e| Status::internal(format!("GitLayer IsAncestor RPC failed: {}", e)))?;
+        
+        // 如果 old_sha 不是 new_sha 的祖先，则是强制推送
+        let is_force = !response.into_inner().is_ancestor;
+        
+        if is_force {
+            debug!("Detected force push: {} is not an ancestor of {}", old_sha, new_sha);
+        }
+        
+        Ok(is_force)
+    }
 
     /// 检查分支名是否匹配保护模式
     /// 支持 glob 模式：* 匹配任意字符，? 匹配单个字符

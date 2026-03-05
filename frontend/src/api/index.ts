@@ -23,6 +23,7 @@ import type {
   Pipeline,
   PipelineJob,
   Webhook,
+  WebhookDelivery,
   CreateWebhookRequest,
   Group,
   CreateGroupRequest,
@@ -62,6 +63,22 @@ import type {
   // Package types
   Package,
   PackageFile,
+  // Project settings types
+  BranchProtectionRule,
+  CreateBranchProtectionRequest,
+  UpdateBranchProtectionRequest,
+  CiVariable,
+  CreateCiVariableRequest,
+  UpdateCiVariableRequest,
+  PipelineTrigger,
+  CreatePipelineTriggerRequest,
+  CreatePipelineTriggerResponse,
+  DeployKey,
+  CreateDeployKeyRequest,
+  UpdateDeployKeyRequest,
+  ProjectAccessToken,
+  CreateProjectAccessTokenRequest,
+  CreateProjectAccessTokenResponse,
 } from '@/types'
 
 // 的项目路径
@@ -213,9 +230,14 @@ class ApiClient {
 
   // Users
   users = {
-    list: async (page = 1, perPage = 20): Promise<User[]> => {
-      const response = await this.client.get('/users', { params: { page, per_page: perPage } })
+    list: async (page = 1, perPage = 20, search?: string): Promise<User[]> => {
+      const params: Record<string, unknown> = { page, per_page: perPage }
+      if (search) params.search = search
+      const response = await this.client.get('/users', { params })
       return response.data
+    },
+    search: async (query: string, limit = 20): Promise<User[]> => {
+      return this.users.list(1, limit, query)
     },
     get: async (username: string): Promise<User> => {
       const response = await this.client.get(`/users/${username}`)
@@ -262,6 +284,10 @@ class ApiClient {
     },
     removeMember: async (path: ProjectPath, userId: string): Promise<void> => {
       await this.client.delete(`${this.projectPath(path)}/members/${userId}`)
+    },
+    updateMemberRole: async (path: ProjectPath, userId: number, role: string): Promise<ProjectMember> => {
+      const response = await this.client.put(`${this.projectPath(path)}/members/${userId}`, { role })
+      return response.data
     },
     // Star APIs
     checkStarred: async (path: ProjectPath): Promise<{ starred: boolean }> => {
@@ -462,25 +488,37 @@ class ApiClient {
     }
   }
 
-  // Webhooks - 
+  // Webhooks - uses /hooks endpoint in backend
   webhooks = {
     list: async (path: ProjectPath): Promise<Webhook[]> => {
-      const response = await this.client.get(`${this.projectPath(path)}/webhooks`)
+      const response = await this.client.get(`${this.projectPath(path)}/hooks`)
       return response.data
     },
     create: async (path: ProjectPath, data: CreateWebhookRequest): Promise<Webhook> => {
-      const response = await this.client.post(`${this.projectPath(path)}/webhooks`, data)
+      const response = await this.client.post(`${this.projectPath(path)}/hooks`, data)
       return response.data
     },
-    update: async (path: ProjectPath, id: string, data: Partial<CreateWebhookRequest>): Promise<Webhook> => {
-      const response = await this.client.put(`${this.projectPath(path)}/webhooks/${id}`, data)
+    get: async (path: ProjectPath, id: string): Promise<{ webhook: Webhook; recent_deliveries: WebhookDelivery[] }> => {
+      const response = await this.client.get(`${this.projectPath(path)}/hooks/${id}`)
+      return response.data
+    },
+    update: async (path: ProjectPath, id: string, data: Partial<CreateWebhookRequest & { is_active?: boolean }>): Promise<Webhook> => {
+      const response = await this.client.put(`${this.projectPath(path)}/hooks/${id}`, data)
       return response.data
     },
     delete: async (path: ProjectPath, id: string): Promise<void> => {
-      await this.client.delete(`${this.projectPath(path)}/webhooks/${id}`)
+      await this.client.delete(`${this.projectPath(path)}/hooks/${id}`)
     },
     test: async (path: ProjectPath, id: string): Promise<{ message: string; delivery_id: string }> => {
-      const response = await this.client.post(`${this.projectPath(path)}/webhooks/${id}/test`)
+      const response = await this.client.post(`${this.projectPath(path)}/hooks/${id}/test`)
+      return response.data
+    },
+    listDeliveries: async (path: ProjectPath, id: string): Promise<WebhookDelivery[]> => {
+      const response = await this.client.get(`${this.projectPath(path)}/hooks/${id}/deliveries`)
+      return response.data
+    },
+    retryDelivery: async (path: ProjectPath, webhookId: string, deliveryId: string): Promise<{ message: string; delivery_id: string }> => {
+      const response = await this.client.post(`${this.projectPath(path)}/hooks/${webhookId}/deliveries/${deliveryId}/retry`)
       return response.data
     }
   }
@@ -856,6 +894,93 @@ class ApiClient {
     },
     projectDelete: async (path: ProjectPath, id: string): Promise<void> => {
       await this.client.delete(`${this.projectPath(path)}/runners/${id}`)
+    },
+  }
+
+  // Project Settings - Branch Protection
+  branchProtection = {
+    list: async (path: ProjectPath): Promise<BranchProtectionRule[]> => {
+      const response = await this.client.get(`${this.projectPath(path)}/protected_branches`)
+      return response.data
+    },
+    create: async (path: ProjectPath, data: CreateBranchProtectionRequest): Promise<BranchProtectionRule> => {
+      const response = await this.client.post(`${this.projectPath(path)}/protected_branches`, data)
+      return response.data
+    },
+    update: async (path: ProjectPath, id: number, data: UpdateBranchProtectionRequest): Promise<BranchProtectionRule> => {
+      const response = await this.client.put(`${this.projectPath(path)}/protected_branches/${id}`, data)
+      return response.data
+    },
+    delete: async (path: ProjectPath, id: number): Promise<void> => {
+      await this.client.delete(`${this.projectPath(path)}/protected_branches/${id}`)
+    },
+  }
+
+  // Project Settings - CI/CD Variables
+  ciVariables = {
+    list: async (path: ProjectPath): Promise<CiVariable[]> => {
+      const response = await this.client.get(`${this.projectPath(path)}/variables`)
+      return response.data
+    },
+    create: async (path: ProjectPath, data: CreateCiVariableRequest): Promise<CiVariable> => {
+      const response = await this.client.post(`${this.projectPath(path)}/variables`, data)
+      return response.data
+    },
+    update: async (path: ProjectPath, id: number, data: UpdateCiVariableRequest): Promise<CiVariable> => {
+      const response = await this.client.put(`${this.projectPath(path)}/variables/${id}`, data)
+      return response.data
+    },
+    delete: async (path: ProjectPath, id: number): Promise<void> => {
+      await this.client.delete(`${this.projectPath(path)}/variables/${id}`)
+    },
+  }
+
+  // Project Settings - Pipeline Triggers
+  pipelineTriggers = {
+    list: async (path: ProjectPath): Promise<PipelineTrigger[]> => {
+      const response = await this.client.get(`${this.projectPath(path)}/triggers`)
+      return response.data
+    },
+    create: async (path: ProjectPath, data: CreatePipelineTriggerRequest): Promise<CreatePipelineTriggerResponse> => {
+      const response = await this.client.post(`${this.projectPath(path)}/triggers`, data)
+      return response.data
+    },
+    delete: async (path: ProjectPath, id: number): Promise<void> => {
+      await this.client.delete(`${this.projectPath(path)}/triggers/${id}`)
+    },
+  }
+
+  // Project Settings - Deploy Keys
+  deployKeys = {
+    list: async (path: ProjectPath): Promise<DeployKey[]> => {
+      const response = await this.client.get(`${this.projectPath(path)}/deploy_keys`)
+      return response.data
+    },
+    create: async (path: ProjectPath, data: CreateDeployKeyRequest): Promise<DeployKey> => {
+      const response = await this.client.post(`${this.projectPath(path)}/deploy_keys`, data)
+      return response.data
+    },
+    update: async (path: ProjectPath, id: number, data: UpdateDeployKeyRequest): Promise<DeployKey> => {
+      const response = await this.client.put(`${this.projectPath(path)}/deploy_keys/${id}`, data)
+      return response.data
+    },
+    delete: async (path: ProjectPath, id: number): Promise<void> => {
+      await this.client.delete(`${this.projectPath(path)}/deploy_keys/${id}`)
+    },
+  }
+
+  // Project Settings - Project Access Tokens
+  projectAccessTokens = {
+    list: async (path: ProjectPath): Promise<ProjectAccessToken[]> => {
+      const response = await this.client.get(`${this.projectPath(path)}/access_tokens`)
+      return response.data
+    },
+    create: async (path: ProjectPath, data: CreateProjectAccessTokenRequest): Promise<CreateProjectAccessTokenResponse> => {
+      const response = await this.client.post(`${this.projectPath(path)}/access_tokens`, data)
+      return response.data
+    },
+    revoke: async (path: ProjectPath, id: number): Promise<void> => {
+      await this.client.delete(`${this.projectPath(path)}/access_tokens/${id}`)
     },
   }
 

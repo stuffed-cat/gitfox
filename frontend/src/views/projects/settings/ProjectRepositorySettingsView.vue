@@ -25,60 +25,107 @@
         </div>
       </section>
 
-      <!-- 受保护分支 -->
+      <!-- 分支保护规则 -->
       <section class="settings-section">
-        <h3>受保护分支</h3>
+        <h3>分支保护规则</h3>
         <p class="section-description">保护重要分支免受意外删除或强制推送</p>
         
-        <div class="add-protected-branch">
-          <select v-model="newProtectedBranch" class="form-control">
-            <option value="">选择分支...</option>
-            <option v-for="branch in unprotectedBranches" :key="branch.name" :value="branch.name">
-              {{ branch.name }}
-            </option>
-          </select>
-          
-          <div class="protection-options">
-            <label>
-              <input type="checkbox" v-model="protectionOptions.allow_force_push">
-              允许强制推送
-            </label>
-            <label>
-              <input type="checkbox" v-model="protectionOptions.require_code_review">
-              要求代码审查
-            </label>
-          </div>
-          
-          <button class="btn btn-primary" @click="addProtectedBranch" :disabled="!newProtectedBranch">
-            保护分支
-          </button>
-        </div>
+        <button class="btn btn-primary mb-3" @click="openAddProtectionModal">
+          添加保护规则
+        </button>
         
         <div class="protected-branch-list">
-          <div v-for="branch in protectedBranches" :key="branch.name" class="protected-branch-item">
+          <div v-for="rule in protectionRules" :key="rule.id" class="protected-branch-item">
             <div class="branch-info">
               <div class="branch-name">
                 <span class="icon icon-branch"></span>
-                {{ branch.name }}
-                <span v-if="branch.is_default" class="badge badge-primary">默认</span>
+                <code>{{ rule.branch_pattern }}</code>
               </div>
               <div class="branch-rules">
-                <span v-if="branch.allow_force_push" class="rule-tag">允许强推</span>
-                <span v-if="branch.require_code_review" class="rule-tag require">需审查</span>
+                <span v-if="rule.require_review" class="rule-tag require">需审查 ({{ rule.required_reviewers }}人)</span>
+                <span v-if="rule.require_ci_pass" class="rule-tag">需CI通过</span>
+                <span v-if="rule.allow_force_push" class="rule-tag warning">允许强推</span>
+                <span v-if="rule.allow_deletion" class="rule-tag warning">允许删除</span>
               </div>
             </div>
             <div class="branch-actions">
-              <button class="btn btn-outline btn-sm" @click="editProtectedBranch(branch)">
+              <button class="btn btn-outline btn-sm" @click="editProtectionRule(rule)">
                 编辑
               </button>
-              <button class="btn btn-danger btn-sm" @click="removeProtectedBranch(branch.name)">
-                取消保护
+              <button class="btn btn-danger btn-sm" @click="removeProtectionRule(rule)">
+                删除
               </button>
             </div>
           </div>
           
-          <div v-if="protectedBranches.length === 0" class="empty-state">
-            <p>暂无受保护分支</p>
+          <div v-if="protectionRules.length === 0" class="empty-state">
+            <p>暂无分支保护规则</p>
+          </div>
+        </div>
+        
+        <!-- 添加/编辑保护规则模态框 -->
+        <div v-if="showAddProtectionModal" class="modal-overlay" @click.self="showAddProtectionModal = false">
+          <div class="modal-content">
+            <h4>{{ editingRule ? '编辑' : '添加' }}分支保护规则</h4>
+            
+            <div class="form-group">
+              <label>分支模式</label>
+              <input
+                v-model="newProtectionRule.branch_pattern"
+                type="text"
+                class="form-control"
+                placeholder="main 或 release/* 或 feature/**"
+                :disabled="!!editingRule"
+              />
+              <p class="form-help">支持通配符: * 匹配单级, ** 匹配多级</p>
+            </div>
+            
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="newProtectionRule.require_review">
+                要求代码审查
+              </label>
+            </div>
+            
+            <div v-if="newProtectionRule.require_review" class="form-group">
+              <label>最少审查人数</label>
+              <input
+                v-model.number="newProtectionRule.required_reviewers"
+                type="number"
+                class="form-control"
+                min="1"
+                max="10"
+              />
+            </div>
+            
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="newProtectionRule.require_ci_pass">
+                要求 CI 通过
+              </label>
+            </div>
+            
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="newProtectionRule.allow_force_push">
+                允许强制推送
+              </label>
+              <p class="form-help warning">警告：允许强制推送可能导致历史记录丢失</p>
+            </div>
+            
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="newProtectionRule.allow_deletion">
+                允许删除分支
+              </label>
+            </div>
+            
+            <div class="modal-actions">
+              <button class="btn btn-secondary" @click="showAddProtectionModal = false">取消</button>
+              <button class="btn btn-primary" @click="saveProtectionRule" :disabled="!newProtectionRule.branch_pattern">
+                {{ editingRule ? '保存' : '添加' }}
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -257,21 +304,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue'
 import api from '@/api'
-import type { Project, BranchInfo } from '@/types'
-
-interface ProtectedBranch extends BranchInfo {
-  allow_force_push?: boolean
-  require_code_review?: boolean
-}
-
-interface DeployKey {
-  id: string
-  title: string
-  fingerprint: string
-  can_push: boolean
-  created_at: string
-  last_used_at?: string
-}
+import type { Project, BranchInfo, BranchProtectionRule, DeployKey } from '@/types'
 
 const props = defineProps<{
   project?: Project
@@ -280,19 +313,24 @@ const props = defineProps<{
 const loading = ref(false)
 const branches = ref<BranchInfo[]>([])
 const defaultBranch = ref('main')
-const deployKeys = ref<DeployKey[]>([])
 const gcRunning = ref(false)
 const repackRunning = ref(false)
 
-// 受保护分支
-const protectedBranches = ref<ProtectedBranch[]>([])
-const newProtectedBranch = ref('')
-const protectionOptions = reactive({
+// 分支保护规则（使用新的 API）
+const protectionRules = ref<BranchProtectionRule[]>([])
+const showAddProtectionModal = ref(false)
+const editingRule = ref<BranchProtectionRule | null>(null)
+const newProtectionRule = reactive({
+  branch_pattern: '',
+  require_review: true,
+  required_reviewers: 1,
+  require_ci_pass: true,
   allow_force_push: false,
-  require_code_review: true
+  allow_deletion: false
 })
 
-// 新部署密钥
+// 部署密钥
+const deployKeys = ref<DeployKey[]>([])
 const newDeployKey = reactive({
   title: '',
   key: '',
@@ -313,11 +351,6 @@ const projectPath = computed(() => {
   return { namespace: props.project.owner_name, project: props.project.name }
 })
 
-const unprotectedBranches = computed(() => {
-  const protectedNames = new Set(protectedBranches.value.map(b => b.name))
-  return branches.value.filter(b => !protectedNames.has(b.name))
-})
-
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('zh-CN')
 }
@@ -327,6 +360,7 @@ async function loadSettings() {
   loading.value = true
   
   try {
+    // 加载分支列表
     const branchData = await api.branches.list(projectPath.value)
     branches.value = branchData
     
@@ -336,11 +370,11 @@ async function loadSettings() {
       defaultBranch.value = defaultB.name
     }
     
-    // 筛选受保护分支
-    protectedBranches.value = branchData.filter(b => b.is_protected)
+    // 加载分支保护规则
+    protectionRules.value = await api.branchProtection.list(projectPath.value)
     
-    // 加载部署密钥（如果有对应 API）
-    // deployKeys.value = await api.deployKeys.list(projectPath.value)
+    // 加载部署密钥
+    deployKeys.value = await api.deployKeys.list(projectPath.value)
   } catch (error) {
     console.error('Failed to load settings:', error)
   } finally {
@@ -351,44 +385,78 @@ async function loadSettings() {
 async function setDefaultBranch() {
   if (!projectPath.value) return
   
-  // TODO: 后端 API 尚未支持设置默认分支
-  // 需要在后端 UpdateProjectRequest 中添加 default_branch 字段
-  console.log('Set default branch to:', defaultBranch.value)
-  alert('默认分支设置功能即将支持')
-}
-
-async function addProtectedBranch() {
-  if (!projectPath.value || !newProtectedBranch.value) return
-  
   try {
-    // 调用分支保护 API（需要后端支持）
-    // await api.branches.protect(projectPath.value, newProtectedBranch.value, protectionOptions)
-    alert('分支保护功能即将实现')
-    newProtectedBranch.value = ''
+    await api.projects.update(projectPath.value, {
+      default_branch: defaultBranch.value
+    })
+    alert('默认分支已更新')
   } catch (error) {
-    console.error('Failed to protect branch:', error)
-    alert('保护分支失败')
+    console.error('Failed to set default branch:', error)
+    alert('设置默认分支失败')
   }
 }
 
-function editProtectedBranch(branch: ProtectedBranch) {
-  // 编辑保护规则
-  newProtectedBranch.value = branch.name
-  protectionOptions.allow_force_push = branch.allow_force_push || false
-  protectionOptions.require_code_review = branch.require_code_review || false
+function openAddProtectionModal() {
+  editingRule.value = null
+  newProtectionRule.branch_pattern = ''
+  newProtectionRule.require_review = true
+  newProtectionRule.required_reviewers = 1
+  newProtectionRule.require_ci_pass = true
+  newProtectionRule.allow_force_push = false
+  newProtectionRule.allow_deletion = false
+  showAddProtectionModal.value = true
 }
 
-async function removeProtectedBranch(branchName: string) {
-  if (!projectPath.value) return
-  if (!confirm(`确定要取消保护分支 "${branchName}" 吗？`)) return
+function editProtectionRule(rule: BranchProtectionRule) {
+  editingRule.value = rule
+  newProtectionRule.branch_pattern = rule.branch_pattern
+  newProtectionRule.require_review = rule.require_review
+  newProtectionRule.required_reviewers = rule.required_reviewers
+  newProtectionRule.require_ci_pass = rule.require_ci_pass
+  newProtectionRule.allow_force_push = rule.allow_force_push
+  newProtectionRule.allow_deletion = rule.allow_deletion
+  showAddProtectionModal.value = true
+}
+
+async function saveProtectionRule() {
+  if (!projectPath.value || !newProtectionRule.branch_pattern) return
   
   try {
-    // await api.branches.unprotect(projectPath.value, branchName)
-    protectedBranches.value = protectedBranches.value.filter(b => b.name !== branchName)
-    alert('已取消分支保护')
+    if (editingRule.value) {
+      // 更新现有规则
+      const updated = await api.branchProtection.update(projectPath.value, editingRule.value.id, {
+        require_review: newProtectionRule.require_review,
+        required_reviewers: newProtectionRule.required_reviewers,
+        require_ci_pass: newProtectionRule.require_ci_pass,
+        allow_force_push: newProtectionRule.allow_force_push,
+        allow_deletion: newProtectionRule.allow_deletion
+      })
+      const index = protectionRules.value.findIndex(r => r.id === editingRule.value!.id)
+      if (index !== -1) {
+        protectionRules.value[index] = updated
+      }
+    } else {
+      // 创建新规则
+      const created = await api.branchProtection.create(projectPath.value, newProtectionRule)
+      protectionRules.value.push(created)
+    }
+    showAddProtectionModal.value = false
+  } catch (error: any) {
+    console.error('Failed to save protection rule:', error)
+    alert(error.response?.data?.message || '保存分支保护规则失败')
+  }
+}
+
+async function removeProtectionRule(rule: BranchProtectionRule) {
+  if (!projectPath.value) return
+  if (!confirm(`确定要删除保护规则 "${rule.branch_pattern}" 吗？`)) return
+  
+  try {
+    await api.branchProtection.delete(projectPath.value, rule.id)
+    protectionRules.value = protectionRules.value.filter(r => r.id !== rule.id)
   } catch (error) {
-    console.error('Failed to unprotect branch:', error)
-    alert('取消保护失败')
+    console.error('Failed to delete protection rule:', error)
+    alert('删除保护规则失败')
   }
 }
 
@@ -396,27 +464,31 @@ async function addDeployKey() {
   if (!projectPath.value || !newDeployKey.title || !newDeployKey.key) return
   
   try {
-    // await api.deployKeys.create(projectPath.value, newDeployKey)
-    alert('部署密钥功能即将实现')
+    const created = await api.deployKeys.create(projectPath.value, {
+      title: newDeployKey.title,
+      key: newDeployKey.key,
+      can_push: newDeployKey.can_push
+    })
+    deployKeys.value.push(created)
     newDeployKey.title = ''
     newDeployKey.key = ''
     newDeployKey.can_push = false
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to add deploy key:', error)
-    alert('添加部署密钥失败')
+    alert(error.response?.data?.message || '添加部署密钥失败')
   }
 }
 
-async function removeDeployKey(keyId: string) {
+async function removeDeployKey(keyId: number) {
   if (!projectPath.value) return
   if (!confirm('确定要删除此部署密钥吗？')) return
   
   try {
-    // await api.deployKeys.delete(projectPath.value, keyId)
+    await api.deployKeys.delete(projectPath.value, keyId)
     deployKeys.value = deployKeys.value.filter(k => k.id !== keyId)
-    alert('部署密钥已删除')
   } catch (error) {
     console.error('Failed to remove deploy key:', error)
+    alert('删除部署密钥失败')
   }
 }
 
@@ -424,8 +496,8 @@ async function saveMirrorConfig() {
   if (!projectPath.value || !mirrorConfig.url) return
   
   try {
-    // await api.projects.updateMirror(projectPath.value, mirrorConfig)
-    alert('镜像配置功能即将实现')
+    // 镜像功能即将支持（注：这是预留功能，后端尚未实现）
+    alert('仓库镜像功能即将支持')
   } catch (error) {
     console.error('Failed to save mirror config:', error)
     alert('保存镜像配置失败')
@@ -436,7 +508,6 @@ async function triggerMirrorSync() {
   if (!projectPath.value) return
   
   try {
-    // await api.projects.syncMirror(projectPath.value)
     alert('正在同步镜像...')
   } catch (error) {
     console.error('Failed to sync mirror:', error)
@@ -690,5 +761,66 @@ watch([() => props.project?.owner_name, () => props.project?.name], () => {
 
 .ml-2 {
   margin-left: $spacing-sm;
+}
+
+.mb-3 {
+  margin-bottom: $spacing-md;
+}
+
+// Modal styles
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: $bg-primary;
+  border-radius: $border-radius-lg;
+  padding: $spacing-xl;
+  min-width: 400px;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
+  
+  h4 {
+    margin: 0 0 $spacing-lg 0;
+  }
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: $spacing-sm;
+  margin-top: $spacing-lg;
+  padding-top: $spacing-lg;
+  border-top: 1px solid $border-color;
+}
+
+.rule-tag {
+  &.warning {
+    background: rgba($danger-color, 0.2);
+    color: $danger-color;
+  }
+}
+
+.form-help {
+  &.warning {
+    color: $warning-color;
+  }
+}
+
+code {
+  background: $bg-secondary;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: monospace;
 }
 </style>

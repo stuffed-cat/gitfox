@@ -61,6 +61,11 @@
         <p class="section-description">定义可在流水线中使用的环境变量</p>
         
         <div class="add-variable">
+          <div v-if="editingVariableId" class="editing-indicator">
+            <span>正在编辑变量</span>
+            <button class="btn btn-sm btn-outline" @click="cancelEditVariable">取消编辑</button>
+          </div>
+          
           <div class="variable-form">
             <div class="form-row">
               <div class="form-group">
@@ -72,17 +77,18 @@
                   class="form-control"
                   placeholder="VARIABLE_NAME"
                   @input="validateVariableKey"
+                  :disabled="!!editingVariableId"
                 />
               </div>
               
               <div class="form-group flex-grow">
-                <label for="var-value">值</label>
+                <label for="var-value">值 {{ editingVariableId ? '(输入新值)' : '' }}</label>
                 <input
                   id="var-value"
                   v-model="newVariable.value"
                   :type="newVariable.masked ? 'password' : 'text'"
                   class="form-control"
-                  placeholder="变量值"
+                  :placeholder="editingVariableId ? '输入新的变量值' : '变量值'"
                 />
               </div>
             </div>
@@ -100,14 +106,14 @@
                 <span class="option-hint">在日志中隐藏变量值</span>
               </label>
               
-              <label class="checkbox-label">
+              <label class="checkbox-label" v-if="!editingVariableId">
                 <input type="checkbox" v-model="newVariable.file">
                 文件
                 <span class="option-hint">将值写入文件而非环境变量</span>
               </label>
             </div>
             
-            <div class="form-group">
+            <div class="form-group" v-if="!editingVariableId">
               <label for="var-env">环境作用域</label>
               <input
                 id="var-env"
@@ -120,7 +126,7 @@
           </div>
           
           <button class="btn btn-primary" @click="addVariable" :disabled="!newVariable.key || !newVariable.value">
-            添加变量
+            {{ editingVariableId ? '更新变量' : '添加变量' }}
           </button>
         </div>
         
@@ -218,6 +224,19 @@
         <h3>流水线触发器</h3>
         <p class="section-description">创建触发器以通过 API 运行流水线</p>
         
+        <!-- 新创建的 Token 提示（只显示一次） -->
+        <div v-if="showNewTriggerToken" class="alert alert-success token-alert">
+          <div class="alert-header">
+            <strong>触发器已创建</strong>
+            <button class="btn-close" @click="dismissNewTriggerToken">×</button>
+          </div>
+          <p>请立即复制以下令牌，它只会显示一次：</p>
+          <div class="token-display">
+            <code>{{ showNewTriggerToken.token }}</code>
+            <button class="btn btn-sm btn-outline" @click="copyTriggerToken(showNewTriggerToken.token)">复制</button>
+          </div>
+        </div>
+        
         <div class="add-trigger">
           <div class="form-group">
             <label for="trigger-description">描述</label>
@@ -240,13 +259,10 @@
             <div class="trigger-info">
               <div class="trigger-description">{{ trigger.description }}</div>
               <div class="trigger-token">
-                <code>{{ trigger.token_preview }}...</code>
-                <button class="btn-copy" @click="copyTriggerToken(trigger)" title="复制完整 Token">
-                  📋
-                </button>
+                <code>{{ trigger.token }}</code>
               </div>
               <div class="trigger-meta">
-                创建于 {{ formatDate(trigger.created_at) }}
+                创建者: {{ trigger.owner_username }} · 创建于 {{ formatDate(trigger.created_at) }}
                 <span v-if="trigger.last_used_at">· 最后使用 {{ formatDate(trigger.last_used_at) }}</span>
               </div>
             </div>
@@ -302,26 +318,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue'
 import api from '@/api'
-import type { Project, Runner } from '@/types'
-
-interface CiVariable {
-  id: string
-  key: string
-  value?: string
-  protected: boolean
-  masked: boolean
-  file: boolean
-  environment_scope: string
-  created_at: string
-}
-
-interface PipelineTrigger {
-  id: string
-  description: string
-  token_preview: string
-  created_at: string
-  last_used_at?: string
-}
+import type { Project, Runner, CiVariable, PipelineTrigger, CreatePipelineTriggerResponse } from '@/types'
 
 const props = defineProps<{
   project?: Project
@@ -331,12 +328,19 @@ const loading = ref(false)
 const variables = ref<CiVariable[]>([])
 const projectRunners = ref<Runner[]>([])
 const triggers = ref<PipelineTrigger[]>([])
+const showNewTriggerToken = ref<CreatePipelineTriggerResponse | null>(null)
+const editingVariableId = ref<number | null>(null)
 
 const apiBaseUrl = computed(() => window.location.origin)
 
 const projectPath = computed(() => {
   if (!props.project?.owner_name || !props.project?.name) return ''
   return `/${props.project.owner_name}/${props.project.name}`
+})
+
+const projectPathObj = computed(() => {
+  if (!props.project?.owner_name || !props.project?.name) return null
+  return { namespace: props.project.owner_name, project: props.project.name }
 })
 
 const generalSettings = reactive({
@@ -379,19 +383,24 @@ function validateVariableKey() {
 }
 
 async function loadSettings() {
-  if (!props.project?.owner_name || !props.project?.name) return
+  if (!projectPathObj.value) return
   loading.value = true
   
-  const path = { namespace: props.project.owner_name, project: props.project.name }
+  // 从项目数据初始化设置
+  if (props.project) {
+    generalSettings.pipelines_enabled = props.project.pipelines_enabled ?? true
+  }
   
   try {
     // 加载 runners
-    const runners = await api.runners.projectList(path)
+    const runners = await api.runners.projectList(projectPathObj.value)
     projectRunners.value = runners
     
-    // 变量和触发器需要对应的 API 端点
-    // variables.value = await api.ciVariables.list(path)
-    // triggers.value = await api.triggers.list(path)
+    // 加载 CI/CD 变量
+    variables.value = await api.ciVariables.list(projectPathObj.value)
+    
+    // 加载 pipeline triggers
+    triggers.value = await api.pipelineTriggers.list(projectPathObj.value)
   } catch (error) {
     console.error('Failed to load settings:', error)
   } finally {
@@ -400,31 +409,66 @@ async function loadSettings() {
 }
 
 async function saveGeneralSettings() {
-  // TODO: 后端 API 尚未支持 CI/CD 通用设置
-  // 需要在后端 UpdateProjectRequest 添加相应字段
-  console.log('General settings:', generalSettings)
-  alert('CI/CD 通用设置即将支持')
+  if (!props.project?.owner_name || !props.project?.name) return
+  
+  const path = { namespace: props.project.owner_name, project: props.project.name }
+  
+  try {
+    // pipelines_enabled 已在 Project 模型中支持
+    await api.projects.update(path, {
+      pipelines_enabled: generalSettings.pipelines_enabled
+    })
+    // 注意: default_timeout, auto_cancel_pending_pipelines 等字段
+    // 需要在后端添加对应的数据库字段和API支持
+    // 目前仅保存 pipelines_enabled
+  } catch (error) {
+    console.error('Failed to save general settings:', error)
+    alert('保存 CI/CD 设置失败')
+  }
 }
 
 async function saveRunnerSettings() {
-  // TODO: 后端 API 尚未支持 Runner 设置
-  console.log('Runner settings:', runnerSettings)
-  alert('Runner 设置即将支持')
+  // Runner 配置需要 project_ci_settings 表支持
+  // 目前 shared_runners_enabled 和 group_runners_enabled 为本地状态
+  // 待后端扩展 project_ci_settings 表后实现持久化
+  console.log('Runner settings saved locally:', runnerSettings)
 }
 
 async function saveAutoDevOps() {
-  // TODO: 后端 API 尚未支持 Auto DevOps 设置
-  console.log('Auto DevOps settings:', autoDevOps)
-  alert('Auto DevOps 设置即将支持')
+  // Auto DevOps 配置需要 project_ci_settings 表支持
+  // 目前为本地状态，待后端扩展后实现持久化
+  console.log('Auto DevOps settings saved locally:', autoDevOps)
 }
 
 async function addVariable() {
-  if (!props.project?.owner_name || !props.project?.name) return
+  if (!projectPathObj.value) return
   if (!newVariable.key || !newVariable.value) return
   
   try {
-    // await api.ciVariables.create(path, newVariable)
-    alert('CI/CD 变量功能即将实现')
+    if (editingVariableId.value) {
+      // 更新现有变量
+      const updated = await api.ciVariables.update(projectPathObj.value, editingVariableId.value, {
+        value: newVariable.value,
+        protected: newVariable.protected,
+        masked: newVariable.masked
+      })
+      const index = variables.value.findIndex(v => v.id === editingVariableId.value)
+      if (index !== -1) {
+        variables.value[index] = updated
+      }
+      editingVariableId.value = null
+    } else {
+      // 创建新变量
+      const created = await api.ciVariables.create(projectPathObj.value, {
+        key: newVariable.key,
+        value: newVariable.value,
+        protected: newVariable.protected,
+        masked: newVariable.masked,
+        file: newVariable.file,
+        environment_scope: newVariable.environment_scope
+      })
+      variables.value.push(created)
+    }
     
     // 重置表单
     newVariable.key = ''
@@ -433,61 +477,90 @@ async function addVariable() {
     newVariable.masked = false
     newVariable.file = false
     newVariable.environment_scope = '*'
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to add variable:', error)
-    alert('添加变量失败')
+    alert(error.response?.data?.message || '添加变量失败')
   }
 }
 
 function editVariable(variable: CiVariable) {
+  editingVariableId.value = variable.id
   newVariable.key = variable.key
+  newVariable.value = '' // 值需要重新输入
   newVariable.protected = variable.protected
   newVariable.masked = variable.masked
   newVariable.file = variable.file
   newVariable.environment_scope = variable.environment_scope
 }
 
-async function deleteVariable(variableId: string) {
-  if (!props.project?.owner_name || !props.project?.name) return
+function cancelEditVariable() {
+  editingVariableId.value = null
+  newVariable.key = ''
+  newVariable.value = ''
+  newVariable.protected = false
+  newVariable.masked = false
+  newVariable.file = false
+  newVariable.environment_scope = '*'
+}
+
+async function deleteVariable(variableId: number) {
+  if (!projectPathObj.value) return
   if (!confirm('确定要删除此变量吗？')) return
   
   try {
-    // await api.ciVariables.delete(path, variableId)
+    await api.ciVariables.delete(projectPathObj.value, variableId)
     variables.value = variables.value.filter(v => v.id !== variableId)
   } catch (error) {
     console.error('Failed to delete variable:', error)
+    alert('删除变量失败')
   }
 }
 
 async function addTrigger() {
-  if (!props.project?.owner_name || !props.project?.name) return
+  if (!projectPathObj.value) return
   if (!newTrigger.description) return
   
   try {
-    // await api.triggers.create(path, newTrigger)
-    alert('流水线触发器功能即将实现')
+    const created = await api.pipelineTriggers.create(projectPathObj.value, {
+      description: newTrigger.description
+    })
+    // 显示新创建的 token（只显示一次）
+    showNewTriggerToken.value = created
+    // 将触发器添加到列表（但 token 会被 mask）
+    triggers.value.push({
+      id: created.id,
+      project_id: created.project_id,
+      token: created.token.substring(0, 4) + '****' + created.token.substring(created.token.length - 4),
+      description: created.description,
+      owner_username: created.owner_username,
+      created_at: created.created_at
+    })
     newTrigger.description = ''
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to add trigger:', error)
-    alert('添加触发器失败')
+    alert(error.response?.data?.message || '添加触发器失败')
   }
 }
 
-async function deleteTrigger(triggerId: string) {
-  if (!props.project?.owner_name || !props.project?.name) return
-  if (!confirm('确定要撤销此触发器吗？')) return
+function dismissNewTriggerToken() {
+  showNewTriggerToken.value = null
+}
+
+async function deleteTrigger(triggerId: number) {
+  if (!projectPathObj.value) return
+  if (!confirm('确定要撤销此触发器吗？撤销后使用此令牌的所有自动化将停止工作。')) return
   
   try {
-    // await api.triggers.delete(path, triggerId)
+    await api.pipelineTriggers.delete(projectPathObj.value, triggerId)
     triggers.value = triggers.value.filter(t => t.id !== triggerId)
   } catch (error) {
     console.error('Failed to delete trigger:', error)
+    alert('删除触发器失败')
   }
 }
 
-function copyTriggerToken(trigger: PipelineTrigger) {
-  // 实际需要先获取完整 token
-  navigator.clipboard.writeText(trigger.token_preview)
+function copyTriggerToken(token: string) {
+  navigator.clipboard.writeText(token)
   alert('已复制到剪贴板')
 }
 
@@ -778,5 +851,58 @@ watch([() => props.project?.owner_name, () => props.project?.name], () => {
 
 .mt-2 {
   margin-top: $spacing-sm;
+}
+
+// Token alert styles
+.alert {
+  padding: $spacing-md;
+  border-radius: $border-radius;
+  margin-bottom: $spacing-lg;
+  
+  &.alert-success {
+    background: rgba($success-color, 0.1);
+    border: 1px solid rgba($success-color, 0.3);
+  }
+}
+
+.alert-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: $spacing-sm;
+}
+
+.btn-close {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: $text-muted;
+  
+  &:hover {
+    color: $text-primary;
+  }
+}
+
+.token-alert {
+  p {
+    margin: $spacing-sm 0;
+    color: $text-muted;
+  }
+}
+
+.token-display {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  padding: $spacing-sm;
+  background: $bg-secondary;
+  border-radius: $border-radius;
+  
+  code {
+    flex: 1;
+    font-family: monospace;
+    word-break: break-all;
+  }
 }
 </style>

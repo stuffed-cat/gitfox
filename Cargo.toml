@@ -63,6 +63,8 @@ sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"
 urlencoding = "2"
+aes-gcm = "0.10"
+lazy_static = "1.5"
 
 # HTTP Client (for OAuth)
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }

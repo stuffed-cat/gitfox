@@ -119,6 +119,36 @@ impl UserService {
         Ok(users)
     }
 
+    /// Search users by username, email or display_name
+    pub async fn search_users(pool: &PgPool, search: &str, page: u32, per_page: u32) -> AppResult<Vec<User>> {
+        let offset = (page.saturating_sub(1)) * per_page;
+        let search_pattern = format!("%{}%", search.to_lowercase());
+
+        let users = sqlx::query_as::<_, User>(
+            r#"
+            SELECT * FROM users 
+            WHERE LOWER(username) LIKE $1 
+               OR LOWER(email) LIKE $1 
+               OR LOWER(COALESCE(display_name, '')) LIKE $1
+            ORDER BY 
+                CASE WHEN LOWER(username) = $3 THEN 0
+                     WHEN LOWER(username) LIKE $4 THEN 1
+                     ELSE 2 END,
+                username
+            LIMIT $2 OFFSET $5
+            "#
+        )
+        .bind(&search_pattern)
+        .bind(per_page as i64)
+        .bind(search.to_lowercase())
+        .bind(format!("{}%", search.to_lowercase()))
+        .bind(offset as i64)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(users)
+    }
+
     pub async fn update_user(
         pool: &PgPool,
         id: i64,

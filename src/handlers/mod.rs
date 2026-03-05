@@ -21,6 +21,7 @@ pub mod search;
 pub mod runner;
 pub mod job_log_ws;
 pub mod registry;
+pub mod project_settings;
 
 use actix_web::{web, HttpResponse};
 use serde::Serialize;
@@ -283,6 +284,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/stats", web::get().to(project::get_project_stats))
             .route("/projects/{namespace}/{project}/members", web::get().to(project::get_members))
             .route("/projects/{namespace}/{project}/members", web::post().to(project::add_member))
+            .route("/projects/{namespace}/{project}/members/{user_id}", web::put().to(project::update_member_role))
             .route("/projects/{namespace}/{project}/members/{user_id}", web::delete().to(project::remove_member))
             
             // Star routes
@@ -362,12 +364,42 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/hooks/{id}", web::put().to(webhook::update_webhook))
             .route("/projects/{namespace}/{project}/hooks/{id}", web::delete().to(webhook::delete_webhook))
             .route("/projects/{namespace}/{project}/hooks/{id}/test", web::post().to(webhook::test_webhook))
+            .route("/projects/{namespace}/{project}/hooks/{id}/deliveries", web::get().to(webhook::list_deliveries))
+            .route("/projects/{namespace}/{project}/hooks/{id}/deliveries/{delivery_id}/retry", web::post().to(webhook::retry_delivery))
             
             // Project CI/CD Runner management
             .route("/projects/{namespace}/{project}/runners", web::get().to(runner::project_list_runners))
             .route("/projects/{namespace}/{project}/runners", web::post().to(runner::project_create_runner))
             .route("/projects/{namespace}/{project}/runners/{id}", web::put().to(runner::project_update_runner))
             .route("/projects/{namespace}/{project}/runners/{id}", web::delete().to(runner::project_delete_runner))
+            
+            // Project Settings: Branch Protection Rules
+            .route("/projects/{namespace}/{project}/protected_branches", web::get().to(project_settings::list_branch_protections))
+            .route("/projects/{namespace}/{project}/protected_branches", web::post().to(project_settings::create_branch_protection))
+            .route("/projects/{namespace}/{project}/protected_branches/{id}", web::put().to(project_settings::update_branch_protection))
+            .route("/projects/{namespace}/{project}/protected_branches/{id}", web::delete().to(project_settings::delete_branch_protection))
+            
+            // Project Settings: CI/CD Variables
+            .route("/projects/{namespace}/{project}/variables", web::get().to(project_settings::list_ci_variables))
+            .route("/projects/{namespace}/{project}/variables", web::post().to(project_settings::create_ci_variable))
+            .route("/projects/{namespace}/{project}/variables/{id}", web::put().to(project_settings::update_ci_variable))
+            .route("/projects/{namespace}/{project}/variables/{id}", web::delete().to(project_settings::delete_ci_variable))
+            
+            // Project Settings: Pipeline Triggers
+            .route("/projects/{namespace}/{project}/triggers", web::get().to(project_settings::list_pipeline_triggers))
+            .route("/projects/{namespace}/{project}/triggers", web::post().to(project_settings::create_pipeline_trigger))
+            .route("/projects/{namespace}/{project}/triggers/{id}", web::delete().to(project_settings::delete_pipeline_trigger))
+            
+            // Project Settings: Deploy Keys
+            .route("/projects/{namespace}/{project}/deploy_keys", web::get().to(project_settings::list_deploy_keys))
+            .route("/projects/{namespace}/{project}/deploy_keys", web::post().to(project_settings::create_deploy_key))
+            .route("/projects/{namespace}/{project}/deploy_keys/{id}", web::put().to(project_settings::update_deploy_key))
+            .route("/projects/{namespace}/{project}/deploy_keys/{id}", web::delete().to(project_settings::delete_deploy_key))
+            
+            // Project Settings: Project Access Tokens
+            .route("/projects/{namespace}/{project}/access_tokens", web::get().to(project_settings::list_project_access_tokens))
+            .route("/projects/{namespace}/{project}/access_tokens", web::post().to(project_settings::create_project_access_token))
+            .route("/projects/{namespace}/{project}/access_tokens/{id}", web::delete().to(project_settings::revoke_project_access_token))
             
             // Namespace/Group routes - specific routes MUST come before generic {path:.*} routes
             .route("/groups", web::get().to(namespace::list_groups))

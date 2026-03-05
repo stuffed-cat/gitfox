@@ -226,17 +226,8 @@ export PROJECT_ACCESS_TOKEN="{{ newToken }}"</code></pre>
 
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue'
-import type { Project } from '@/types'
-
-interface ProjectAccessToken {
-  id: string
-  name: string
-  role: 'reporter' | 'developer' | 'maintainer'
-  scopes: string[]
-  expires_at?: string
-  created_at: string
-  last_used_at?: string
-}
+import api from '@/api'
+import type { Project, ProjectAccessToken } from '@/types'
 
 const props = defineProps<{
   project?: Project
@@ -247,6 +238,11 @@ const tokens = ref<ProjectAccessToken[]>([])
 const newToken = ref<string | null>(null)
 
 const host = computed(() => window.location.host)
+
+const projectPath = computed(() => {
+  if (!props.project?.owner_name || !props.project?.name) return null
+  return { namespace: props.project.owner_name, project: props.project.name }
+})
 
 const minDate = computed(() => {
   const tomorrow = new Date()
@@ -291,14 +287,11 @@ function isExpiringSoon(token: ProjectAccessToken): boolean {
 }
 
 async function loadTokens() {
-  if (!props.project?.owner_name || !props.project?.name) return
+  if (!projectPath.value) return
   loading.value = true
   
   try {
-    // 需要 API 支持
-    // const path = { namespace: props.project.owner_name, project: props.project.name }
-    // tokens.value = await api.projectTokens.list(path)
-    tokens.value = []
+    tokens.value = await api.projectAccessTokens.list(projectPath.value)
   } catch (error) {
     console.error('Failed to load tokens:', error)
   } finally {
@@ -307,40 +300,51 @@ async function loadTokens() {
 }
 
 async function createToken() {
-  if (!props.project?.owner_name || !props.project?.name) return
+  if (!projectPath.value) return
   if (!tokenForm.name || tokenForm.scopes.length === 0) return
   
   try {
-    // 需要 API 支持
-    // const path = { namespace: props.project.owner_name, project: props.project.name }
-    // const result = await api.projectTokens.create(path, tokenForm)
-    // newToken.value = result.token
-    // tokens.value.unshift(result.tokenInfo)
+    const result = await api.projectAccessTokens.create(projectPath.value, {
+      name: tokenForm.name,
+      scopes: tokenForm.scopes,
+      role: tokenForm.role,
+      expires_at: tokenForm.expires_at || undefined
+    })
     
-    alert('项目访问令牌功能即将实现')
+    // 显示新创建的令牌
+    newToken.value = result.token
+    
+    // 将新令牌添加到列表（不包含实际token值）
+    tokens.value.unshift({
+      id: result.id,
+      project_id: result.project_id,
+      name: result.name,
+      scopes: result.scopes,
+      role: result.role,
+      created_by_username: '', // 当前用户
+      expires_at: result.expires_at,
+      created_at: result.created_at,
+      revoked: false
+    })
     
     // 重置表单
     tokenForm.name = ''
     tokenForm.expires_at = ''
     tokenForm.role = 'developer'
     tokenForm.scopes = []
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to create token:', error)
-    alert('创建令牌失败')
+    alert(error.response?.data?.message || '创建令牌失败')
   }
 }
 
 async function revokeToken(token: ProjectAccessToken) {
-  if (!props.project?.owner_name || !props.project?.name) return
+  if (!projectPath.value) return
   if (!confirm(`确定要撤销令牌 "${token.name}" 吗？此操作不可撤销。`)) return
   
   try {
-    // 需要 API 支持
-    // const path = { namespace: props.project.owner_name, project: props.project.name }
-    // await api.projectTokens.revoke(path, token.id)
-    
+    await api.projectAccessTokens.revoke(projectPath.value, token.id)
     tokens.value = tokens.value.filter(t => t.id !== token.id)
-    alert('令牌已撤销')
   } catch (error) {
     console.error('Failed to revoke token:', error)
     alert('撤销失败')
