@@ -573,6 +573,206 @@ impl RegistryApiClient {
         ))
         .await
     }
+
+    // ========================================================================
+    // Cargo Registry API
+    // ========================================================================
+
+    /// 获取 Cargo crate 索引条目
+    pub async fn get_cargo_index(
+        &self,
+        namespace: &str,
+        crate_name: &str,
+    ) -> Result<Vec<CargoIndexEntry>, RegistryApiError> {
+        self.get(&format!(
+            "/api/internal/registry/cargo/index/{}/{}",
+            urlencoding::encode(namespace),
+            urlencoding::encode(crate_name)
+        ))
+        .await
+    }
+
+    /// 创建 Cargo 包
+    pub async fn create_cargo_package(
+        &self,
+        request: &CreateCargoPackageRequest,
+    ) -> Result<CargoPackage, RegistryApiError> {
+        self.post("/api/internal/registry/cargo/package", request)
+            .await
+    }
+
+    /// 验证 Cargo token 并获取用户信息
+    pub async fn verify_cargo_token(
+        &self,
+        token: &str,
+    ) -> Result<CargoTokenInfo, RegistryApiError> {
+        let url = format!("{}/api/internal/registry/cargo/verify-token", self.base_url);
+        let resp = self.client
+            .post(&url)
+            .header("X-GitFox-Shell-Token", &self.shell_token)
+            .json(&CargoVerifyTokenRequest { token: token.to_string() })
+            .send()
+            .await
+            .map_err(|e| RegistryApiError::Network(e.to_string()))?;
+
+        if resp.status().is_success() {
+            resp.json()
+                .await
+                .map_err(|e| RegistryApiError::Parse(e.to_string()))
+        } else if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            Err(RegistryApiError::Unauthorized)
+        } else {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            Err(RegistryApiError::Api(format!("{}: {}", status, text)))
+        }
+    }
+
+    /// Yank 或 Unyank Cargo crate
+    pub async fn yank_cargo_crate(
+        &self,
+        namespace: &str,
+        name: &str,
+        version: &str,
+        token: &str,
+        yank: bool,
+    ) -> Result<(), RegistryApiError> {
+        let url = format!(
+            "{}/api/internal/registry/cargo/yank/{}/{}/{}",
+            self.base_url,
+            urlencoding::encode(namespace),
+            urlencoding::encode(name),
+            urlencoding::encode(version)
+        );
+        let resp = self.client
+            .post(&url)
+            .header("X-GitFox-Shell-Token", &self.shell_token)
+            .json(&CargoYankRequest { token: token.to_string(), yank })
+            .send()
+            .await
+            .map_err(|e| RegistryApiError::Network(e.to_string()))?;
+
+        if resp.status().is_success() {
+            Ok(())
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Err(RegistryApiError::NotFound)
+        } else if resp.status() == reqwest::StatusCode::UNAUTHORIZED || resp.status() == reqwest::StatusCode::FORBIDDEN {
+            Err(RegistryApiError::Unauthorized)
+        } else {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            Err(RegistryApiError::Api(format!("{}: {}", status, text)))
+        }
+    }
+
+    /// 获取 Cargo crate 所有者
+    pub async fn get_cargo_owners(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<Vec<CargoOwner>, RegistryApiError> {
+        self.get(&format!(
+            "/api/internal/registry/cargo/owners/{}/{}",
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        ))
+        .await
+    }
+
+    /// 添加或移除 Cargo crate 所有者
+    pub async fn modify_cargo_owners(
+        &self,
+        namespace: &str,
+        name: &str,
+        users: &[String],
+        token: &str,
+        add: bool,
+    ) -> Result<(), RegistryApiError> {
+        let url = format!(
+            "{}/api/internal/registry/cargo/owners/{}/{}",
+            self.base_url,
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        );
+        let method = if add { "PUT" } else { "DELETE" };
+        let builder = if add {
+            self.client.put(&url)
+        } else {
+            self.client.delete(&url)
+        };
+        
+        let resp = builder
+            .header("X-GitFox-Shell-Token", &self.shell_token)
+            .json(&CargoModifyOwnersRequest {
+                token: token.to_string(),
+                users: users.to_vec(),
+            })
+            .send()
+            .await
+            .map_err(|e| RegistryApiError::Network(e.to_string()))?;
+
+        if resp.status().is_success() {
+            Ok(())
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Err(RegistryApiError::NotFound)
+        } else if resp.status() == reqwest::StatusCode::UNAUTHORIZED || resp.status() == reqwest::StatusCode::FORBIDDEN {
+            Err(RegistryApiError::Unauthorized)
+        } else {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            Err(RegistryApiError::Api(format!("{}: {}", status, text)))
+        }
+    }
+
+    /// 记录 Cargo 下载
+    pub async fn record_cargo_download(
+        &self,
+        namespace: &str,
+        name: &str,
+        version: &str,
+    ) -> Result<(), RegistryApiError> {
+        self.post(
+            &format!(
+                "/api/internal/registry/cargo/download/{}/{}/{}",
+                urlencoding::encode(namespace),
+                urlencoding::encode(name),
+                urlencoding::encode(version)
+            ),
+            &(),
+        )
+        .await
+        .map(|_: serde_json::Value| ())
+    }
+
+    /// 搜索 Cargo crates
+    pub async fn search_cargo_crates(
+        &self,
+        namespace: &str,
+        query: &str,
+        per_page: i32,
+    ) -> Result<CargoSearchResult, RegistryApiError> {
+        self.get(&format!(
+            "/api/internal/registry/cargo/search/{}?q={}&per_page={}",
+            urlencoding::encode(namespace),
+            urlencoding::encode(query),
+            per_page
+        ))
+        .await
+    }
+
+    /// 获取 Cargo crate 信息
+    pub async fn get_cargo_crate_info(
+        &self,
+        namespace: &str,
+        name: &str,
+    ) -> Result<CargoCrateInfo, RegistryApiError> {
+        self.get(&format!(
+            "/api/internal/registry/cargo/crate/{}/{}",
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        ))
+        .await
+    }
 }
 
 /// Registry API 错误类型
@@ -583,6 +783,7 @@ pub enum RegistryApiError {
     Parse(String),
     NotFound,
     Conflict,
+    Unauthorized,
 }
 
 impl std::fmt::Display for RegistryApiError {
@@ -593,6 +794,7 @@ impl std::fmt::Display for RegistryApiError {
             Self::Parse(e) => write!(f, "Parse error: {}", e),
             Self::NotFound => write!(f, "Not found"),
             Self::Conflict => write!(f, "Conflict"),
+            Self::Unauthorized => write!(f, "Unauthorized"),
         }
     }
 }
@@ -849,4 +1051,169 @@ pub struct NpmLoginResponse {
 #[derive(Debug, Deserialize)]
 pub struct NpmWhoamiResponse {
     pub username: String,
+}
+
+// ============================================================================
+// Cargo Registry 类型
+// ============================================================================
+
+/// Cargo 索引条目
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CargoIndexEntry {
+    pub name: String,
+    pub vers: String,
+    pub deps: Vec<CargoIndexDependency>,
+    pub cksum: String,
+    pub features: std::collections::HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub yanked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub links: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rust_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub features2: Option<std::collections::HashMap<String, Vec<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v: Option<i32>,
+}
+
+/// Cargo 依赖
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CargoIndexDependency {
+    pub name: String,
+    pub req: String,
+    pub features: Vec<String>,
+    pub optional: bool,
+    pub default_features: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+}
+
+/// 创建 Cargo 包请求
+#[derive(Debug, Serialize)]
+pub struct CreateCargoPackageRequest {
+    pub namespace: String,
+    pub name: String,
+    pub version: String,
+    pub user_id: i64,
+    pub deps: Vec<CargoIndexDependency>,
+    pub features: std::collections::HashMap<String, Vec<String>>,
+    pub cksum: String,
+    pub description: Option<String>,
+    pub documentation: Option<String>,
+    pub homepage: Option<String>,
+    pub repository: Option<String>,
+    pub readme: Option<String>,
+    pub readme_file: Option<String>,
+    pub license: Option<String>,
+    pub license_file: Option<String>,
+    pub keywords: Vec<String>,
+    pub categories: Vec<String>,
+    pub authors: Vec<String>,
+    pub links: Option<String>,
+    pub rust_version: Option<String>,
+    pub file_path: String,
+    pub file_size: i64,
+}
+
+/// Cargo 包响应
+#[derive(Debug, Deserialize)]
+pub struct CargoPackage {
+    pub id: i64,
+    pub namespace_id: i64,
+    pub name: String,
+    pub version: String,
+    pub yanked: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// 验证 Cargo token 请求
+#[derive(Debug, Serialize)]
+pub struct CargoVerifyTokenRequest {
+    pub token: String,
+}
+
+/// Cargo token 信息
+#[derive(Debug, Deserialize)]
+pub struct CargoTokenInfo {
+    pub user_id: i64,
+    pub username: String,
+    pub scopes: Vec<String>,
+}
+
+/// Cargo yank 请求
+#[derive(Debug, Serialize)]
+pub struct CargoYankRequest {
+    pub token: String,
+    pub yank: bool,
+}
+
+/// Cargo 所有者
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CargoOwner {
+    pub id: i64,
+    pub login: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// 修改 Cargo 所有者请求
+#[derive(Debug, Serialize)]
+pub struct CargoModifyOwnersRequest {
+    pub token: String,
+    pub users: Vec<String>,
+}
+
+/// Cargo 搜索结果
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CargoSearchResult {
+    pub crates: Vec<CargoCrateSummary>,
+    pub total: i64,
+}
+
+/// Cargo crate 摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CargoCrateSummary {
+    pub name: String,
+    pub max_version: String,
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+    pub downloads: i64,
+    pub recent_downloads: i64,
+}
+
+/// Cargo crate 详细信息
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CargoCrateInfo {
+    pub name: String,
+    pub description: Option<String>,
+    pub homepage: Option<String>,
+    pub repository: Option<String>,
+    pub documentation: Option<String>,
+    pub keywords: Vec<String>,
+    pub categories: Vec<String>,
+    pub versions: Vec<CargoCrateVersion>,
+    pub downloads: i64,
+    pub recent_downloads: i64,
+    pub owners: Vec<CargoOwner>,
+}
+
+/// Cargo crate 版本信息
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CargoCrateVersion {
+    pub version: String,
+    pub yanked: bool,
+    pub downloads: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub rust_version: Option<String>,
 }

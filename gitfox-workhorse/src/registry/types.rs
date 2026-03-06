@@ -8,6 +8,7 @@ use std::collections::HashMap;
 pub enum PackageType {
     Npm,
     Docker,
+    Cargo,
 }
 
 impl std::fmt::Display for PackageType {
@@ -15,6 +16,7 @@ impl std::fmt::Display for PackageType {
         match self {
             PackageType::Npm => write!(f, "npm"),
             PackageType::Docker => write!(f, "docker"),
+            PackageType::Cargo => write!(f, "cargo"),
         }
     }
 }

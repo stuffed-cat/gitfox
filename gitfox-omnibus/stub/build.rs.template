@@ -13,6 +13,19 @@ fn main() {
     println!("cargo:rustc-env=EMBED_BINARIES={{BINARIES_PATH}}");
     println!("cargo:rustc-env=EMBED_MIGRATIONS={{MIGRATIONS_PATH}}");
     
+    // 从模板文件中提取配置版本号
+    let template_path = Path::new("embedded/templates/gitfox.toml.template");
+    if template_path.exists() {
+        if let Ok(content) = fs::read_to_string(template_path) {
+            for line in content.lines() {
+                if let Some(version) = line.strip_prefix("version = \"").and_then(|s| s.strip_suffix("\"")) {
+                    println!("cargo:rustc-env=CONFIG_VERSION={}", version);
+                    break;
+                }
+            }
+        }
+    }
+    
     // 声明对 embedded/ 目录的依赖
     // 当这些文件变化时，cargo 会自动重新编译
     let embedded_dir = Path::new("embedded");

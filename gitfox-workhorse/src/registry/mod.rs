@@ -1,6 +1,6 @@
 //! Package Registry 模块
 //!
-//! 实现 Docker Registry V2 API 和 npm Registry API
+//! 实现 Docker Registry V2 API、npm Registry API 和 Cargo Registry API
 //! 
 //! ## 架构设计
 //! 
@@ -28,11 +28,23 @@
 //! - `PUT /npm/{scope}/{name}` - 发布包
 //! - `DELETE /npm/{scope}/{name}/-/{tarball}/-rev/{rev}` - 删除版本
 //! - `GET/PUT/DELETE /npm/-/package/{scope}/{name}/dist-tags/{tag}` - dist-tag 操作
+//!
+//! **Cargo Registry** (registry.gitfox.studio/cargo/{namespace}/...):
+//! - `GET /cargo/{ns}/index/config.json` - 注册表配置
+//! - `GET /cargo/{ns}/index/{prefix}/{crate}` - 获取 crate 索引 (Sparse Protocol)
+//! - `PUT /cargo/{ns}/api/v1/crates/new` - 发布 crate
+//! - `DELETE /cargo/{ns}/api/v1/crates/{name}/{version}/yank` - 撤回版本
+//! - `PUT /cargo/{ns}/api/v1/crates/{name}/{version}/unyank` - 取消撤回
+//! - `GET /cargo/{ns}/api/v1/crates/{name}/owners` - 列出所有者
+//! - `PUT /cargo/{ns}/api/v1/crates/{name}/owners` - 添加所有者
+//! - `DELETE /cargo/{ns}/api/v1/crates/{name}/owners` - 移除所有者
+//! - `GET /cargo/{ns}/api/v1/crates/{name}/{version}/download` - 下载 crate
 
 pub mod types;
 pub mod storage;
 pub mod docker;
 pub mod npm;
+pub mod cargo;
 pub mod auth;
 pub mod config;
 
@@ -41,6 +53,7 @@ pub use types::*;
 // pub use storage::RegistryStorage;
 pub use docker::*;
 pub use npm::*;
+// Note: cargo 模块通过 registry::cargo:: 路径访问，避免与 npm 的 handle_search 冲突
 // Auth utilities - 仅在 registry 模块内部使用
 // pub use auth::*;
 pub use config::RegistryConfig;

@@ -34,8 +34,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-/// 配置文件版本
-pub const CONFIG_VERSION: &str = "1.1.1";
+/// 配置文件版本（从 gitfox.toml.template 中自动提取）
+pub const CONFIG_VERSION: &str = env!("CONFIG_VERSION");
 
 /// 统一配置结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2259,6 +2259,7 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
 
         secrets: SecretsConfig {
             jwt: get("JWT_SECRET", ""),
+            jwt_expiration: get_u64("JWT_EXPIRATION", 86400),
             internal: get("GITFOX_SHELL_SECRET", ""),
         },
 
@@ -2328,6 +2329,16 @@ pub fn migrate_from_env(env_path: &Path) -> Result<GitFoxConfig> {
         registry: RegistryConfig::default(),
 
         services: ServicesConfig::default(),
+
+        webauthn: WebauthnConfig::default(),
+
+        pat: PatConfig::default(),
+
+        workhorse: WorkhorseConfig::default(),
+
+        gitlayer: GitLayerConfig::default(),
+
+        webide: WebideConfig::default(),
     };
 
     Ok(config)
@@ -2347,7 +2358,7 @@ pub struct MigrationResult {
 
 /// Workhorse 配置（旧格式，用于迁移）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct WorkhorseConfig {
+struct LegacyWorkhorseConfig {
     listen_addr: Option<String>,
     listen_port: Option<u16>,
     backend_socket: Option<String>,
@@ -2361,7 +2372,7 @@ struct WorkhorseConfig {
 }
 
 /// 从 workhorse.toml 解析配置
-fn parse_workhorse_toml(path: &Path) -> Result<WorkhorseConfig> {
+fn parse_workhorse_toml(path: &Path) -> Result<LegacyWorkhorseConfig> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read workhorse config: {}", path.display()))?;
     
@@ -2402,6 +2413,7 @@ pub fn migrate_from_legacy(data_dir: &Path) -> Result<MigrationResult> {
             redis: RedisConfig::default(),
             secrets: SecretsConfig {
                 jwt: String::new(),
+                jwt_expiration: 86400,
                 internal: String::new(),
             },
             bundled: BundledConfig::default(),
@@ -2414,6 +2426,11 @@ pub fn migrate_from_legacy(data_dir: &Path) -> Result<MigrationResult> {
             logging: LoggingConfig::default(),
             registry: RegistryConfig::default(),
             services: ServicesConfig::default(),
+            webauthn: WebauthnConfig::default(),
+            pat: PatConfig::default(),
+            workhorse: WorkhorseConfig::default(),
+            gitlayer: GitLayerConfig::default(),
+            webide: WebideConfig::default(),
         }
     };
     

@@ -108,6 +108,10 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub registry_npm_enabled: bool,
 
+    /// 是否启用 Cargo Registry
+    #[serde(default = "default_true")]
+    pub registry_cargo_enabled: bool,
+
     /// Registry 存储路径
     #[serde(default = "default_registry_storage_path")]
     pub registry_storage_path: PathBuf,
@@ -264,6 +268,9 @@ impl Config {
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(true),
             registry_npm_enabled: env::var("REGISTRY_NPM_ENABLED")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true),
+            registry_cargo_enabled: env::var("REGISTRY_CARGO_ENABLED")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(true),
             registry_storage_path: default_registry_storage_path(),

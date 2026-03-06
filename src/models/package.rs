@@ -14,6 +14,7 @@ use std::fmt;
 pub enum PackageType {
     Npm,
     Docker,
+    Cargo,
     Generic,
 }
 
@@ -22,6 +23,7 @@ impl fmt::Display for PackageType {
         match self {
             PackageType::Npm => write!(f, "npm"),
             PackageType::Docker => write!(f, "docker"),
+            PackageType::Cargo => write!(f, "cargo"),
             PackageType::Generic => write!(f, "generic"),
         }
     }
@@ -34,6 +36,7 @@ impl std::str::FromStr for PackageType {
         match s.to_lowercase().as_str() {
             "npm" => Ok(PackageType::Npm),
             "docker" => Ok(PackageType::Docker),
+            "cargo" => Ok(PackageType::Cargo),
             "generic" => Ok(PackageType::Generic),
             _ => Err(format!("Unknown package type: {}", s)),
         }
@@ -355,5 +358,151 @@ impl NpmError {
     
     pub fn conflict(version: &str) -> Self {
         Self::new("conflict", &format!("Version {} already exists", version))
+    }
+}
+
+// ============================================================================
+// Cargo Registry 特定类型
+// ============================================================================
+
+/// Cargo crate 元数据
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CargoCrateMetadata {
+    pub id: i64,
+    pub package_id: i64,
+    pub checksum: String,
+    pub yanked: bool,
+    pub features: serde_json::Value,
+    pub links: String,
+    pub rust_version: Option<String>,
+    pub readme: Option<String>,
+    pub readme_file: Option<String>,
+    pub keywords: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
+    pub license: Option<String>,
+    pub license_file: Option<String>,
+    pub repository: Option<String>,
+    pub homepage: Option<String>,
+    pub documentation: Option<String>,
+    pub description: Option<String>,
+    pub published_by: uuid::Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Cargo 依赖
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CargoDependency {
+    pub id: i64,
+    pub package_id: i64,
+    pub name: String,
+    pub version_req: String,
+    pub features: Vec<String>,
+    pub optional: bool,
+    pub default_features: bool,
+    pub target: Option<String>,
+    pub kind: String,
+    pub registry: Option<String>,
+    pub package: Option<String>,
+}
+
+/// Cargo crate owner
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CargoCrateOwner {
+    pub id: i64,
+    pub project_id: i64,
+    pub crate_name: String,
+    pub user_id: uuid::Uuid,
+    pub added_by: uuid::Uuid,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Cargo 下载统计
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CargoDownloadStats {
+    pub id: i64,
+    pub package_id: i64,
+    pub date: chrono::NaiveDate,
+    pub downloads: i64,
+}
+
+/// Cargo token
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CargoToken {
+    pub id: i64,
+    pub user_id: uuid::Uuid,
+    pub name: String,
+    pub token_hash: String,
+    pub scopes: Vec<String>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Cargo 审计日志
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CargoAuditLog {
+    pub id: i64,
+    pub project_id: i64,
+    pub crate_name: String,
+    pub version: Option<String>,
+    pub action: String,
+    pub user_id: uuid::Uuid,
+    pub details: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Cargo 索引状态
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CargoIndexStatus {
+    pub id: i64,
+    pub project_id: i64,
+    pub crate_name: String,
+    pub last_updated: DateTime<Utc>,
+    pub index_version: i32,
+}
+
+/// Cargo 错误响应
+#[derive(Debug, Clone, Serialize)]
+pub struct CargoError {
+    pub errors: Vec<CargoErrorDetail>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CargoErrorDetail {
+    pub detail: String,
+}
+
+impl CargoError {
+    pub fn new(detail: &str) -> Self {
+        Self {
+            errors: vec![CargoErrorDetail {
+                detail: detail.to_string(),
+            }],
+        }
+    }
+    
+    pub fn unauthorized() -> Self {
+        Self::new("authentication required")
+    }
+    
+    pub fn forbidden() -> Self {
+        Self::new("access denied")
+    }
+    
+    pub fn not_found(crate_name: &str) -> Self {
+        Self::new(&format!("crate `{}` not found", crate_name))
+    }
+    
+    pub fn version_exists(version: &str) -> Self {
+        Self::new(&format!("crate version `{}` already exists", version))
+    }
+    
+    pub fn invalid_crate_name(name: &str) -> Self {
+        Self::new(&format!("invalid crate name: `{}`", name))
+    }
+    
+    pub fn invalid_version(version: &str) -> Self {
+        Self::new(&format!("invalid version: `{}`", version))
     }
 }

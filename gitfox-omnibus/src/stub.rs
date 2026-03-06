@@ -50,6 +50,9 @@ pub fn generate_stub_project(
     // 生成 Cargo.toml (从模板复制)
     generate_cargo_toml(stub_dir, &template_dir, assets.deps_dir.is_some())?;
 
+    // 生成 build.rs (从模板复制)
+    generate_build_rs(stub_dir, &template_dir)?;
+
     // 复制 main.rs (使用相对路径)
     copy_main_rs(&src_dir, &template_dir)?;
 
@@ -138,6 +141,30 @@ fn generate_cargo_toml(stub_dir: &Path, template_dir: &Path, has_deps: bool) -> 
     if should_write {
         fs::write(&dest, content)?;
         info!("Updated: Cargo.toml");
+    }
+    
+    Ok(())
+}
+
+/// 复制 build.rs 模板（只在内容变化时更新）
+fn generate_build_rs(stub_dir: &Path, template_dir: &Path) -> Result<()> {
+    let template_path = template_dir.join("build.rs.template");
+    let content = fs::read_to_string(&template_path)
+        .with_context(|| format!("Failed to read {}", template_path.display()))?;
+
+    let dest = stub_dir.join("build.rs");
+    
+    // 只在文件不存在或内容不同时才写入
+    let should_write = if dest.exists() {
+        let existing = fs::read_to_string(&dest).unwrap_or_default();
+        existing != content
+    } else {
+        true
+    };
+    
+    if should_write {
+        fs::write(&dest, content)?;
+        info!("Updated: build.rs");
     }
     
     Ok(())

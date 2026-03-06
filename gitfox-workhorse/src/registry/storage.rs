@@ -32,9 +32,10 @@ impl RegistryStorage {
     pub async fn init(&self) -> std::io::Result<()> {
         fs::create_dir_all(&self.base_path).await?;
         fs::create_dir_all(&self.tmp_path).await?;
-        // 创建 docker 和 npm 子目录
+        // 创建 docker、npm 和 cargo 子目录
         fs::create_dir_all(self.base_path.join("docker")).await?;
         fs::create_dir_all(self.base_path.join("npm")).await?;
+        fs::create_dir_all(self.base_path.join("cargo")).await?;
         info!("Registry storage initialized at {:?}", self.base_path);
         Ok(())
     }
@@ -262,6 +263,155 @@ impl RegistryStorage {
             info!("Deleted npm tarball: {}", path.display());
         }
         Ok(())
+    }
+
+    // ========================================================================
+    // Cargo 存储方法
+    // ========================================================================
+
+    /// 获取 Cargo crate 存储路径
+    /// 格式: cargo/{namespace}/{crate_name}/{version}/{crate_name}-{version}.crate
+    pub fn cargo_crate_path(&self, namespace: &str, crate_name: &str, version: &str) -> PathBuf {
+        self.base_path
+            .join("cargo")
+            .join(namespace)
+            .join(crate_name)
+            .join(version)
+            .join(format!("{}-{}.crate", crate_name, version))
+    }
+
+    /// 检查 Cargo crate 是否存在
+    pub async fn cargo_crate_exists(&self, namespace: &str, crate_name: &str, version: &str) -> bool {
+        let path = self.cargo_crate_path(namespace, crate_name, version);
+        path.exists()
+    }
+
+    /// 获取 Cargo crate 大小
+    pub async fn cargo_crate_size(&self, namespace: &str, crate_name: &str, version: &str) -> Option<i64> {
+        let path = self.cargo_crate_path(namespace, crate_name, version);
+        fs::metadata(&path).await.ok().map(|m| m.len() as i64)
+    }
+
+    /// 打开 Cargo crate 文件
+    pub async fn open_cargo_crate(&self, namespace: &str, crate_name: &str, version: &str) -> std::io::Result<File> {
+        let path = self.cargo_crate_path(namespace, crate_name, version);
+        File::open(&path).await
+    }
+
+    /// 存储 Cargo crate
+    /// 返回 (文件路径, sha256 校验和)
+    pub async fn store_cargo_crate(
+        &self,
+        namespace: &str,
+        crate_name: &str,
+        version: &str,
+        data: &[u8],
+    ) -> Result<(PathBuf, String), StorageError> {
+        let path = self.cargo_crate_path(namespace, crate_name, version);
+
+        // 创建目录
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await.map_err(|e| {
+                StorageError::IoError(format!("Failed to create crate directory: {}", e))
+            })?;
+        }
+
+        // 计算 SHA-256 校验和（Cargo 使用 sha256）
+        let sha256 = hex::encode(Sha256::digest(data));
+
+        // 写入文件
+        let mut file = File::create(&path).await.map_err(|e| {
+            StorageError::IoError(format!("Failed to create crate file: {}", e))
+        })?;
+        file.write_all(data).await.map_err(|e| {
+            StorageError::IoError(format!("Failed to write crate data: {}", e))
+        })?;
+
+        info!("Stored Cargo crate: {}", path.display());
+        Ok((path, sha256))
+    }
+
+    /// 验证 Cargo crate 校验和
+    pub async fn verify_cargo_crate(
+        &self,
+        namespace: &str,
+        crate_name: &str,
+        version: &str,
+        expected_sha256: &str,
+    ) -> Result<bool, StorageError> {
+        let path = self.cargo_crate_path(namespace, crate_name, version);
+        if !path.exists() {
+            return Err(StorageError::NotFound(format!(
+                "Crate {}-{} not found",
+                crate_name, version
+            )));
+        }
+
+        let actual_sha256 = self.calculate_sha256(&path).await?;
+        Ok(actual_sha256 == expected_sha256)
+    }
+
+    /// 删除 Cargo crate
+    pub async fn delete_cargo_crate(
+        &self,
+        namespace: &str,
+        crate_name: &str,
+        version: &str,
+    ) -> Result<(), StorageError> {
+        let path = self.cargo_crate_path(namespace, crate_name, version);
+        if path.exists() {
+            fs::remove_file(&path).await.map_err(|e| {
+                StorageError::IoError(format!("Failed to delete crate: {}", e))
+            })?;
+            info!("Deleted Cargo crate: {}", path.display());
+
+            // 尝试清理空目录
+            if let Some(parent) = path.parent() {
+                let _ = fs::remove_dir(parent).await; // 忽略错误（目录非空）
+                if let Some(grandparent) = parent.parent() {
+                    let _ = fs::remove_dir(grandparent).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 获取 Cargo crate 存储目录（用于列出版本）
+    pub fn cargo_crate_dir(&self, namespace: &str, crate_name: &str) -> PathBuf {
+        self.base_path
+            .join("cargo")
+            .join(namespace)
+            .join(crate_name)
+    }
+
+    /// 获取 Cargo 存储根目录
+    pub fn cargo_path(&self) -> PathBuf {
+        self.base_path.join("cargo")
+    }
+
+    /// 列出 Cargo crate 的所有版本
+    pub async fn list_cargo_versions(&self, namespace: &str, crate_name: &str) -> Result<Vec<String>, StorageError> {
+        let dir = self.cargo_crate_dir(namespace, crate_name);
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut versions = Vec::new();
+        let mut entries = fs::read_dir(&dir).await.map_err(|e| {
+            StorageError::IoError(format!("Failed to read crate directory: {}", e))
+        })?;
+
+        while let Some(entry) = entries.next_entry().await.map_err(|e| {
+            StorageError::IoError(format!("Failed to read directory entry: {}", e))
+        })? {
+            if entry.path().is_dir() {
+                if let Some(version) = entry.file_name().to_str() {
+                    versions.push(version.to_string());
+                }
+            }
+        }
+
+        Ok(versions)
     }
 
     // ========================================================================

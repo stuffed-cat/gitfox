@@ -1601,6 +1601,1118 @@ pub async fn search_npm_packages(
     })))
 }
 
+// ============================================================================
+// Cargo Registry 内部 API
+// ============================================================================
+
+/// Cargo 索引条目
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CargoIndexEntry {
+    pub name: String,
+    pub vers: String,
+    pub deps: Vec<CargoIndexDependency>,
+    pub cksum: String,
+    pub features: serde_json::Value,
+    pub features2: Option<serde_json::Value>,
+    pub yanked: bool,
+    pub links: Option<String>,
+    pub v: Option<i32>,
+    pub rust_version: Option<String>,
+}
+
+/// Cargo 索引依赖
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CargoIndexDependency {
+    pub name: String,
+    pub req: String,
+    pub features: Vec<String>,
+    pub optional: bool,
+    pub default_features: bool,
+    pub target: Option<String>,
+    pub kind: String,
+    pub registry: Option<String>,
+    pub package: Option<String>,
+}
+
+/// GET /api/internal/registry/cargo/index/{namespace}/{crate_name}
+/// 获取 Cargo 索引条目（所有版本）
+pub async fn get_cargo_index(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<(String, String)>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let (namespace, crate_name) = path.into_inner();
+
+    // 获取 crate 的所有版本
+    let versions = sqlx::query_as::<_, (String, String, bool, String, serde_json::Value)>(
+        r#"
+        SELECT p.version, cm.checksum, cm.yanked, cm.links, cm.features
+        FROM packages p
+        JOIN cargo_crate_metadata cm ON p.id = cm.package_id
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE p.package_type = 'cargo'
+          AND p.name = $1
+          AND ns.path = $2
+          AND p.status = 'default'
+        ORDER BY p.created_at ASC
+        "#
+    )
+    .bind(&crate_name)
+    .bind(&namespace)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    if versions.is_empty() {
+        return Err(AppError::NotFound(format!("Crate {} not found in namespace {}", crate_name, namespace)));
+    }
+
+    let mut entries = Vec::new();
+    for (version, checksum, yanked, links, features) in versions {
+        // 获取依赖
+        let deps = sqlx::query_as::<_, (String, String, Vec<String>, bool, bool, Option<String>, String, Option<String>, Option<String>)>(
+            r#"
+            SELECT cd.name, cd.version_req, cd.features, cd.optional, cd.default_features,
+                   cd.target, cd.kind, cd.registry, cd.package
+            FROM cargo_dependencies cd
+            JOIN packages p ON cd.package_id = p.id
+            JOIN cargo_crate_metadata cm ON p.id = cm.package_id
+            JOIN projects proj ON p.project_id = proj.id
+            JOIN namespaces ns ON proj.namespace_id = ns.id
+            WHERE p.name = $1 AND p.version = $2 AND ns.path = $3
+            "#
+        )
+        .bind(&crate_name)
+        .bind(&version)
+        .bind(&namespace)
+        .fetch_all(pool.get_ref())
+        .await?;
+
+        let cargo_deps: Vec<CargoIndexDependency> = deps.into_iter().map(|(name, req, feat, opt, def, target, kind, registry, pkg)| {
+            CargoIndexDependency {
+                name,
+                req,
+                features: feat,
+                optional: opt,
+                default_features: def,
+                target,
+                kind,
+                registry,
+                package: pkg,
+            }
+        }).collect();
+
+        entries.push(CargoIndexEntry {
+            name: crate_name.clone(),
+            vers: version,
+            deps: cargo_deps,
+            cksum: checksum,
+            features,
+            features2: None,
+            yanked,
+            links: if links.is_empty() { None } else { Some(links) },
+            v: Some(2),
+            rust_version: None,
+        });
+    }
+
+    // Cargo 索引格式：每行一个 JSON 对象
+    let mut body = String::new();
+    for entry in &entries {
+        body.push_str(&serde_json::to_string(entry).unwrap_or_default());
+        body.push('\n');
+    }
+
+    Ok(HttpResponse::Ok()
+        .content_type("text/plain; charset=utf-8")
+        .body(body))
+}
+
+/// 创建 Cargo 包请求
+#[derive(Debug, serde::Deserialize)]
+pub struct CreateCargoPackageRequest {
+    pub project_id: i64,
+    pub user_id: String,
+    pub name: String,
+    pub version: String,
+    pub checksum: String,
+    pub features: serde_json::Value,
+    pub links: Option<String>,
+    pub rust_version: Option<String>,
+    pub readme: Option<String>,
+    pub readme_file: Option<String>,
+    pub keywords: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
+    pub license: Option<String>,
+    pub license_file: Option<String>,
+    pub repository: Option<String>,
+    pub homepage: Option<String>,
+    pub documentation: Option<String>,
+    pub description: Option<String>,
+    pub dependencies: Vec<CreateCargoDependency>,
+    pub file_path: String,
+    pub file_size: i64,
+}
+
+/// 创建 Cargo 依赖
+#[derive(Debug, serde::Deserialize)]
+pub struct CreateCargoDependency {
+    pub name: String,
+    pub version_req: String,
+    pub features: Vec<String>,
+    pub optional: bool,
+    pub default_features: bool,
+    pub target: Option<String>,
+    pub kind: String,
+    pub registry: Option<String>,
+    pub package: Option<String>,
+}
+
+/// POST /api/internal/registry/cargo/package
+/// 创建 Cargo 包
+pub async fn create_cargo_package(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    body: web::Json<CreateCargoPackageRequest>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    // 检查版本是否已存在
+    let existing = sqlx::query_as::<_, (i64,)>(
+        "SELECT id FROM packages WHERE project_id = $1 AND package_type = 'cargo' AND name = $2 AND version = $3"
+    )
+    .bind(body.project_id)
+    .bind(&body.name)
+    .bind(&body.version)
+    .fetch_optional(pool.get_ref())
+    .await?;
+
+    if existing.is_some() {
+        return Err(AppError::Conflict(format!(
+            "Crate {} version {} already exists",
+            body.name, body.version
+        )));
+    }
+
+    let user_uuid = Uuid::parse_str(&body.user_id)
+        .map_err(|_| AppError::BadRequest("Invalid user_id UUID".to_string()))?;
+
+    let mut tx = pool.begin().await?;
+
+    // 创建 package
+    let package = sqlx::query_as::<_, Package>(
+        r#"
+        INSERT INTO packages (project_id, name, package_type, version, status, metadata, created_at, updated_at)
+        VALUES ($1, $2, 'cargo', $3, 'default', '{}', NOW(), NOW())
+        RETURNING id, project_id, name, package_type, version, status, metadata, created_at, updated_at
+        "#
+    )
+    .bind(body.project_id)
+    .bind(&body.name)
+    .bind(&body.version)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // 创建 package_file
+    let file_name = format!("{}-{}.crate", body.name, body.version);
+    sqlx::query(
+        r#"
+        INSERT INTO package_files (package_id, file_name, file_path, file_size, file_sha256, created_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+        "#
+    )
+    .bind(package.id)
+    .bind(&file_name)
+    .bind(&body.file_path)
+    .bind(body.file_size)
+    .bind(&body.checksum)
+    .execute(&mut *tx)
+    .await?;
+
+    // 创建 cargo_crate_metadata
+    sqlx::query(
+        r#"
+        INSERT INTO cargo_crate_metadata 
+            (package_id, checksum, yanked, features, links, rust_version,
+             readme, readme_file, keywords, categories, license, license_file,
+             repository, homepage, documentation, description, published_by, created_at)
+        VALUES ($1, $2, false, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+        "#
+    )
+    .bind(package.id)
+    .bind(&body.checksum)
+    .bind(&body.features)
+    .bind(body.links.as_deref().unwrap_or(""))
+    .bind(&body.rust_version)
+    .bind(&body.readme)
+    .bind(&body.readme_file)
+    .bind(&body.keywords)
+    .bind(&body.categories)
+    .bind(&body.license)
+    .bind(&body.license_file)
+    .bind(&body.repository)
+    .bind(&body.homepage)
+    .bind(&body.documentation)
+    .bind(&body.description)
+    .bind(user_uuid)
+    .execute(&mut *tx)
+    .await?;
+
+    // 创建依赖
+    for dep in &body.dependencies {
+        sqlx::query(
+            r#"
+            INSERT INTO cargo_dependencies 
+                (package_id, name, version_req, features, optional, default_features, target, kind, registry, package)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#
+        )
+        .bind(package.id)
+        .bind(&dep.name)
+        .bind(&dep.version_req)
+        .bind(&dep.features)
+        .bind(dep.optional)
+        .bind(dep.default_features)
+        .bind(&dep.target)
+        .bind(&dep.kind)
+        .bind(&dep.registry)
+        .bind(&dep.package)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // 添加发布者为 owner（如果是第一个版本）
+    let existing_owner = sqlx::query_as::<_, (i64,)>(
+        r#"
+        SELECT co.id
+        FROM cargo_crate_owners co
+        JOIN packages p ON co.crate_name = p.name
+        WHERE p.project_id = $1 AND p.name = $2
+        LIMIT 1
+        "#
+    )
+    .bind(body.project_id)
+    .bind(&body.name)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if existing_owner.is_none() {
+        sqlx::query(
+            r#"
+            INSERT INTO cargo_crate_owners (project_id, crate_name, user_id, added_by, created_at)
+            VALUES ($1, $2, $3, $3, NOW())
+            "#
+        )
+        .bind(body.project_id)
+        .bind(&body.name)
+        .bind(user_uuid)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // 记录审计日志
+    sqlx::query(
+        r#"
+        INSERT INTO cargo_audit_log (project_id, crate_name, version, action, user_id, details, created_at)
+        VALUES ($1, $2, $3, 'publish', $4, $5, NOW())
+        "#
+    )
+    .bind(body.project_id)
+    .bind(&body.name)
+    .bind(&body.version)
+    .bind(user_uuid)
+    .bind(serde_json::json!({ "checksum": body.checksum, "file_size": body.file_size }))
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    info!(
+        "Created Cargo crate: {}@{} for project {}",
+        body.name, body.version, body.project_id
+    );
+
+    Ok(HttpResponse::Created().json(package))
+}
+
+/// Cargo Token 验证请求
+#[derive(Debug, serde::Deserialize)]
+pub struct VerifyCargoTokenRequest {
+    pub token: String,
+    pub project_id: i64,
+    pub required_scope: String,  // "publish", "yank", "owners"
+}
+
+/// Cargo Token 验证响应
+#[derive(Debug, serde::Serialize)]
+pub struct VerifyCargoTokenResponse {
+    pub valid: bool,
+    pub user_id: Option<String>,
+    pub username: Option<String>,
+    pub scopes: Vec<String>,
+}
+
+/// POST /api/internal/registry/cargo/verify-token
+/// 验证 Cargo token
+pub async fn verify_cargo_token(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    body: web::Json<VerifyCargoTokenRequest>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    // 查找有效的 Cargo token
+    let token_info = sqlx::query_as::<_, (uuid::Uuid, String, Vec<String>)>(
+        r#"
+        SELECT ct.user_id, u.username, ct.scopes
+        FROM cargo_tokens ct
+        JOIN users u ON ct.user_id = u.id
+        WHERE ct.token_hash = $1
+          AND ct.revoked_at IS NULL
+          AND (ct.expires_at IS NULL OR ct.expires_at > NOW())
+        "#
+    )
+    .bind(&body.token)  // 前端应该已经计算了哈希
+    .fetch_optional(pool.get_ref())
+    .await?;
+
+    // 如果没找到，尝试作为 PAT 验证
+    let token_info = match token_info {
+        Some(info) => Some(info),
+        None => {
+            // 检查是否是 PAT (格式: gitfox-pat_xxx)
+            if body.token.starts_with("gitfox-pat_") {
+                let token_part = body.token.trim_start_matches("gitfox-pat_");
+                use sha2::{Sha256, Digest};
+                let hashed = format!("{:x}", Sha256::digest(token_part.as_bytes()));
+                
+                let pat_info = sqlx::query_as::<_, (uuid::Uuid, String, Vec<String>)>(
+                    r#"
+                    SELECT pat.user_id, u.username, pat.scopes
+                    FROM personal_access_tokens pat
+                    JOIN users u ON pat.user_id = u.id
+                    WHERE pat.token_hash = $1
+                      AND pat.revoked_at IS NULL
+                      AND (pat.expires_at IS NULL OR pat.expires_at > NOW())
+                    "#
+                )
+                .bind(&hashed)
+                .fetch_optional(pool.get_ref())
+                .await?;
+
+                // 检查 PAT 是否有 write_registry scope
+                if let Some((user_id, username, scopes)) = pat_info {
+                    if scopes.contains(&"write_registry".to_string()) || scopes.contains(&"api".to_string()) {
+                        Some((user_id, username, vec!["publish".to_string(), "yank".to_string(), "owners".to_string()]))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+    };
+
+    match token_info {
+        Some((user_id, username, scopes)) => {
+            // 检查是否有所需的 scope
+            let has_scope = scopes.iter().any(|s| s == &body.required_scope || s == "*");
+            
+            // 检查用户是否有项目权限
+            let has_project_access = sqlx::query_as::<_, (i64,)>(
+                r#"
+                SELECT 1
+                FROM project_members pm
+                WHERE pm.project_id = $1 AND pm.user_id = $2
+                  AND pm.role IN ('owner', 'maintainer', 'developer')
+                UNION
+                SELECT 1
+                FROM projects p
+                JOIN namespaces ns ON p.namespace_id = ns.id
+                WHERE p.id = $1 AND ns.owner_id = $2
+                "#
+            )
+            .bind(body.project_id)
+            .bind(user_id)
+            .fetch_optional(pool.get_ref())
+            .await?;
+
+            if has_scope && has_project_access.is_some() {
+                // 更新最后使用时间
+                let _ = sqlx::query(
+                    "UPDATE cargo_tokens SET last_used_at = NOW() WHERE token_hash = $1"
+                )
+                .bind(&body.token)
+                .execute(pool.get_ref())
+                .await;
+
+                Ok(HttpResponse::Ok().json(VerifyCargoTokenResponse {
+                    valid: true,
+                    user_id: Some(user_id.to_string()),
+                    username: Some(username),
+                    scopes,
+                }))
+            } else {
+                Ok(HttpResponse::Ok().json(VerifyCargoTokenResponse {
+                    valid: false,
+                    user_id: None,
+                    username: None,
+                    scopes: vec![],
+                }))
+            }
+        }
+        None => {
+            Ok(HttpResponse::Ok().json(VerifyCargoTokenResponse {
+                valid: false,
+                user_id: None,
+                username: None,
+                scopes: vec![],
+            }))
+        }
+    }
+}
+
+/// Yank/Unyank Cargo crate 请求
+#[derive(Debug, serde::Deserialize)]
+pub struct YankCargoRequest {
+    pub user_id: String,
+}
+
+/// PUT /api/internal/registry/cargo/yank/{namespace}/{name}/{version}
+/// Yank Cargo crate 版本
+pub async fn yank_cargo_crate(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<(String, String, String)>,
+    body: web::Json<YankCargoRequest>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let (namespace, name, version) = path.into_inner();
+    let user_uuid = Uuid::parse_str(&body.user_id)
+        .map_err(|_| AppError::BadRequest("Invalid user_id UUID".to_string()))?;
+
+    // 更新 yanked 状态
+    let result = sqlx::query(
+        r#"
+        UPDATE cargo_crate_metadata cm
+        SET yanked = true
+        FROM packages p
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE cm.package_id = p.id
+          AND p.package_type = 'cargo'
+          AND p.name = $1
+          AND p.version = $2
+          AND ns.path = $3
+        "#
+    )
+    .bind(&name)
+    .bind(&version)
+    .bind(&namespace)
+    .execute(pool.get_ref())
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!("Crate {}@{} not found", name, version)));
+    }
+
+    // 获取 project_id 用于审计日志
+    let project_id: (i64,) = sqlx::query_as(
+        r#"
+        SELECT p.project_id
+        FROM packages p
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE p.package_type = 'cargo' AND p.name = $1 AND ns.path = $2
+        LIMIT 1
+        "#
+    )
+    .bind(&name)
+    .bind(&namespace)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    // 记录审计日志
+    sqlx::query(
+        r#"
+        INSERT INTO cargo_audit_log (project_id, crate_name, version, action, user_id, created_at)
+        VALUES ($1, $2, $3, 'yank', $4, NOW())
+        "#
+    )
+    .bind(project_id.0)
+    .bind(&name)
+    .bind(&version)
+    .bind(user_uuid)
+    .execute(pool.get_ref())
+    .await?;
+
+    info!("Yanked Cargo crate: {}@{} in namespace {}", name, version, namespace);
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({ "ok": true })))
+}
+
+/// DELETE /api/internal/registry/cargo/yank/{namespace}/{name}/{version}
+/// Unyank Cargo crate 版本
+pub async fn unyank_cargo_crate(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<(String, String, String)>,
+    body: web::Json<YankCargoRequest>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let (namespace, name, version) = path.into_inner();
+    let user_uuid = Uuid::parse_str(&body.user_id)
+        .map_err(|_| AppError::BadRequest("Invalid user_id UUID".to_string()))?;
+
+    // 更新 yanked 状态
+    let result = sqlx::query(
+        r#"
+        UPDATE cargo_crate_metadata cm
+        SET yanked = false
+        FROM packages p
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE cm.package_id = p.id
+          AND p.package_type = 'cargo'
+          AND p.name = $1
+          AND p.version = $2
+          AND ns.path = $3
+        "#
+    )
+    .bind(&name)
+    .bind(&version)
+    .bind(&namespace)
+    .execute(pool.get_ref())
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!("Crate {}@{} not found", name, version)));
+    }
+
+    // 获取 project_id 用于审计日志
+    let project_id: (i64,) = sqlx::query_as(
+        r#"
+        SELECT p.project_id
+        FROM packages p
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE p.package_type = 'cargo' AND p.name = $1 AND ns.path = $2
+        LIMIT 1
+        "#
+    )
+    .bind(&name)
+    .bind(&namespace)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    // 记录审计日志
+    sqlx::query(
+        r#"
+        INSERT INTO cargo_audit_log (project_id, crate_name, version, action, user_id, created_at)
+        VALUES ($1, $2, $3, 'unyank', $4, NOW())
+        "#
+    )
+    .bind(project_id.0)
+    .bind(&name)
+    .bind(&version)
+    .bind(user_uuid)
+    .execute(pool.get_ref())
+    .await?;
+
+    info!("Unyanked Cargo crate: {}@{} in namespace {}", name, version, namespace);
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({ "ok": true })))
+}
+
+/// Cargo Owner 响应
+#[derive(Debug, serde::Serialize)]
+pub struct CargoOwner {
+    pub id: String,
+    pub login: String,
+    pub name: Option<String>,
+}
+
+/// GET /api/internal/registry/cargo/owners/{namespace}/{name}
+/// 获取 Cargo crate owners
+pub async fn get_cargo_owners(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<(String, String)>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let (namespace, name) = path.into_inner();
+
+    let owners = sqlx::query_as::<_, (uuid::Uuid, String, Option<String>)>(
+        r#"
+        SELECT u.id, u.username, u.full_name
+        FROM cargo_crate_owners co
+        JOIN users u ON co.user_id = u.id
+        JOIN packages p ON co.project_id = p.project_id AND co.crate_name = p.name
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE p.package_type = 'cargo'
+          AND p.name = $1
+          AND ns.path = $2
+        "#
+    )
+    .bind(&name)
+    .bind(&namespace)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    let owners: Vec<CargoOwner> = owners.into_iter().map(|(id, login, name)| {
+        CargoOwner {
+            id: id.to_string(),
+            login,
+            name,
+        }
+    }).collect();
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({ "users": owners })))
+}
+
+/// 修改 Cargo Owners 请求
+#[derive(Debug, serde::Deserialize)]
+pub struct ModifyCargoOwnersRequest {
+    pub user_id: String,  // 操作者
+    pub users: Vec<String>,  // 要添加/移除的用户名
+}
+
+/// PUT /api/internal/registry/cargo/owners/{namespace}/{name}
+/// 添加 Cargo crate owners
+pub async fn add_cargo_owners(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<(String, String)>,
+    body: web::Json<ModifyCargoOwnersRequest>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let (namespace, name) = path.into_inner();
+    let operator_uuid = Uuid::parse_str(&body.user_id)
+        .map_err(|_| AppError::BadRequest("Invalid user_id UUID".to_string()))?;
+
+    // 获取 project_id
+    let project_info = sqlx::query_as::<_, (i64,)>(
+        r#"
+        SELECT DISTINCT p.project_id
+        FROM packages p
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE p.package_type = 'cargo' AND p.name = $1 AND ns.path = $2
+        "#
+    )
+    .bind(&name)
+    .bind(&namespace)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("Crate {} not found", name)))?;
+
+    let project_id = project_info.0;
+
+    let mut added = Vec::new();
+    for username in &body.users {
+        // 查找用户
+        let user = sqlx::query_as::<_, (uuid::Uuid,)>(
+            "SELECT id FROM users WHERE username = $1"
+        )
+        .bind(username)
+        .fetch_optional(pool.get_ref())
+        .await?;
+
+        if let Some((user_id,)) = user {
+            // 添加 owner（忽略重复）
+            let result = sqlx::query(
+                r#"
+                INSERT INTO cargo_crate_owners (project_id, crate_name, user_id, added_by, created_at)
+                VALUES ($1, $2, $3, $4, NOW())
+                ON CONFLICT (project_id, crate_name, user_id) DO NOTHING
+                "#
+            )
+            .bind(project_id)
+            .bind(&name)
+            .bind(user_id)
+            .bind(operator_uuid)
+            .execute(pool.get_ref())
+            .await?;
+
+            if result.rows_affected() > 0 {
+                added.push(username.clone());
+                
+                // 记录审计日志
+                sqlx::query(
+                    r#"
+                    INSERT INTO cargo_audit_log (project_id, crate_name, version, action, user_id, details, created_at)
+                    VALUES ($1, $2, NULL, 'add_owner', $3, $4, NOW())
+                    "#
+                )
+                .bind(project_id)
+                .bind(&name)
+                .bind(operator_uuid)
+                .bind(serde_json::json!({ "added_user": username }))
+                .execute(pool.get_ref())
+                .await?;
+            }
+        }
+    }
+
+    info!("Added Cargo crate owners for {}: {:?}", name, added);
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "ok": true,
+        "msg": format!("Added {} owner(s)", added.len())
+    })))
+}
+
+/// DELETE /api/internal/registry/cargo/owners/{namespace}/{name}
+/// 移除 Cargo crate owners
+pub async fn remove_cargo_owners(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<(String, String)>,
+    body: web::Json<ModifyCargoOwnersRequest>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let (namespace, name) = path.into_inner();
+    let operator_uuid = Uuid::parse_str(&body.user_id)
+        .map_err(|_| AppError::BadRequest("Invalid user_id UUID".to_string()))?;
+
+    // 获取 project_id
+    let project_info = sqlx::query_as::<_, (i64,)>(
+        r#"
+        SELECT DISTINCT p.project_id
+        FROM packages p
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE p.package_type = 'cargo' AND p.name = $1 AND ns.path = $2
+        "#
+    )
+    .bind(&name)
+    .bind(&namespace)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("Crate {} not found", name)))?;
+
+    let project_id = project_info.0;
+
+    // 检查剩余 owner 数量
+    let owner_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM cargo_crate_owners WHERE project_id = $1 AND crate_name = $2"
+    )
+    .bind(project_id)
+    .bind(&name)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    if owner_count.0 <= body.users.len() as i64 {
+        return Err(AppError::BadRequest("Cannot remove all owners".to_string()));
+    }
+
+    let mut removed = Vec::new();
+    for username in &body.users {
+        // 查找用户
+        let user = sqlx::query_as::<_, (uuid::Uuid,)>(
+            "SELECT id FROM users WHERE username = $1"
+        )
+        .bind(username)
+        .fetch_optional(pool.get_ref())
+        .await?;
+
+        if let Some((user_id,)) = user {
+            let result = sqlx::query(
+                "DELETE FROM cargo_crate_owners WHERE project_id = $1 AND crate_name = $2 AND user_id = $3"
+            )
+            .bind(project_id)
+            .bind(&name)
+            .bind(user_id)
+            .execute(pool.get_ref())
+            .await?;
+
+            if result.rows_affected() > 0 {
+                removed.push(username.clone());
+                
+                // 记录审计日志
+                sqlx::query(
+                    r#"
+                    INSERT INTO cargo_audit_log (project_id, crate_name, version, action, user_id, details, created_at)
+                    VALUES ($1, $2, NULL, 'remove_owner', $3, $4, NOW())
+                    "#
+                )
+                .bind(project_id)
+                .bind(&name)
+                .bind(operator_uuid)
+                .bind(serde_json::json!({ "removed_user": username }))
+                .execute(pool.get_ref())
+                .await?;
+            }
+        }
+    }
+
+    info!("Removed Cargo crate owners for {}: {:?}", name, removed);
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "ok": true,
+        "msg": format!("Removed {} owner(s)", removed.len())
+    })))
+}
+
+/// POST /api/internal/registry/cargo/download/{namespace}/{name}/{version}
+/// 记录 Cargo crate 下载
+pub async fn record_cargo_download(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<(String, String, String)>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let (namespace, name, version) = path.into_inner();
+
+    // 获取 package_id
+    let package = sqlx::query_as::<_, (i64,)>(
+        r#"
+        SELECT p.id
+        FROM packages p
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE p.package_type = 'cargo'
+          AND p.name = $1
+          AND p.version = $2
+          AND ns.path = $3
+        "#
+    )
+    .bind(&name)
+    .bind(&version)
+    .bind(&namespace)
+    .fetch_optional(pool.get_ref())
+    .await?;
+
+    if let Some((package_id,)) = package {
+        // 更新下载统计（按日聚合）
+        sqlx::query(
+            r#"
+            INSERT INTO cargo_download_stats (package_id, date, downloads)
+            VALUES ($1, CURRENT_DATE, 1)
+            ON CONFLICT (package_id, date) 
+            DO UPDATE SET downloads = cargo_download_stats.downloads + 1
+            "#
+        )
+        .bind(package_id)
+        .execute(pool.get_ref())
+        .await?;
+    }
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({ "ok": true })))
+}
+
+/// Cargo 搜索查询参数
+#[derive(Debug, serde::Deserialize)]
+pub struct CargoSearchQuery {
+    pub q: Option<String>,
+    pub per_page: Option<i64>,
+}
+
+/// Cargo 搜索结果项
+#[derive(Debug, serde::Serialize)]
+pub struct CargoCrateSummary {
+    pub name: String,
+    pub max_version: String,
+    pub description: Option<String>,
+}
+
+/// GET /api/internal/registry/cargo/search/{namespace}
+/// 搜索 Cargo crates
+pub async fn search_cargo_crates(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<String>,
+    query: web::Query<CargoSearchQuery>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let namespace = path.into_inner();
+    let search_term = query.q.as_deref().unwrap_or("");
+    let limit = query.per_page.unwrap_or(10).min(100);
+
+    // 使用窗口函数获取每个 crate 的最新版本
+    let crates = sqlx::query_as::<_, (String, String, Option<String>)>(
+        r#"
+        WITH latest_versions AS (
+            SELECT DISTINCT ON (p.name) 
+                p.name, p.version, cm.description
+            FROM packages p
+            JOIN projects proj ON p.project_id = proj.id
+            JOIN namespaces ns ON proj.namespace_id = ns.id
+            LEFT JOIN cargo_crate_metadata cm ON p.id = cm.package_id
+            WHERE p.package_type = 'cargo'
+              AND ns.path = $1
+              AND p.status = 'default'
+              AND ($2 = '' OR p.name ILIKE '%' || $2 || '%')
+            ORDER BY p.name, p.created_at DESC
+        )
+        SELECT name, version, description
+        FROM latest_versions
+        LIMIT $3
+        "#
+    )
+    .bind(&namespace)
+    .bind(search_term)
+    .bind(limit)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    let results: Vec<CargoCrateSummary> = crates.into_iter().map(|(name, version, desc)| {
+        CargoCrateSummary {
+            name,
+            max_version: version,
+            description: desc,
+        }
+    }).collect();
+
+    // Cargo API 格式
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "crates": results,
+        "meta": {
+            "total": results.len()
+        }
+    })))
+}
+
+/// Cargo crate 详情响应
+#[derive(Debug, serde::Serialize)]
+pub struct CargoCrateInfo {
+    pub name: String,
+    pub description: Option<String>,
+    pub license: Option<String>,
+    pub repository: Option<String>,
+    pub homepage: Option<String>,
+    pub documentation: Option<String>,
+    pub keywords: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
+    pub max_version: String,
+    pub downloads: i64,
+    pub versions: Vec<CargoCrateVersionInfo>,
+}
+
+/// Cargo crate 版本信息
+#[derive(Debug, serde::Serialize)]
+pub struct CargoCrateVersionInfo {
+    pub num: String,
+    pub yanked: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub downloads: i64,
+}
+
+/// GET /api/internal/registry/cargo/crate/{namespace}/{name}
+/// 获取 Cargo crate 详情
+pub async fn get_cargo_crate_info(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<(String, String)>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let (namespace, name) = path.into_inner();
+
+    // 获取所有版本
+    let versions = sqlx::query_as::<_, (i64, String, bool, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, Option<String>, Option<String>, Option<Vec<String>>, Option<Vec<String>>)>(
+        r#"
+        SELECT p.id, p.version, cm.yanked, p.created_at,
+               cm.description, cm.license, cm.repository, cm.homepage,
+               cm.keywords, cm.categories
+        FROM packages p
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        JOIN cargo_crate_metadata cm ON p.id = cm.package_id
+        WHERE p.package_type = 'cargo'
+          AND p.name = $1
+          AND ns.path = $2
+          AND p.status = 'default'
+        ORDER BY p.created_at DESC
+        "#
+    )
+    .bind(&name)
+    .bind(&namespace)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    if versions.is_empty() {
+        return Err(AppError::NotFound(format!("Crate {} not found", name)));
+    }
+
+    // 获取最新版本的元数据
+    let (_, latest_version, _, _, description, license, repository, homepage, keywords, categories) = &versions[0];
+
+    // 获取总下载量
+    let total_downloads: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COALESCE(SUM(cds.downloads), 0)::bigint
+        FROM cargo_download_stats cds
+        JOIN packages p ON cds.package_id = p.id
+        JOIN projects proj ON p.project_id = proj.id
+        JOIN namespaces ns ON proj.namespace_id = ns.id
+        WHERE p.package_type = 'cargo' AND p.name = $1 AND ns.path = $2
+        "#
+    )
+    .bind(&name)
+    .bind(&namespace)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    // 构建版本列表（带下载统计）
+    let mut version_infos = Vec::new();
+    for (pkg_id, version, yanked, created_at, _, _, _, _, _, _) in &versions {
+        let downloads: (i64,) = sqlx::query_as(
+            "SELECT COALESCE(SUM(downloads), 0)::bigint FROM cargo_download_stats WHERE package_id = $1"
+        )
+        .bind(pkg_id)
+        .fetch_one(pool.get_ref())
+        .await?;
+
+        version_infos.push(CargoCrateVersionInfo {
+            num: version.clone(),
+            yanked: *yanked,
+            created_at: *created_at,
+            downloads: downloads.0,
+        });
+    }
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "crate": CargoCrateInfo {
+            name: name.clone(),
+            description: description.clone(),
+            license: license.clone(),
+            repository: repository.clone(),
+            homepage: homepage.clone(),
+            documentation: None,
+            keywords: keywords.clone(),
+            categories: categories.clone(),
+            max_version: latest_version.clone(),
+            downloads: total_downloads.0,
+            versions: version_infos,
+        }
+    })))
+}
+
 /// 配置路由
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -1630,6 +2742,18 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/npm/search", web::get().to(search_npm_packages))
             .route("/npm/login", web::post().to(npm_login))
             .route("/npm/whoami", web::get().to(npm_whoami))
+            // Cargo Registry
+            .route("/cargo/index/{namespace}/{crate_name}", web::get().to(get_cargo_index))
+            .route("/cargo/package", web::post().to(create_cargo_package))
+            .route("/cargo/verify-token", web::post().to(verify_cargo_token))
+            .route("/cargo/yank/{namespace}/{name}/{version}", web::put().to(yank_cargo_crate))
+            .route("/cargo/yank/{namespace}/{name}/{version}", web::delete().to(unyank_cargo_crate))
+            .route("/cargo/owners/{namespace}/{name}", web::get().to(get_cargo_owners))
+            .route("/cargo/owners/{namespace}/{name}", web::put().to(add_cargo_owners))
+            .route("/cargo/owners/{namespace}/{name}", web::delete().to(remove_cargo_owners))
+            .route("/cargo/download/{namespace}/{name}/{version}", web::post().to(record_cargo_download))
+            .route("/cargo/search/{namespace}", web::get().to(search_cargo_crates))
+            .route("/cargo/crate/{namespace}/{name}", web::get().to(get_cargo_crate_info))
             // 通用
             .route("/packages/{project_id}", web::get().to(list_project_packages))
             .route("/resolve-project/{namespace}/{project}", web::get().to(resolve_project))

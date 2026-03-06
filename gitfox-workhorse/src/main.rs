@@ -155,12 +155,13 @@ async fn main() -> std::io::Result<()> {
         domain: config.registry_domain.clone(),
         docker_enabled: config.registry_docker_enabled,
         npm_enabled: config.registry_npm_enabled,
+        cargo_enabled: config.registry_cargo_enabled,
         storage_path: config.registry_storage_path.clone(),
         max_package_size: config.registry_max_size,
         token_expires: 3600,
     });
     
-    let (docker_registry_state, npm_registry_state) = if config.registry_enabled {
+    let (docker_registry_state, npm_registry_state, cargo_registry_state) = if config.registry_enabled {
         tracing::info!("Package Registry enabled");
         if let Some(ref domain) = config.registry_domain {
             tracing::info!("Registry domain: {}", domain);
@@ -204,11 +205,33 @@ async fn main() -> std::io::Result<()> {
         } else {
             None
         };
+
+        let cargo_state = if config.registry_cargo_enabled {
+            tracing::info!("Cargo Registry enabled");
+            let base_url = if let Some(ref domain) = config.registry_domain {
+                format!("https://{}", domain)
+            } else {
+                config.backend_url.clone()
+            };
+            let state = registry::cargo::CargoRegistryState::new(
+                registry_config.clone(),
+                config.shell_secret.clone(),
+                base_url,
+                config.backend_url.clone(),
+            );
+            if let Err(e) = state.init().await {
+                tracing::error!("Failed to initialize Cargo Registry storage: {}", e);
+                std::process::exit(1);
+            }
+            Some(web::Data::new(state))
+        } else {
+            None
+        };
         
-        (docker_state, npm_state)
+        (docker_state, npm_state, cargo_state)
     } else {
         tracing::info!("Package Registry disabled");
-        (None, None)
+        (None, None, None)
     };
 
     let listen_addr = config.listen_addr.clone();
@@ -399,6 +422,39 @@ async fn main() -> std::io::Result<()> {
                 .route("/npm/@{scope}/{name}/-/{tarball}/-rev/{rev}", web::delete().to(registry::handle_tarball_delete_scoped))
                 // 非 scoped 包（返回错误）
                 .route("/npm/{name}", web::get().to(registry::handle_package_get));
+        }
+
+        // 添加 Cargo Registry 路由（如果启用）
+        if let Some(ref cargo_data) = cargo_registry_state {
+            app = app
+                .app_data(cargo_data.clone())
+                // Cargo Sparse Index API
+                .route("/cargo/{namespace}/index/config.json", web::get().to(registry::cargo::handle_config))
+                // Index 条目路径遵循 crate 名称长度规则
+                // 1 字符: /1/{name}
+                // 2 字符: /2/{name}
+                // 3 字符: /3/{first_char}/{name}
+                // 4+ 字符: /{first_two}/{next_two}/{name}
+                .route("/cargo/{namespace}/index/1/{name}", web::get().to(registry::cargo::handle_index_entry))
+                .route("/cargo/{namespace}/index/2/{name}", web::get().to(registry::cargo::handle_index_entry))
+                .route("/cargo/{namespace}/index/3/{prefix}/{name}", web::get().to(registry::cargo::handle_index_entry))
+                .route("/cargo/{namespace}/index/{prefix1}/{prefix2}/{name}", web::get().to(registry::cargo::handle_index_entry))
+                // Cargo Web API
+                .service(
+                    web::resource("/cargo/{namespace}/api/v1/crates/new")
+                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                        .route(web::put().to(registry::cargo::handle_publish))
+                )
+                .route("/cargo/{namespace}/api/v1/crates/{name}/{version}/yank", web::delete().to(registry::cargo::handle_yank))
+                .route("/cargo/{namespace}/api/v1/crates/{name}/{version}/unyank", web::put().to(registry::cargo::handle_unyank))
+                .route("/cargo/{namespace}/api/v1/crates/{name}/owners", web::get().to(registry::cargo::handle_owners_list))
+                .route("/cargo/{namespace}/api/v1/crates/{name}/owners", web::put().to(registry::cargo::handle_owners_add))
+                .route("/cargo/{namespace}/api/v1/crates/{name}/owners", web::delete().to(registry::cargo::handle_owners_remove))
+                .route("/cargo/{namespace}/api/v1/crates/{name}/{version}/download", web::get().to(registry::cargo::handle_download))
+                .route("/cargo/{namespace}/api/v1/crates/{name}", web::get().to(registry::cargo::handle_crate_info))
+                .route("/cargo/{namespace}/api/v1/crates", web::get().to(registry::cargo::handle_search))
+                // Cargo 登录
+                .route("/cargo/{namespace}/me", web::get().to(registry::cargo::handle_login));
         }
             
         // Git HTTP 协议 - 直接通过 GitLayer gRPC 处理（流式传输）

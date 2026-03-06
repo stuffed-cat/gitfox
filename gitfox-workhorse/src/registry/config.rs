@@ -22,6 +22,10 @@ pub struct RegistryConfig {
     #[serde(default = "default_true")]
     pub npm_enabled: bool,
 
+    /// 是否启用 Cargo Registry
+    #[serde(default = "default_true")]
+    pub cargo_enabled: bool,
+
     /// 存储路径
     #[serde(default = "default_storage_path")]
     pub storage_path: PathBuf,
@@ -58,6 +62,7 @@ impl Default for RegistryConfig {
             domain: None,
             docker_enabled: true,
             npm_enabled: true,
+            cargo_enabled: true,
             storage_path: default_storage_path(),
             max_package_size: default_max_size(),
             token_expires: default_token_expires(),
@@ -77,6 +82,9 @@ impl RegistryConfig {
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(true),
             npm_enabled: std::env::var("REGISTRY_NPM_ENABLED")
+                .map(|v| v == "1" || v.to_lowercase() == "true")
+                .unwrap_or(true),
+            cargo_enabled: std::env::var("REGISTRY_CARGO_ENABLED")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(true),
             storage_path: std::env::var("REGISTRY_STORAGE_PATH")
