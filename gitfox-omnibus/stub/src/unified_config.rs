@@ -757,6 +757,7 @@ impl Default for RegistryConfig {
             domain: String::new(),
             docker_enabled: true,
             npm_enabled: true,
+            cargo_enabled: true,
             storage_path: default_registry_storage_path(),
             max_package_size: default_registry_max_size(),
             jwt_secret: String::new(),
