@@ -490,7 +490,11 @@ pub async fn list_group_projects(
     // Return ProjectWithOwner with namespace path as owner_name
     let projects = sqlx::query_as::<_, crate::models::project::ProjectWithOwner>(
         r#"
-        SELECT p.id, p.name, p.description, p.visibility, p.owner_id, p.created_at, p.updated_at,
+        SELECT p.id, p.name, p.description, p.visibility, p.owner_id,
+               p.namespace_id, p.default_branch, p.archived,
+               p.issues_enabled, p.merge_requests_enabled, p.pipelines_enabled,
+               p.packages_enabled, p.wiki_enabled,
+               p.created_at, p.updated_at,
                n.path as owner_name, n.avatar_url as owner_avatar,
                p.stars_count, p.forks_count, p.forked_from_id,
                fn.path as forked_from_namespace, fp.name as forked_from_name

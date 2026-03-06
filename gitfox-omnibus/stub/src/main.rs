@@ -1096,6 +1096,7 @@ fn init_config(data_dir: &Path) -> Result<()> {
         database_url: "postgres://gitfox:password@localhost/gitfox".to_string(),
         redis_url: "redis://127.0.0.1:6379".to_string(),
         jwt_secret: secrets.jwt_secret.clone(),
+        jwt_expiration: 86400,  // 24 小时
         gitfox_shell_secret: secrets.shell_secret.clone(),
         gitfox_base_url: user_config.base_url.clone(),
         http_port: user_config.http_port,
@@ -1127,19 +1128,51 @@ fn init_config(data_dir: &Path) -> Result<()> {
         smtp_from_name: user_config.smtp_config.as_ref().map(|c| c.from_name.clone()).unwrap_or_default(),
         smtp_use_tls: user_config.smtp_config.as_ref().map(|c| c.use_tls).unwrap_or(true),
         smtp_use_ssl: user_config.smtp_config.as_ref().map(|c| c.use_ssl).unwrap_or(false),
+        webauthn_rp_name: "GitFox".to_string(),
         webauthn_rp_id: user_config.webauthn_rp_id.clone(),
         webauthn_rp_origin: user_config.base_url.clone(),
+        pat_default_expiration_days: 365,  // 默认一年
+        pat_max_expiration_days: 0,        // 无限制
         rust_log: "info".to_string(),
         services_backend,
         services_gitlayer,
         services_shell,
         services_workhorse,
+        registry_enabled: false,  // 默认关闭 Package Registry
         registry_domain: String::new(),
+        registry_docker_enabled: true,  // Docker Registry 默认启用（如果 registry_enabled=true）
+        registry_npm_enabled: true,     // npm Registry 默认启用（如果 registry_enabled=true）
         registry_storage_path: data_dir.join("registry").display().to_string(),
+        registry_max_size: 536870912,   // 512MB
+        registry_jwt_secret: String::new(),  // 使用主 JWT 密钥
         bundled_enabled: use_bundled,
         bundled_postgresql_enabled: bundled_postgresql,
         bundled_redis_enabled: bundled_redis,
         bundled_nginx_enabled: bundled_nginx,
+        webide_client_id: "gitfox-webide".to_string(),
+        webide_redirect_uri_path: "/-/ide/oauth/callback".to_string(),
+        // Workhorse 配置
+        listen_addr: "0.0.0.0".to_string(),
+        listen_port: user_config.http_port,
+        backend_socket: user_config.server_socket_path.clone(),
+        backend_url: format!("http://{}:{}", user_config.server_host, user_config.server_port),
+        auth_grpc_address: format!("http://{}:{}", user_config.server_host, 50051),
+        gitlayer_address: format!("http://{}:{}", user_config.server_host, 50052),
+        enable_request_logging: true,
+        enable_cors: true,
+        websocket_timeout: 3600,
+        static_cache_control: "public, max-age=31536000".to_string(),
+        // GitLayer 配置
+        gitlayer_listen_addr: format!("{}:{}", user_config.server_host, 50052),
+        gitlayer_git_bin: "git".to_string(),
+        gitlayer_max_concurrent_ops: 10,
+        gitlayer_enable_cache: true,
+        gitlayer_cache_ttl: 60,
+        // Shell 配置
+        ssh_listen_addr: format!("{}:{}", user_config.ssh_host, user_config.ssh_port),
+        gitfox_debug: false,
+        // gRPC 地址
+        grpc_address: format!("{}:{}", user_config.server_host, 50051),
         ..Default::default()
     };
     

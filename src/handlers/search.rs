@@ -129,15 +129,18 @@ pub async fn search(
     if scope == "all" || scope == "projects" {
         let projects = sqlx::query_as::<_, ProjectWithOwner>(
             r#"
-            SELECT 
-              p.*,
-              u.username as owner_name,
-              u.avatar_url as owner_avatar,
-              COALESCE((SELECT COUNT(*) FROM project_stars WHERE project_id = p.id), 0)::int as stars_count,
-              COALESCE((SELECT COUNT(*) FROM projects WHERE forked_from_id = p.id), 0)::int as forks_count,
-              p.forked_from_id
+            SELECT p.id, p.name, p.description, p.visibility, p.owner_id,
+                   p.namespace_id, p.default_branch, p.archived,
+                   p.issues_enabled, p.merge_requests_enabled, p.pipelines_enabled,
+                   p.packages_enabled, p.wiki_enabled,
+                   p.created_at, p.updated_at,
+                   n.path as owner_name, n.avatar_url as owner_avatar,
+                   p.stars_count, p.forks_count, p.forked_from_id,
+                   fn.path as forked_from_namespace, fp.name as forked_from_name
             FROM projects p
-            JOIN users u ON p.owner_id = u.id
+            JOIN namespaces n ON p.namespace_id = n.id
+            LEFT JOIN projects fp ON p.forked_from_id = fp.id
+            LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
             WHERE (p.visibility = 'public' OR p.visibility = 'internal')
               AND (p.name ILIKE $1 OR p.description ILIKE $1)
             ORDER BY 

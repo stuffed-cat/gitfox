@@ -76,6 +76,14 @@ pub struct GitFoxConfig {
     #[serde(default)]
     pub oauth: OAuthConfig,
 
+    /// WebAuthn 配置
+    #[serde(default)]
+    pub webauthn: WebauthnConfig,
+
+    /// PAT 配置
+    #[serde(default)]
+    pub pat: PatConfig,
+
     /// 日志配置
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -88,9 +96,21 @@ pub struct GitFoxConfig {
     #[serde(default)]
     pub services: ServicesConfig,
 
+    /// Workhorse 配置
+    #[serde(default)]
+    pub workhorse: WorkhorseConfig,
+
+    /// GitLayer 配置
+    #[serde(default)]
+    pub gitlayer: GitLayerConfig,
+
     /// 内置服务配置（GitLab Omnibus 风格）
     #[serde(default)]
     pub bundled: BundledConfig,
+
+    /// WebIDE 配置
+    #[serde(default)]
+    pub webide: WebideConfig,
 }
 
 fn default_version() -> String {
@@ -137,8 +157,16 @@ pub struct SecretsConfig {
     /// JWT 签名密钥（用于用户认证 Token）
     pub jwt: String,
 
+    /// JWT Token 过期时间（秒）
+    #[serde(default = "default_jwt_expiration")]
+    pub jwt_expiration: u64,
+
     /// 组件间通信密钥（gitfox-shell 等内部服务认证）
     pub internal: String,
+}
+
+fn default_jwt_expiration() -> u64 {
+    86400 // 24 小时
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -578,6 +606,101 @@ impl Default for LoggingConfig {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// WebAuthn 配置
+// ═══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebauthnConfig {
+    /// Relying Party 名称（用户认证时显示）
+    #[serde(default = "default_webauthn_rp_name")]
+    pub rp_name: String,
+
+    /// Relying Party ID（通常是域名）
+    #[serde(default)]
+    pub rp_id: String,
+
+    /// Relying Party Origin（如 https://example.com）
+    #[serde(default)]
+    pub rp_origin: String,
+}
+
+fn default_webauthn_rp_name() -> String {
+    "GitFox".to_string()
+}
+
+impl Default for WebauthnConfig {
+    fn default() -> Self {
+        Self {
+            rp_name: default_webauthn_rp_name(),
+            rp_id: String::new(),
+            rp_origin: String::new(),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PAT 配置
+// ═══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatConfig {
+    /// PAT 默认过期天数
+    /// 0 = 永不过期（不推荐）
+    #[serde(default = "default_pat_default_expiration_days")]
+    pub default_expiration_days: u32,
+
+    /// PAT 最大过期天数
+    /// 0 = 无限制
+    #[serde(default)]
+    pub max_expiration_days: u32,
+}
+
+fn default_pat_default_expiration_days() -> u32 {
+    365 // 默认一年
+}
+
+impl Default for PatConfig {
+    fn default() -> Self {
+        Self {
+            default_expiration_days: default_pat_default_expiration_days(),
+            max_expiration_days: 0,
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// WebIDE 配置
+// ═══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebideConfig {
+    /// WebIDE OAuth 应用客户端 ID
+    #[serde(default = "default_webide_client_id")]
+    pub client_id: String,
+
+    /// WebIDE OAuth 回调路径
+    #[serde(default = "default_webide_redirect_uri_path")]
+    pub redirect_uri_path: String,
+}
+
+fn default_webide_client_id() -> String {
+    "gitfox-webide".to_string()
+}
+
+fn default_webide_redirect_uri_path() -> String {
+    "/-/ide/oauth/callback".to_string()
+}
+
+impl Default for WebideConfig {
+    fn default() -> Self {
+        Self {
+            client_id: default_webide_client_id(),
+            redirect_uri_path: default_webide_redirect_uri_path(),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Package Registry 配置
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -672,6 +795,103 @@ impl Default for ServicesConfig {
             gitlayer: true,
             shell: true,
             workhorse: true,
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Workhorse 配置
+// ═══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkhorseConfig {
+    /// 监听地址
+    #[serde(default = "default_workhorse_listen_addr")]
+    pub listen_addr: String,
+
+    /// 启用请求日志
+    #[serde(default = "default_true")]
+    pub enable_request_logging: bool,
+
+    /// 启用 CORS
+    #[serde(default = "default_true")]
+    pub enable_cors: bool,
+
+    /// WebSocket 超时时间（秒）
+    #[serde(default = "default_websocket_timeout")]
+    pub websocket_timeout: u32,
+
+    /// 静态文件缓存控制头
+    #[serde(default = "default_static_cache_control")]
+    pub static_cache_control: String,
+}
+
+fn default_workhorse_listen_addr() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_websocket_timeout() -> u32 {
+    3600
+}
+
+fn default_static_cache_control() -> String {
+    "public, max-age=31536000, immutable".to_string()
+}
+
+impl Default for WorkhorseConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: default_workhorse_listen_addr(),
+            enable_request_logging: true,
+            enable_cors: true,
+            websocket_timeout: default_websocket_timeout(),
+            static_cache_control: default_static_cache_control(),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// GitLayer 配置
+// ═══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitLayerConfig {
+    /// Git 二进制文件路径
+    #[serde(default = "default_git_bin")]
+    pub git_bin: String,
+
+    /// 最大并发操作数
+    #[serde(default = "default_max_concurrent_ops")]
+    pub max_concurrent_ops: u32,
+
+    /// 启用缓存
+    #[serde(default = "default_true")]
+    pub enable_cache: bool,
+
+    /// 缓存 TTL（秒）
+    #[serde(default = "default_cache_ttl")]
+    pub cache_ttl: u32,
+}
+
+fn default_git_bin() -> String {
+    "git".to_string()
+}
+
+fn default_max_concurrent_ops() -> u32 {
+    10
+}
+
+fn default_cache_ttl() -> u32 {
+    60
+}
+
+impl Default for GitLayerConfig {
+    fn default() -> Self {
+        Self {
+            git_bin: default_git_bin(),
+            max_concurrent_ops: default_max_concurrent_ops(),
+            enable_cache: true,
+            cache_ttl: default_cache_ttl(),
         }
     }
 }
@@ -1346,7 +1566,7 @@ impl GitFoxConfig {
 
         ConfigVars {
             // Workhorse 专用
-            listen_addr: "0.0.0.0".to_string(),
+            listen_addr: self.workhorse.listen_addr.clone(),
             listen_port: self.server.http_port,
             backend_socket: self.internal.backend_socket.clone().unwrap_or_default(),
             backend_url: self.internal.get_backend_url(),
@@ -1361,10 +1581,10 @@ impl GitFoxConfig {
             
             // HTTP 配置
             max_upload_size: self.server.max_upload_size,
-            enable_request_logging: true,
-            enable_cors: true,
-            websocket_timeout: 3600,
-            static_cache_control: "public, max-age=31536000, immutable".to_string(),
+            enable_request_logging: self.workhorse.enable_request_logging,
+            enable_cors: self.workhorse.enable_cors,
+            websocket_timeout: self.workhorse.websocket_timeout,
+            static_cache_control: self.workhorse.static_cache_control.clone(),
             
             // Registry
             registry_enabled: self.registry.enabled,
@@ -1454,6 +1674,7 @@ impl GitFoxConfig {
 
             // 安全密钥
             jwt_secret: self.secrets.jwt.clone(),
+            jwt_expiration: self.secrets.jwt_expiration,
             gitfox_shell_secret: self.secrets.internal.clone(),
 
             // 服务配置
@@ -1509,8 +1730,21 @@ impl GitFoxConfig {
             oauth_google_client_secret: self.oauth.google.client_secret.clone(),
 
             // WebAuthn
-            webauthn_rp_id: self.server.base_url.replace("http://", "").replace("https://", "").split(':').next().unwrap_or("localhost").to_string(),
-            webauthn_rp_origin: self.server.base_url.clone(),
+            webauthn_rp_name: self.webauthn.rp_name.clone(),
+            webauthn_rp_id: if self.webauthn.rp_id.is_empty() {
+                self.server.base_url.replace("http://", "").replace("https://", "").split(':').next().unwrap_or("localhost").to_string()
+            } else {
+                self.webauthn.rp_id.clone()
+            },
+            webauthn_rp_origin: if self.webauthn.rp_origin.is_empty() {
+                self.server.base_url.clone()
+            } else {
+                self.webauthn.rp_origin.clone()
+            },
+
+            // PAT
+            pat_default_expiration_days: self.pat.default_expiration_days,
+            pat_max_expiration_days: self.pat.max_expiration_days,
 
             // 日志
             rust_log: self.logging.level.clone(),
@@ -1520,6 +1754,23 @@ impl GitFoxConfig {
             
             // GitLayer 地址
             gitlayer_address: self.internal.get_gitlayer_address(),
+
+            // Package Registry
+            registry_enabled: self.registry.enabled,
+            registry_domain: self.registry.domain.clone(),
+            registry_docker_enabled: self.registry.docker_enabled,
+            registry_npm_enabled: self.registry.npm_enabled,
+            registry_storage_path: self.registry.storage_path.clone(),
+            registry_max_size: self.registry.max_package_size,
+            registry_jwt_secret: if self.registry.jwt_secret.is_empty() {
+                self.secrets.jwt.clone()
+            } else {
+                self.registry.jwt_secret.clone()
+            },
+
+            // WebIDE
+            webide_client_id: self.webide.client_id.clone(),
+            webide_redirect_uri_path: self.webide.redirect_uri_path.clone(),
 
             ..Default::default()
         }
@@ -1541,12 +1792,12 @@ impl GitFoxConfig {
             git_repos_path: self.paths.repos.clone(),
             
             // Git 二进制路径
-            gitlayer_git_bin: "git".to_string(),
+            gitlayer_git_bin: self.gitlayer.git_bin.clone(),
             
             // 性能配置
-            gitlayer_max_concurrent_ops: 10,
-            gitlayer_enable_cache: true,
-            gitlayer_cache_ttl: 60,
+            gitlayer_max_concurrent_ops: self.gitlayer.max_concurrent_ops,
+            gitlayer_enable_cache: self.gitlayer.enable_cache,
+            gitlayer_cache_ttl: self.gitlayer.cache_ttl,
             
             // 日志
             rust_log: self.logging.level.clone(),
@@ -1603,6 +1854,7 @@ pub struct ConfigVars {
 
     // 安全密钥
     pub jwt_secret: String,
+    pub jwt_expiration: u64,
     pub gitfox_shell_secret: String,
 
     // 服务配置
@@ -1656,8 +1908,13 @@ pub struct ConfigVars {
     pub oauth_google_client_secret: String,
 
     // WebAuthn
+    pub webauthn_rp_name: String,
     pub webauthn_rp_id: String,
     pub webauthn_rp_origin: String,
+
+    // PAT
+    pub pat_default_expiration_days: u32,
+    pub pat_max_expiration_days: u32,
 
     // 日志
     pub rust_log: String,
@@ -1708,6 +1965,10 @@ pub struct ConfigVars {
     
     // gRPC 监听地址（给后端用）
     pub grpc_address: String,
+    
+    // WebIDE
+    pub webide_client_id: String,
+    pub webide_redirect_uri_path: String,
 }
 
 impl ConfigVars {
@@ -1721,6 +1982,7 @@ impl ConfigVars {
 
         // 安全密钥
         result = result.replace("{{JWT_SECRET}}", &self.jwt_secret);
+        result = result.replace("{{JWT_EXPIRATION}}", &self.jwt_expiration.to_string());
         result = result.replace("{{GITFOX_SHELL_SECRET}}", &self.gitfox_shell_secret);
 
         // 服务配置
@@ -1774,8 +2036,13 @@ impl ConfigVars {
         result = result.replace("{{OAUTH_GOOGLE_CLIENT_SECRET}}", &self.oauth_google_client_secret);
 
         // WebAuthn
+        result = result.replace("{{WEBAUTHN_RP_NAME}}", &self.webauthn_rp_name);
         result = result.replace("{{WEBAUTHN_RP_ID}}", &self.webauthn_rp_id);
         result = result.replace("{{WEBAUTHN_RP_ORIGIN}}", &self.webauthn_rp_origin);
+
+        // PAT
+        result = result.replace("{{PAT_DEFAULT_EXPIRATION_DAYS}}", &self.pat_default_expiration_days.to_string());
+        result = result.replace("{{PAT_MAX_EXPIRATION_DAYS}}", &self.pat_max_expiration_days.to_string());
 
         // 日志
         result = result.replace("{{RUST_LOG}}", &self.rust_log);
@@ -1785,6 +2052,13 @@ impl ConfigVars {
         result = result.replace("{{SERVICES_GITLAYER}}", &self.services_gitlayer.to_string());
         result = result.replace("{{SERVICES_SHELL}}", &self.services_shell.to_string());
         result = result.replace("{{SERVICES_WORKHORSE}}", &self.services_workhorse.to_string());
+
+        // Workhorse 配置 (gitfox.toml)
+        result = result.replace("{{WORKHORSE_LISTEN_ADDR}}", &self.listen_addr);
+        result = result.replace("{{WORKHORSE_ENABLE_REQUEST_LOGGING}}", &self.enable_request_logging.to_string());
+        result = result.replace("{{WORKHORSE_ENABLE_CORS}}", &self.enable_cors.to_string());
+        result = result.replace("{{WORKHORSE_WEBSOCKET_TIMEOUT}}", &self.websocket_timeout.to_string());
+        result = result.replace("{{WORKHORSE_STATIC_CACHE_CONTROL}}", &self.static_cache_control);
 
         // Registry
         result = result.replace("{{REGISTRY_ENABLED}}", &self.registry_enabled.to_string());
@@ -1829,6 +2103,10 @@ impl ConfigVars {
         
         // gRPC 监听地址（后端/Shell共用）
         result = result.replace("{{GRPC_ADDRESS}}", &self.grpc_address);
+
+        // WebIDE
+        result = result.replace("{{WEBIDE_CLIENT_ID}}", &self.webide_client_id);
+        result = result.replace("{{WEBIDE_REDIRECT_URI_PATH}}", &self.webide_redirect_uri_path);
 
         result
     }

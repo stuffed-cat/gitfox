@@ -40,6 +40,12 @@ url = "{{REDIS_URL}}"
 # 生成方法：openssl rand -base64 32
 jwt = "{{JWT_SECRET}}"
 
+# JWT Token 过期时间（秒）
+# 推荐值：
+# - 开发环境：86400 (24小时)
+# - 生产环境：3600 (1小时) 或 7200 (2小时)
+jwt_expiration = {{JWT_EXPIRATION}}
+
 # 组件间通信密钥（gitfox-shell 等内部服务认证）
 # 生成方法：openssl rand -base64 32
 internal = "{{GITFOX_SHELL_SECRET}}"
@@ -77,24 +83,34 @@ public_host = "{{SSH_PUBLIC_HOST}}"
 public_port = {{SSH_PUBLIC_PORT}}
 
 # ════════════════════════════════════════════════════════════════════════════
-# 内部服务（组件间通信，通常不需要修改）
+# 内部服务（组件间通信）
 # ════════════════════════════════════════════════════════════════════════════
 
 [internal]
+# 内部服务通信的主机地址
+# 单机部署时使用 127.0.0.1，分布式部署时可使用内网地址
+host = "{{SERVER_HOST}}"
+
 # 后端 API 连接方式
-# 方式一：Unix Socket（推荐，性能更好更安全）
-# 取消下行注释并注释掉 backend_port 即可启用
+# 方式一：Unix Socket（推荐用于 Nginx 反向代理，性能更好更安全）
 # backend_socket = "{{SERVER_SOCKET_PATH}}"
 
-# 方式二：TCP（默认）
-backend_host = "{{SERVER_HOST}}"
+# 方式二：TCP 端口（默认）
 backend_port = {{SERVER_PORT}}
+# 分布式部署时可配置完整 URL（覆盖 host:backend_port）
+# backend_url = "http://backend.internal:8081"
 
-# GitLayer gRPC（Git 操作服务）
+# GitLayer gRPC（Git 操作服务，必需）
+# 所有 Git 操作（clone/fetch/push/diff/blame 等）都通过此服务执行
 gitlayer_port = 50052
+# 完整地址（用于分布式部署或自定义配置）
+gitlayer_address = "{{GITLAYER_ADDRESS}}"
 
-# Auth gRPC（认证服务）
+# Auth gRPC（认证服务，必需）
+# Shell/Workhorse 通过此服务验证用户身份和权限
 auth_grpc_port = 50051
+# 完整地址（用于分布式部署或自定义配置）
+auth_grpc_address = "{{AUTH_GRPC_ADDRESS}}"
 
 # ════════════════════════════════════════════════════════════════════════════
 # 数据目录
@@ -130,20 +146,21 @@ shell_path = "{{GITFOX_SHELL_PATH}}"
 
 [registry]
 # 是否启用包注册表
-enabled = true
+enabled = {{REGISTRY_ENABLED}}
 
-# Registry 独立域名（必填）
+# Registry 独立域名（可选）
 # 示例: registry.gitfox.studio
 # 用户通过此域名访问 Registry:
 # - Docker: docker pull registry.gitfox.studio/namespace/project/image:tag
 # - npm: npm install @namespace/package --registry=https://registry.gitfox.studio/npm/
+# 留空则使用主域名的 /v2/（Docker）和 /npm/（npm）路径
 domain = "{{REGISTRY_DOMAIN}}"
 
 # 是否启用 Docker Registry
-docker_enabled = true
+docker_enabled = {{REGISTRY_DOCKER_ENABLED}}
 
 # 是否启用 npm Registry
-npm_enabled = true
+npm_enabled = {{REGISTRY_NPM_ENABLED}}
 
 # 包存储目录
 storage_path = "{{REGISTRY_STORAGE_PATH}}"
@@ -153,7 +170,7 @@ storage_path = "{{REGISTRY_STORAGE_PATH}}"
 # - Docker 镜像：2147483648 (2GB)
 # - npm 包：52428800 (50MB)
 # 此处设置为统一最大值
-max_package_size = 536870912  # 512MB
+max_package_size = {{REGISTRY_MAX_SIZE}}
 
 # ════════════════════════════════════════════════════════════════════════════
 # 初始管理员（仅首次启动时创建，之后可删除此段）
@@ -204,6 +221,8 @@ client_secret = "{{OAUTH_GOOGLE_CLIENT_SECRET}}"
 # ════════════════════════════════════════════════════════════════════════════
 
 [webauthn]
+# Relying Party 名称（用户认证时显示）
+rp_name = "{{WEBAUTHN_RP_NAME}}"
 # Relying Party ID（通常是域名，如 example.com）
 rp_id = "{{WEBAUTHN_RP_ID}}"
 # Relying Party Origin（如 https://example.com）
@@ -216,6 +235,21 @@ rp_origin = "{{WEBAUTHN_RP_ORIGIN}}"
 [logging]
 # 日志级别: trace, debug, info, warn, error
 level = "{{RUST_LOG}}"
+
+# ════════════════════════════════════════════════════════════════════════════
+# Personal Access Token (PAT) 配置
+# ════════════════════════════════════════════════════════════════════════════
+
+[pat]
+# PAT 默认过期天数
+# 0 = 永不过期（不推荐）
+# 推荐值：90 (三个月) 或 365 (一年)
+default_expiration_days = {{PAT_DEFAULT_EXPIRATION_DAYS}}
+
+# PAT 最大过期天数
+# 0 = 无限制
+# 推荐在企业环境中设置最大限制（如 730 = 2年）
+max_expiration_days = {{PAT_MAX_EXPIRATION_DAYS}}
 
 # ════════════════════════════════════════════════════════════════════════════
 # 服务启用（控制哪些组件启动）
@@ -236,6 +270,43 @@ shell = {{SERVICES_SHELL}}
 
 # 是否启动 workhorse（HTTP 反向代理）
 workhorse = {{SERVICES_WORKHORSE}}
+
+# ════════════════════════════════════════════════════════════════════════════
+# Workhorse 配置（HTTP 反向代理）
+# ════════════════════════════════════════════════════════════════════════════
+
+[workhorse]
+# 监听地址
+listen_addr = "{{WORKHORSE_LISTEN_ADDR}}"
+
+# 启用请求日志
+enable_request_logging = {{WORKHORSE_ENABLE_REQUEST_LOGGING}}
+
+# 启用 CORS
+enable_cors = {{WORKHORSE_ENABLE_CORS}}
+
+# WebSocket 超时时间（秒）
+websocket_timeout = {{WORKHORSE_WEBSOCKET_TIMEOUT}}
+
+# 静态文件缓存控制头
+static_cache_control = "{{WORKHORSE_STATIC_CACHE_CONTROL}}"
+
+# ════════════════════════════════════════════════════════════════════════════
+# GitLayer 配置（Git 操作 gRPC 服务）
+# ════════════════════════════════════════════════════════════════════════════
+
+[gitlayer]
+# Git 二进制文件路径（默认使用 PATH 中的 git）
+git_bin = "{{GITLAYER_GIT_BIN}}"
+
+# 最大并发操作数
+max_concurrent_ops = {{GITLAYER_MAX_CONCURRENT_OPS}}
+
+# 启用缓存
+enable_cache = {{GITLAYER_ENABLE_CACHE}}
+
+# 缓存 TTL（秒）
+cache_ttl = {{GITLAYER_CACHE_TTL}}
 
 # ════════════════════════════════════════════════════════════════════════════
 # 内置服务（GitLab Omnibus 风格）
@@ -337,3 +408,15 @@ ssl_certificate_key = ""
 # 格式: ["host:port", "host:port", ...]
 # 当 nginx 启用时，workhorse 只监听本地
 upstream_servers = ["127.0.0.1:8080"]
+
+# ════════════════════════════════════════════════════════════════════════════
+# WebIDE 配置
+# ════════════════════════════════════════════════════════════════════════════
+# GitFox 内置基于 Web 的代码编辑器 (IDE)
+
+[webide]
+# WebIDE OAuth 应用客户端 ID
+client_id = "{{WEBIDE_CLIENT_ID}}"
+
+# WebIDE OAuth 回调路径
+redirect_uri_path = "{{WEBIDE_REDIRECT_URI_PATH}}"
