@@ -33,6 +33,18 @@
           npm
           <span class="tab-count">{{ npmCount }}</span>
         </button>
+        <button
+          class="tab-btn"
+          :class="{ active: activeTab === 'cargo' }"
+          @click="activeTab = 'cargo'"
+        >
+          <svg class="tab-icon" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6.5" stroke="currentColor" fill="none" stroke-width="1.2"/>
+            <circle cx="8" cy="8" r="2" fill="currentColor"/>
+          </svg>
+          Cargo
+          <span class="tab-count">{{ cargoCount }}</span>
+        </button>
       </div>
       <div class="toolbar-actions">
         <div class="search-input">
@@ -88,6 +100,10 @@
             </svg>
             <svg v-else-if="pkg.package_type === 'npm'" viewBox="0 0 16 16" fill="none">
               <path d="M2 3h12v10H2V3zM5 6v4h2V7h1v3h3V6H5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <svg v-else-if="pkg.package_type === 'cargo'" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6.5" stroke="currentColor" fill="none" stroke-width="1.2"/>
+              <circle cx="8" cy="8" r="2" fill="currentColor"/>
             </svg>
             <svg v-else viewBox="0 0 16 16" fill="none">
               <path d="M8 1L1 4v8l7 3 7-3V4L8 1zM8 8v7M1 4l7 4 7-4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -182,6 +198,37 @@ docker push {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:lates
             <pre><code>npm install @{{ namespace }}/package-name</code></pre>
           </div>
         </div>
+
+        <div class="usage-section" v-if="activeTab === 'all' || activeTab === 'cargo'">
+          <div class="section-header">
+            <svg class="section-icon cargo" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6.5" stroke="currentColor" fill="none" stroke-width="1.2"/>
+              <circle cx="8" cy="8" r="2" fill="currentColor"/>
+            </svg>
+            <span>Cargo Registry</span>
+          </div>
+          <div class="code-block">
+            <div class="code-label">配置 .cargo/config.toml</div>
+            <pre><code>[registries.{{ namespace }}]
+index = "sparse+https://{{ registryDomain }}/cargo/{{ namespace }}/index/"
+
+[net]
+git-fetch-with-cli = true</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-label">发布 crate</div>
+            <pre><code>cargo publish --registry {{ namespace }}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-label">在 Cargo.toml 中使用</div>
+            <pre><code>[dependencies]
+your-crate = { version = "0.1.0", registry = "{{ namespace }}" }</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-label">登录认证</div>
+            <pre><code>cargo login --registry {{ namespace }} YOUR_PERSONAL_ACCESS_TOKEN</code></pre>
+          </div>
+        </div>
       </div>
     </details>
 
@@ -201,7 +248,8 @@ docker push {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:lates
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '@/api'
-import type { Package } from '@/types'
+import type { Package, PackageType } from '@/types'
+import type { NpmSearchResponse, DockerCatalogResponse, CargoSearchResponse } from '@/api'
 
 const props = defineProps<{
   project?: {
@@ -219,20 +267,36 @@ const router = useRouter()
 // 状态
 const loading = ref(false)
 const packages = ref<Package[]>([])
-const activeTab = ref<'all' | 'docker' | 'npm'>('all')
+const activeTab = ref<'all' | 'docker' | 'npm' | 'cargo'>('all')
 const searchQuery = ref('')
 const sortBy = ref('updated_at')
 const copySuccess = ref(false)
 const copySuccessTimeout = ref<number | null>(null)
+const serverConfig = ref<{
+  registry_domain: string
+  registry_npm_enabled: boolean
+  registry_docker_enabled: boolean
+  registry_cargo_enabled: boolean
+} | null>(null)
 
 // 从项目或路由获取 namespace 和 project 信息
-const namespace = computed(() => props.project?.namespace?.path || route.params.namespace as string)
-const projectName = computed(() => props.project?.name || route.params.project as string)
+const namespace = computed(() => {
+  return props.project?.namespace?.path 
+    || (route.meta.namespace as string)
+    || (route.params.namespace as string)
+})
+const projectName = computed(() => {
+  return props.project?.name 
+    || (route.meta.projectName as string)
+    || (route.params.project as string)
+})
 
-// Registry 域名 - 使用当前域名
+// Registry 域名 - 从后端配置获取
 const registryDomain = computed(() => {
-  // 对于统一入口部署，直接使用当前主机名
-  // 对于分离部署场景，可以配置子域名如 registry.example.com
+  if (serverConfig.value?.registry_domain) {
+    return serverConfig.value.registry_domain
+  }
+  // 降级到当前主机名
   return window.location.host
 })
 
@@ -240,6 +304,7 @@ const registryDomain = computed(() => {
 const totalCount = computed(() => packages.value.length)
 const dockerCount = computed(() => packages.value.filter(p => p.package_type === 'docker').length)
 const npmCount = computed(() => packages.value.filter(p => p.package_type === 'npm').length)
+const cargoCount = computed(() => packages.value.filter(p => p.package_type === 'cargo').length)
 
 // 过滤后的包列表
 const filteredPackages = computed(() => {
@@ -278,16 +343,112 @@ const filteredPackages = computed(() => {
   return result
 })
 
-// 加载包列表
+// 加载服务器配置
+async function loadServerConfig() {
+  try {
+    const config = await api.config.get()
+    serverConfig.value = {
+      registry_domain: config.registry_domain,
+      registry_npm_enabled: config.registry_npm_enabled,
+      registry_docker_enabled: config.registry_docker_enabled,
+      registry_cargo_enabled: config.registry_cargo_enabled,
+    }
+  } catch (error) {
+    console.error('Failed to load server config:', error)
+  }
+}
+
+// 加载包列表 - 使用 workhorse 的 registry API
 async function loadPackages() {
   if (!namespace.value || !projectName.value) return
   
+  // 确保配置已加载
+  if (!serverConfig.value) {
+    await loadServerConfig()
+  }
+  
   loading.value = true
+  const allPackages: Package[] = []
+  const registryDomainValue = serverConfig.value?.registry_domain
+
   try {
-    const response = await api.packages.list(namespace.value, projectName.value, {
-      package_type: activeTab.value === 'all' ? undefined : activeTab.value
-    })
-    packages.value = response.data || []
+    // 根据当前 tab 决定加载哪些类型
+    const typesToLoad: PackageType[] = activeTab.value === 'all' 
+      ? ['docker', 'npm', 'cargo'] 
+      : [activeTab.value]
+
+    // 并行加载各类型的包
+    const loadPromises: Promise<void>[] = []
+
+    if (typesToLoad.includes('npm') && serverConfig.value?.registry_npm_enabled !== false) {
+      loadPromises.push(
+        api.registry.searchNpm(registryDomainValue, namespace.value)
+          .then((response: NpmSearchResponse) => {
+            // 过滤出属于当前项目的包（按 scope 匹配）
+            const npmPackages: Package[] = response.objects
+              .filter(obj => obj.package.scope === namespace.value)
+              .map((obj, idx) => ({
+                id: idx + 10000, // 临时 ID
+                project_id: props.project?.id || 0,
+                name: obj.package.name.replace(`@${obj.package.scope}/`, ''),
+                version: obj.package.version,
+                package_type: 'npm' as PackageType,
+                status: 'default' as const,
+                created_at: obj.package.date || new Date().toISOString(),
+                updated_at: obj.package.date || new Date().toISOString(),
+              }))
+            allPackages.push(...npmPackages)
+          })
+          .catch(err => console.warn('Failed to load npm packages:', err))
+      )
+    }
+
+    if (typesToLoad.includes('docker') && serverConfig.value?.registry_docker_enabled !== false) {
+      loadPromises.push(
+        api.registry.getDockerCatalog(registryDomainValue)
+          .then((response: DockerCatalogResponse) => {
+            // 过滤出属于当前项目的镜像（格式: namespace/project/image）
+            const prefix = `${namespace.value}/${projectName.value}/`
+            const dockerPackages: Package[] = response.repositories
+              .filter(repo => repo.startsWith(prefix))
+              .map((repo, idx) => ({
+                id: idx + 20000, // 临时 ID
+                project_id: props.project?.id || 0,
+                name: repo.replace(prefix, ''),
+                version: 'latest', // catalog 不包含版本，需要额外请求
+                package_type: 'docker' as PackageType,
+                status: 'default' as const,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              }))
+            allPackages.push(...dockerPackages)
+          })
+          .catch(err => console.warn('Failed to load docker packages:', err))
+      )
+    }
+
+    if (typesToLoad.includes('cargo') && serverConfig.value?.registry_cargo_enabled !== false) {
+      loadPromises.push(
+        api.registry.searchCargo(registryDomainValue, namespace.value)
+          .then((response: CargoSearchResponse) => {
+            const cargoPackages: Package[] = response.crates.map((crate, idx) => ({
+              id: idx + 30000, // 临时 ID
+              project_id: props.project?.id || 0,
+              name: crate.name,
+              version: crate.max_version,
+              package_type: 'cargo' as PackageType,
+              status: 'default' as const,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }))
+            allPackages.push(...cargoPackages)
+          })
+          .catch(err => console.warn('Failed to load cargo packages:', err))
+      )
+    }
+
+    await Promise.all(loadPromises)
+    packages.value = allPackages
   } catch (error) {
     console.error('Failed to load packages:', error)
     packages.value = []
@@ -311,7 +472,8 @@ function goToPackage(pkg: Package) {
     name: 'PackageDetail',
     params: {
       ...route.params,
-      packageId: pkg.id.toString()
+      packageType: pkg.package_type,
+      packageName: pkg.name
     }
   })
 }
@@ -323,6 +485,8 @@ function copyInstallCommand(pkg: Package) {
     command = `docker pull ${registryDomain.value}/${namespace.value}/${projectName.value}/${pkg.name}:${pkg.version}`
   } else if (pkg.package_type === 'npm') {
     command = `npm install @${namespace.value}/${pkg.name}@${pkg.version}`
+  } else if (pkg.package_type === 'cargo') {
+    command = `cargo add ${pkg.name}@${pkg.version} --registry ${namespace.value}`
   }
   
   navigator.clipboard.writeText(command)
@@ -364,8 +528,24 @@ watch(activeTab, () => {
   loadPackages()
 })
 
-onMounted(() => {
-  loadPackages()
+// 监听 project 加载完成
+watch(
+  () => props.project,
+  (newProject) => {
+    if (newProject) {
+      loadPackages()
+    }
+  },
+  { immediate: false }
+)
+
+onMounted(async () => {
+  // 先加载配置，因为 loadPackages 依赖 serverConfig
+  await loadServerConfig()
+  // 只有当 namespace 和 projectName 已经可用时才加载
+  if (namespace.value && projectName.value) {
+    await loadPackages()
+  }
 })
 </script>
 
@@ -577,6 +757,11 @@ onMounted(() => {
       background: rgba(203, 55, 53, 0.1);
       color: #cb3735;
     }
+
+    &.cargo {
+      background: rgba(206, 65, 43, 0.1);
+      color: #ce412b;
+    }
   }
 }
 
@@ -733,6 +918,10 @@ onMounted(() => {
 
     &.npm {
       color: #cb3735;
+    }
+
+    &.cargo {
+      color: #ce412b;
     }
   }
 }

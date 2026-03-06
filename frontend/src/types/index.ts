@@ -825,7 +825,7 @@ export interface CreateGpgKeyRequest {
 // Package Registry Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type PackageType = 'docker' | 'npm' | 'maven' | 'pypi' | 'generic'
+export type PackageType = 'docker' | 'npm' | 'cargo' | 'maven' | 'pypi' | 'generic'
 export type PackageStatus = 'default' | 'hidden' | 'pending_destruction'
 
 export interface Package {

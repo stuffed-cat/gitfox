@@ -378,7 +378,8 @@ const routes = [
         meta: { requiresAuth: false }
       },
       {
-        path: '-/packages/:packageId',
+        // 使用 type + name 作为标识符，因为 registry API 按包名工作
+        path: '-/packages/:packageType/:packageName',
         name: 'PackageDetail',
         component: () => import('@/views/packages/PackageDetailView.vue'),
         meta: { requiresAuth: false }

@@ -222,7 +222,24 @@ class ApiClient {
 
   // Server config
   config = {
-    get: async (): Promise<{ ssh_enabled: boolean; ssh_clone_url_prefix: string; http_clone_url_prefix: string }> => {
+    get: async (): Promise<{ 
+      ssh_enabled: boolean
+      ssh_clone_url_prefix: string
+      http_clone_url_prefix: string
+      webide_enabled: boolean
+      gitfox_integration_enabled: boolean
+      openvscode_server_uri?: string
+      openvscode_server_commit?: string
+      openvscode_server_quality?: string
+      vscode_extensions_enabled: boolean
+      vscode_marketplace_service_url?: string
+      vscode_marketplace_item_url?: string
+      vscode_marketplace_resource_url?: string
+      registry_domain: string
+      registry_npm_enabled: boolean
+      registry_docker_enabled: boolean
+      registry_cargo_enabled: boolean
+    }> => {
       const response = await this.client.get('/config')
       return response.data
     }
@@ -1017,6 +1034,198 @@ class ApiClient {
       await this.client.delete(`/${namespace}/${project}/-/packages/${packageId}/versions/${version}`)
     }
   }
+
+  // Registry API - 使用 workhorse 提供的标准 registry API
+  // 这些 API 使用 registry_domain（如果配置）或当前主机
+  registry = {
+    // 获取 registry base URL
+    getBaseUrl: (registryDomain?: string): string => {
+      if (registryDomain) {
+        // 如果有 registry_domain 配置，使用它
+        const protocol = window.location.protocol
+        return `${protocol}//${registryDomain}`
+      }
+      // 否则使用当前主机（workhorse）
+      return window.location.origin
+    },
+
+    // NPM: 搜索包
+    // GET /npm/-/v1/search?text=@{scope}&size=100
+    searchNpm: async (
+      registryDomain: string | undefined,
+      scope: string,
+      query?: string
+    ): Promise<NpmSearchResponse> => {
+      const baseUrl = api.registry.getBaseUrl(registryDomain)
+      const searchText = query ? `@${scope} ${query}` : `@${scope}`
+      const response = await axios.get(`${baseUrl}/npm/-/v1/search`, {
+        params: { text: searchText, size: 100 }
+      })
+      return response.data
+    },
+
+    // Docker: 获取 catalog
+    // GET /v2/_catalog
+    getDockerCatalog: async (registryDomain: string | undefined): Promise<DockerCatalogResponse> => {
+      const baseUrl = api.registry.getBaseUrl(registryDomain)
+      const response = await axios.get(`${baseUrl}/v2/_catalog`)
+      return response.data
+    },
+
+    // Docker: 获取指定仓库的标签
+    // GET /v2/{name}/tags/list
+    getDockerTags: async (
+      registryDomain: string | undefined,
+      namespace: string,
+      project: string,
+      imageName: string
+    ): Promise<DockerTagsResponse> => {
+      const baseUrl = api.registry.getBaseUrl(registryDomain)
+      const name = `${namespace}/${project}/${imageName}`
+      const response = await axios.get(`${baseUrl}/v2/${name}/tags/list`)
+      return response.data
+    },
+
+    // Cargo: 搜索 crates
+    // GET /cargo/{namespace}/api/v1/crates?q=&per_page=100
+    searchCargo: async (
+      registryDomain: string | undefined,
+      namespace: string,
+      query?: string
+    ): Promise<CargoSearchResponse> => {
+      const baseUrl = api.registry.getBaseUrl(registryDomain)
+      const response = await axios.get(`${baseUrl}/cargo/${namespace}/api/v1/crates`, {
+        params: { q: query || '', per_page: 100 }
+      })
+      return response.data
+    },
+
+    // Cargo: 获取单个 crate 信息
+    // GET /cargo/{namespace}/api/v1/crates/{name}
+    getCargoCrate: async (
+      registryDomain: string | undefined,
+      namespace: string,
+      name: string
+    ): Promise<CargoCrateInfo> => {
+      const baseUrl = api.registry.getBaseUrl(registryDomain)
+      const response = await axios.get(`${baseUrl}/cargo/${namespace}/api/v1/crates/${name}`)
+      return response.data
+    },
+
+    // NPM: 获取单个包信息（npm registry 标准格式）
+    // GET /npm/@{scope}/{name}
+    getNpmPackage: async (
+      registryDomain: string | undefined,
+      scope: string,
+      name: string
+    ): Promise<NpmPackageInfo> => {
+      const baseUrl = api.registry.getBaseUrl(registryDomain)
+      const response = await axios.get(`${baseUrl}/npm/@${scope}/${name}`)
+      return response.data
+    }
+  }
+}
+
+// Registry API 响应类型
+export interface NpmSearchResponse {
+  objects: Array<{
+    package: {
+      name: string
+      scope?: string
+      version: string
+      description?: string
+      keywords?: string[]
+      date?: string
+      links?: {
+        npm?: string
+        homepage?: string
+        repository?: string
+        bugs?: string
+      }
+      publisher?: {
+        username: string
+        email?: string
+      }
+    }
+    score?: {
+      final: number
+    }
+  }>
+  total: number
+  time: string
+}
+
+export interface DockerCatalogResponse {
+  repositories: string[]
+}
+
+export interface DockerTagsResponse {
+  name: string
+  tags: string[]
+}
+
+export interface CargoSearchResponse {
+  crates: Array<{
+    name: string
+    max_version: string
+    description?: string
+    homepage?: string
+    repository?: string
+    documentation?: string
+    downloads: number
+    recent_downloads: number
+  }>
+  meta: {
+    total: number
+  }
+}
+
+export interface CargoCrateInfo {
+  crate: {
+    name: string
+    description?: string
+    homepage?: string
+    documentation?: string
+    repository?: string
+    downloads: number
+    recent_downloads: number
+    max_version: string
+    created_at: string
+    updated_at: string
+  }
+  versions: Array<{
+    num: string
+    dl_path: string
+    yanked: boolean
+    created_at: string
+    crate_size?: number
+  }>
+}
+
+// NPM 包信息（npm registry 标准格式）
+export interface NpmPackageInfo {
+  name: string
+  'dist-tags': Record<string, string>
+  versions: Record<string, {
+    name: string
+    version: string
+    description?: string
+    license?: string
+    dependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
+    peerDependencies?: Record<string, string>
+    dist: {
+      tarball: string
+      shasum?: string
+      integrity?: string
+    }
+  }>
+  time?: Record<string, string>  // version -> publish time
+  description?: string
+  license?: string
+  homepage?: string
+  repository?: { type?: string; url: string } | string
+  readme?: string
 }
 
 const apiClient = new ApiClient()

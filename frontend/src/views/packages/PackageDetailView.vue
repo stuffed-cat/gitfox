@@ -26,6 +26,10 @@
           <svg v-else-if="pkg.package_type === 'npm'" viewBox="0 0 16 16" fill="none">
             <path d="M2 3h12v10H2V3zM5 6v4h2V7h1v3h3V6H5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
+          <svg v-else-if="pkg.package_type === 'cargo'" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6.5" stroke="currentColor" fill="none" stroke-width="1.2"/>
+            <circle cx="8" cy="8" r="2" fill="currentColor"/>
+          </svg>
           <svg v-else viewBox="0 0 16 16" fill="none">
             <path d="M8 1L1 4v8l7 3 7-3V4L8 1zM8 8v7M1 4l7 4 7-4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -239,10 +243,11 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { api } from '@/api'
+import type { NpmPackageInfo, CargoCrateInfo } from '@/api'
 import { useAuthStore } from '@/stores/auth'
-import type { Package, PackageFile, ProjectMember } from '@/types'
+import type { Package, PackageFile, ProjectMember, PackageType } from '@/types'
 
 interface DockerManifest {
   digest: string
@@ -270,7 +275,6 @@ const props = defineProps<{
 }>()
 
 const route = useRoute()
-const router = useRouter()
 const authStore = useAuthStore()
 
 // 状态
@@ -282,15 +286,21 @@ const files = ref<PackageFile[]>([])
 const dockerManifest = ref<DockerManifest | null>(null)
 const npmMetadata = ref<NpmMetadata | null>(null)
 const copied = ref(false)
+const serverConfig = ref<{ registry_domain: string } | null>(null)
 
 // 从项目或路由获取信息
 const namespace = computed(() => props.project?.namespace?.path || route.params.namespace as string)
 const projectName = computed(() => props.project?.name || route.params.project as string)
-const packageId = computed(() => route.params.packageId as string)
+const packageType = computed(() => route.params.packageType as string)
+const packageName = computed(() => route.params.packageName as string)
 
-// Registry 域名
+// Registry 域名 - 从后端配置获取
 const registryDomain = computed(() => {
-  return window.location.hostname.replace(/^[^.]+/, 'registry')
+  if (serverConfig.value?.registry_domain) {
+    return serverConfig.value.registry_domain
+  }
+  // 降级到当前主机名
+  return window.location.host
 })
 
 // 权限 - 检查当前用户是否为项目 owner、maintainer 或 developer
@@ -329,72 +339,160 @@ const installCommand = computed(() => {
     return `docker pull ${fullImageName.value}`
   } else if (pkg.value.package_type === 'npm') {
     return `npm install ${fullPackageName.value}`
+  } else if (pkg.value.package_type === 'cargo') {
+    return `cargo add ${pkg.value.name}@${pkg.value.version} --registry ${namespace.value}`
   }
   return ''
 })
 
-// 加载包详情
+// 加载服务器配置
+async function loadServerConfig() {
+  try {
+    const config = await api.config.get()
+    serverConfig.value = { registry_domain: config.registry_domain }
+  } catch (error) {
+    console.error('Failed to load server config:', error)
+  }
+}
+
+// 加载包详情 - 使用 workhorse 的 registry API
 async function loadPackage() {
-  if (!namespace.value || !projectName.value || !packageId.value) return
+  if (!namespace.value || !projectName.value || !packageType.value || !packageName.value) return
   
   loading.value = true
   try {
-    // 加载包基本信息
-    const pkgResponse = await api.packages.get(namespace.value, projectName.value, packageId.value)
-    pkg.value = pkgResponse.data
-
-    // 加载版本列表
-    if (pkg.value) {
-      const versionsResponse = await api.packages.listVersions(
-        namespace.value, 
-        projectName.value, 
-        pkg.value.name
-      )
-      versions.value = versionsResponse.data || []
-
-      // 加载文件列表
-      const filesResponse = await api.packages.listFiles(
+    const registryDomainValue = serverConfig.value?.registry_domain
+    const type = packageType.value as PackageType
+    
+    if (type === 'npm') {
+      // NPM: 使用 npm registry 标准 API
+      const npmPkg: NpmPackageInfo = await api.registry.getNpmPackage(
+        registryDomainValue,
         namespace.value,
-        projectName.value,
-        packageId.value
+        packageName.value
       )
-      files.value = filesResponse.data || []
-
-      // 加载特定类型的元数据
-      // Docker manifest 和 npm 元数据暂时从 package metadata 字段获取
-      // 后续可以通过专门的 API 获取更详细的信息
-      if (pkg.value.package_type === 'docker' && pkg.value.metadata) {
-        try {
-          const meta = typeof pkg.value.metadata === 'string' 
-            ? JSON.parse(pkg.value.metadata) 
-            : pkg.value.metadata
-          if (meta.manifest) {
-            dockerManifest.value = meta.manifest
-          }
-        } catch { /* ignore parse errors */ }
-      } else if (pkg.value.package_type === 'npm' && pkg.value.metadata) {
-        try {
-          const meta = typeof pkg.value.metadata === 'string' 
-            ? JSON.parse(pkg.value.metadata) 
-            : pkg.value.metadata
-          npmMetadata.value = {
-            description: meta.description,
-            license: meta.license,
-            homepage: meta.homepage,
-            repository: meta.repository?.url || meta.repository,
-            dependencies: meta.dependencies
-          }
-        } catch { /* ignore parse errors */ }
+      
+      // 获取最新版本
+      const latestVersion = npmPkg['dist-tags']?.latest || Object.keys(npmPkg.versions || {})[0] || ''
+      const versionInfo = npmPkg.versions?.[latestVersion]
+      
+      // 转换为 Package 格式
+      pkg.value = {
+        id: 0, // npm 没有数字 ID
+        project_id: props.project?.id || 0,
+        name: packageName.value,
+        version: latestVersion,
+        package_type: 'npm',
+        status: 'default',
+        created_at: npmPkg.time?.[latestVersion] || new Date().toISOString(),
+        updated_at: npmPkg.time?.[latestVersion] || new Date().toISOString(),
       }
       
-      // 加载项目成员用于权限检查
-      try {
-        members.value = await api.projects.getMembers({
-          namespace: namespace.value,
-          project: projectName.value
-        })
-      } catch { /* ignore - may not have permission to view members */ }
+      // 填充版本列表
+      versions.value = Object.keys(npmPkg.versions || {}).map((ver, idx) => ({
+        id: idx,
+        project_id: props.project?.id || 0,
+        name: packageName.value,
+        version: ver,
+        package_type: 'npm' as PackageType,
+        status: 'default' as const,
+        created_at: npmPkg.time?.[ver] || new Date().toISOString(),
+        updated_at: npmPkg.time?.[ver] || new Date().toISOString(),
+      }))
+      
+      // 填充 npm 元数据
+      npmMetadata.value = {
+        description: versionInfo?.description || npmPkg.description,
+        license: versionInfo?.license || npmPkg.license,
+        homepage: npmPkg.homepage,
+        repository: typeof npmPkg.repository === 'string' ? npmPkg.repository : npmPkg.repository?.url,
+        dependencies: versionInfo?.dependencies
+      }
+      
+    } else if (type === 'cargo') {
+      // Cargo: 使用 crates API
+      const crateInfo: CargoCrateInfo = await api.registry.getCargoCrate(
+        registryDomainValue,
+        namespace.value,
+        packageName.value
+      )
+      
+      // 转换为 Package 格式
+      pkg.value = {
+        id: 0,
+        project_id: props.project?.id || 0,
+        name: crateInfo.crate.name,
+        version: crateInfo.crate.max_version,
+        package_type: 'cargo',
+        status: 'default',
+        created_at: crateInfo.crate.created_at,
+        updated_at: crateInfo.crate.updated_at,
+      }
+      
+      // 填充版本列表
+      versions.value = crateInfo.versions.map((ver, idx) => ({
+        id: idx,
+        project_id: props.project?.id || 0,
+        name: crateInfo.crate.name,
+        version: ver.num,
+        package_type: 'cargo' as PackageType,
+        status: ver.yanked ? 'hidden' as const : 'default' as const,
+        created_at: ver.created_at,
+        updated_at: ver.created_at,
+        size: ver.crate_size,
+      }))
+      
+      // Cargo 元数据填充到 npmMetadata（复用字段）
+      npmMetadata.value = {
+        description: crateInfo.crate.description,
+        homepage: crateInfo.crate.homepage,
+        repository: crateInfo.crate.repository,
+      }
+      
+    } else if (type === 'docker') {
+      // Docker: 使用 tags API
+      const tagsResponse = await api.registry.getDockerTags(
+        registryDomainValue,
+        namespace.value,
+        projectName.value,
+        packageName.value
+      )
+      
+      // Docker 只有 tags，选择第一个作为当前版本
+      const currentTag = tagsResponse.tags?.[0] || 'latest'
+      
+      pkg.value = {
+        id: 0,
+        project_id: props.project?.id || 0,
+        name: packageName.value,
+        version: currentTag,
+        package_type: 'docker',
+        status: 'default',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+      
+      // 每个 tag 作为一个版本
+      versions.value = (tagsResponse.tags || []).map((tag, idx) => ({
+        id: idx,
+        project_id: props.project?.id || 0,
+        name: packageName.value,
+        version: tag,
+        package_type: 'docker' as PackageType,
+        status: 'default' as const,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }))
     }
+    
+    // 加载项目成员用于权限检查
+    try {
+      members.value = await api.projects.getMembers({
+        namespace: namespace.value,
+        project: projectName.value
+      })
+    } catch { /* ignore - may not have permission to view members */ }
+    
   } catch (error) {
     console.error('Failed to load package:', error)
     pkg.value = null
@@ -412,21 +510,13 @@ function copyCommand() {
   }, 2000)
 }
 
-// 删除包
+// 删除包 - 注意：registry API 不支持删除，这需要通过其他方式实现
 async function deletePackage() {
   if (!pkg.value) return
   
-  if (!confirm(`确定要删除软件包 ${pkg.value.name} v${pkg.value.version} 吗？此操作不可撤销。`)) {
-    return
-  }
-
-  try {
-    await api.packages.delete(namespace.value, projectName.value, packageId.value)
-    router.push({ name: 'Packages' })
-  } catch (error) {
-    console.error('Failed to delete package:', error)
-    alert('删除失败')
-  }
+  // Registry API 通常不支持直接删除，需要使用 yank（cargo）或 unpublish（npm）
+  // 这里只显示警告
+  alert('删除功能暂不可用。对于 Cargo，请使用 cargo yank；对于 npm，请使用 npm unpublish。')
 }
 
 // 格式化日期
@@ -447,8 +537,10 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
-onMounted(() => {
-  loadPackage()
+onMounted(async () => {
+  // 先加载配置，因为 loadPackage 依赖 serverConfig
+  await loadServerConfig()
+  await loadPackage()
 })
 </script>
 
@@ -524,6 +616,11 @@ onMounted(() => {
       background: rgba(203, 55, 53, 0.08);
       color: #cb3735;
     }
+
+    &.cargo {
+      background: rgba(206, 65, 43, 0.08);
+      color: #ce412b;
+    }
   }
 
   .header-info {
@@ -563,6 +660,11 @@ onMounted(() => {
         &.npm {
           background: rgba(203, 55, 53, 0.1);
           color: #cb3735;
+        }
+
+        &.cargo {
+          background: rgba(206, 65, 43, 0.1);
+          color: #ce412b;
         }
 
         &.generic {

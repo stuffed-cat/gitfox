@@ -53,6 +53,14 @@ pub struct ServerConfigResponse {
     pub vscode_marketplace_item_url: Option<String>,
     /// VS Code marketplace resource URL template
     pub vscode_marketplace_resource_url: Option<String>,
+    /// Registry domain (empty string means use current host)
+    pub registry_domain: String,
+    /// npm Registry enabled
+    pub registry_npm_enabled: bool,
+    /// Docker Registry enabled
+    pub registry_docker_enabled: bool,
+    /// Cargo Registry enabled
+    pub registry_cargo_enabled: bool,
 }
 
 /// GET /api/v1/config - Get public server configuration
@@ -104,6 +112,13 @@ pub async fn get_server_config(
     let gitfox_integration_enabled = get_bool_config("gitfox_integration_enabled");
     let vscode_extensions_enabled = get_bool_config("vscode_extensions_enabled");
     
+    // Registry 配置 - 从 AppConfig 环境变量读取
+    let registry_domain = config.registry_domain.clone()
+        .unwrap_or_else(|| connection_info.host().to_string());
+    let registry_npm_enabled = config.registry_npm_enabled;
+    let registry_docker_enabled = config.registry_docker_enabled;
+    let registry_cargo_enabled = config.registry_cargo_enabled;
+    
     // 只有在集成启用时才返回服务器信息
     let (openvscode_server_uri, openvscode_server_commit, openvscode_server_quality) = if gitfox_integration_enabled {
         (
@@ -120,6 +135,10 @@ pub async fn get_server_config(
         ssh_clone_url_prefix,
         http_clone_url_prefix,
         webide_enabled,
+        registry_domain,
+        registry_npm_enabled,
+        registry_docker_enabled,
+        registry_cargo_enabled,
         gitfox_integration_enabled,
         openvscode_server_uri,
         openvscode_server_commit,

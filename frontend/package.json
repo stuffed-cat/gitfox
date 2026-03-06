@@ -22,6 +22,7 @@
     "marked-highlight": "^2.2.3",
     "monaco-editor": "^0.55.1",
     "pinia": "^2.1.7",
+    "simple-icons": "^16.10.0",
     "vue": "^3.4.0",
     "vue-router": "^4.2.5",
     "yaml": "^2.8.2"

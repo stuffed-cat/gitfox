@@ -190,6 +190,14 @@ pub struct Config {
     pub gitlayer_address: Option<String>,
     /// LFS link expiration time in seconds (default: 3600 = 1 hour)
     pub lfs_link_expires: Option<i64>,
+    /// Registry domain (if set, used for package registry URLs)
+    pub registry_domain: Option<String>,
+    /// Whether npm Registry is enabled
+    pub registry_npm_enabled: bool,
+    /// Whether Docker Registry is enabled
+    pub registry_docker_enabled: bool,
+    /// Whether Cargo Registry is enabled
+    pub registry_cargo_enabled: bool,
 }
 
 impl Config {
@@ -306,6 +314,16 @@ impl Config {
             lfs_link_expires: env::var("LFS_LINK_EXPIRES")
                 .ok()
                 .and_then(|s| s.parse().ok()),
+            registry_domain: env::var("REGISTRY_DOMAIN").ok().filter(|s| !s.is_empty()),
+            registry_npm_enabled: env::var("REGISTRY_NPM_ENABLED")
+                .map(|v| v.to_lowercase() == "true" || v == "1")
+                .unwrap_or(true),
+            registry_docker_enabled: env::var("REGISTRY_DOCKER_ENABLED")
+                .map(|v| v.to_lowercase() == "true" || v == "1")
+                .unwrap_or(true),
+            registry_cargo_enabled: env::var("REGISTRY_CARGO_ENABLED")
+                .map(|v| v.to_lowercase() == "true" || v == "1")
+                .unwrap_or(true),
         }
     }
 }

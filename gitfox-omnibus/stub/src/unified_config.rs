@@ -724,6 +724,10 @@ pub struct RegistryConfig {
     #[serde(default = "default_true")]
     pub npm_enabled: bool,
 
+    /// 是否启用 Cargo Registry
+    #[serde(default = "default_true")]
+    pub cargo_enabled: bool,
+
     /// Registry 存储路径
     #[serde(default = "default_registry_storage_path")]
     pub storage_path: String,
@@ -1376,9 +1380,9 @@ impl GitFoxConfig {
             }
             
             // 更新版本号
-            self.version = "1.1.1".to_string();
+            self.version = CONFIG_VERSION.to_string();
             migrated = true;
-            tracing::info!("Config migrated to version 1.1.1");
+            tracing::info!("Config migrated to version {}", CONFIG_VERSION);
         }
 
         Ok(migrated)
@@ -1587,7 +1591,7 @@ impl GitFoxConfig {
             static_cache_control: self.workhorse.static_cache_control.clone(),
             
             // Registry
-            registry_enabled: self.registry.enabled,
+            registry_enabled: self.registry.docker_enabled || self.registry.npm_enabled || self.registry.cargo_enabled,
             registry_domain: self.registry.domain.clone(),
             registry_docker_enabled: self.registry.docker_enabled,
             registry_npm_enabled: self.registry.npm_enabled,
@@ -1756,7 +1760,7 @@ impl GitFoxConfig {
             gitlayer_address: self.internal.get_gitlayer_address(),
 
             // Package Registry
-            registry_enabled: self.registry.enabled,
+            registry_enabled: self.registry.docker_enabled || self.registry.npm_enabled || self.registry.cargo_enabled,
             registry_domain: self.registry.domain.clone(),
             registry_docker_enabled: self.registry.docker_enabled,
             registry_npm_enabled: self.registry.npm_enabled,
