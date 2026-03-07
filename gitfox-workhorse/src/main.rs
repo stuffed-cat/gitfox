@@ -12,6 +12,7 @@ mod static_files;
 use actix_cors::Cors;
 use actix_files::Files;
 use actix_web::{
+    guard,
     middleware::{Compress, Logger},
     web, App, HttpRequest, HttpServer,
 };
@@ -186,11 +187,8 @@ async fn main() -> std::io::Result<()> {
         
         let npm_state = if config.registry_npm_enabled {
             tracing::info!("npm Registry enabled");
-            let base_url = if let Some(ref domain) = config.registry_domain {
-                format!("https://{}", domain)
-            } else {
-                config.backend_url.clone()
-            };
+            // registry_domain 在 config.validate() 中已验证为必需
+            let base_url = format!("https://{}", config.registry_domain.as_ref().unwrap());
             let state = registry::NpmRegistryState::new(
                 registry_config.clone(),
                 config.shell_secret.clone(),
@@ -208,11 +206,8 @@ async fn main() -> std::io::Result<()> {
 
         let cargo_state = if config.registry_cargo_enabled {
             tracing::info!("Cargo Registry enabled");
-            let base_url = if let Some(ref domain) = config.registry_domain {
-                format!("https://{}", domain)
-            } else {
-                config.backend_url.clone()
-            };
+            // registry_domain 在 config.validate() 中已验证为必需
+            let base_url = format!("https://{}", config.registry_domain.as_ref().unwrap());
             let state = registry::cargo::CargoRegistryState::new(
                 registry_config.clone(),
                 config.shell_secret.clone(),
@@ -359,102 +354,135 @@ async fn main() -> std::io::Result<()> {
         }
         
         // 添加 Docker Registry 路由（如果启用）
+        // 使用 Host guard 确保只响应 registry_domain 的请求
         if let Some(ref docker_data) = docker_registry_state {
+            let registry_domain = config_data.registry_domain.clone().unwrap();
             app = app
                 .app_data(docker_data.clone())
-                // Docker Registry V2 API
-                .route("/v2/", web::get().to(registry::handle_v2_check))
-                .route("/v2", web::get().to(registry::handle_v2_check))
-                .route("/v2/auth", web::get().to(registry::handle_token_auth))
-                .route("/v2/_catalog", web::get().to(registry::handle_catalog))
-                // Blob 操作
-                .route("/v2/{name:.*}/blobs/{digest}", web::head().to(registry::handle_blob_head))
-                .route("/v2/{name:.*}/blobs/{digest}", web::get().to(registry::handle_blob_get))
-                .route("/v2/{name:.*}/blobs/{digest}", web::delete().to(registry::handle_blob_delete))
-                // Blob 上传
                 .service(
-                    web::resource("/v2/{name:.*}/blobs/uploads/")
-                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
-                        .route(web::post().to(registry::handle_blob_upload_start))
-                )
-                .service(
-                    web::resource("/v2/{name:.*}/blobs/uploads/{uuid}")
-                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
-                        .route(web::patch().to(registry::handle_blob_upload_patch))
-                        .route(web::put().to(registry::handle_blob_upload_put))
-                        .route(web::delete().to(registry::handle_blob_upload_delete))
-                )
-                // Manifest 操作
-                .route("/v2/{name:.*}/manifests/{reference}", web::head().to(registry::handle_manifest_head))
-                .route("/v2/{name:.*}/manifests/{reference}", web::get().to(registry::handle_manifest_get))
-                .service(
-                    web::resource("/v2/{name:.*}/manifests/{reference}")
-                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
-                        .route(web::put().to(registry::handle_manifest_put))
-                        .route(web::delete().to(registry::handle_manifest_delete))
-                )
-                // Tags 列表
-                .route("/v2/{name:.*}/tags/list", web::get().to(registry::handle_tags_list));
+                    web::scope("/v2")
+                        .guard(guard::Host(registry_domain))
+                        // Docker Registry V2 API
+                        .route("/", web::get().to(registry::handle_v2_check))
+                        .route("", web::get().to(registry::handle_v2_check))
+                        .route("/auth", web::get().to(registry::handle_token_auth))
+                        .route("/_catalog", web::get().to(registry::handle_catalog))
+                        // Blob 操作
+                        .route("/{name:.*}/blobs/{digest}", web::head().to(registry::handle_blob_head))
+                        .route("/{name:.*}/blobs/{digest}", web::get().to(registry::handle_blob_get))
+                        .route("/{name:.*}/blobs/{digest}", web::delete().to(registry::handle_blob_delete))
+                        // Blob 上传
+                        .service(
+                            web::resource("/{name:.*}/blobs/uploads/")
+                                .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                                .route(web::post().to(registry::handle_blob_upload_start))
+                        )
+                        .service(
+                            web::resource("/{name:.*}/blobs/uploads/{uuid}")
+                                .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                                .route(web::patch().to(registry::handle_blob_upload_patch))
+                                .route(web::put().to(registry::handle_blob_upload_put))
+                                .route(web::delete().to(registry::handle_blob_upload_delete))
+                        )
+                        // Manifest 操作
+                        .route("/{name:.*}/manifests/{reference}", web::head().to(registry::handle_manifest_head))
+                        .route("/{name:.*}/manifests/{reference}", web::get().to(registry::handle_manifest_get))
+                        .service(
+                            web::resource("/{name:.*}/manifests/{reference}")
+                                .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                                .route(web::put().to(registry::handle_manifest_put))
+                                .route(web::delete().to(registry::handle_manifest_delete))
+                        )
+                        // Tags 列表
+                        .route("/{name:.*}/tags/list", web::get().to(registry::handle_tags_list))
+                );
         }
         
         // 添加 npm Registry 路由（如果启用）
+        // 使用 Host guard 确保只响应 registry_domain 的请求
         if let Some(ref npm_data) = npm_registry_state {
+            let registry_domain = config_data.registry_domain.clone().unwrap();
             app = app
                 .app_data(npm_data.clone())
-                // npm Registry API
-                .route("/npm/-/ping", web::get().to(registry::handle_ping))
-                .route("/npm/-/whoami", web::get().to(registry::handle_whoami))
-                .route("/npm/-/user/org.couchdb.user:{username}", web::put().to(registry::handle_user_login))
-                .route("/npm/-/v1/search", web::get().to(registry::handle_search))
-                // dist-tags
-                .route("/npm/-/package/@{scope}/{name}/dist-tags", web::get().to(registry::handle_dist_tags_get))
-                .route("/npm/-/package/@{scope}/{name}/dist-tags/{tag}", web::get().to(registry::handle_dist_tags_get))
-                .route("/npm/-/package/@{scope}/{name}/dist-tags/{tag}", web::put().to(registry::handle_dist_tag_put))
-                .route("/npm/-/package/@{scope}/{name}/dist-tags/{tag}", web::delete().to(registry::handle_dist_tag_delete))
-                // Scoped 包
-                .route("/npm/@{scope}/{name}", web::get().to(registry::handle_package_get_scoped))
                 .service(
-                    web::resource("/npm/@{scope}/{name}")
-                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
-                        .route(web::put().to(registry::handle_package_publish_scoped))
-                )
-                .route("/npm/@{scope}/{name}/-/{tarball}", web::get().to(registry::handle_tarball_get_scoped))
-                .route("/npm/@{scope}/{name}/-/{tarball}/-rev/{rev}", web::delete().to(registry::handle_tarball_delete_scoped))
-                // 非 scoped 包（返回错误）
-                .route("/npm/{name}", web::get().to(registry::handle_package_get));
+                    web::scope("/npm")
+                        .guard(guard::Host(registry_domain))
+                        // npm Registry API
+                        .route("/-/ping", web::get().to(registry::handle_ping))
+                        .route("/-/whoami", web::get().to(registry::handle_whoami))
+                        .route("/-/user/org.couchdb.user:{username}", web::put().to(registry::handle_user_login))
+                        .route("/-/v1/search", web::get().to(registry::handle_search))
+                        // dist-tags
+                        .route("/-/package/@{scope}/{name}/dist-tags", web::get().to(registry::handle_dist_tags_get))
+                        .route("/-/package/@{scope}/{name}/dist-tags/{tag}", web::get().to(registry::handle_dist_tags_get))
+                        .route("/-/package/@{scope}/{name}/dist-tags/{tag}", web::put().to(registry::handle_dist_tag_put))
+                        .route("/-/package/@{scope}/{name}/dist-tags/{tag}", web::delete().to(registry::handle_dist_tag_delete))
+                        // Scoped 包
+                        .route("/@{scope}/{name}", web::get().to(registry::handle_package_get_scoped))
+                        .service(
+                            web::resource("/@{scope}/{name}")
+                                .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                                .route(web::put().to(registry::handle_package_publish_scoped))
+                        )
+                        .route("/@{scope}/{name}/-/{tarball}", web::get().to(registry::handle_tarball_get_scoped))
+                        .route("/@{scope}/{name}/-/{tarball}/-rev/{rev}", web::delete().to(registry::handle_tarball_delete_scoped))
+                        // 非 scoped 包（返回错误）
+                        .route("/{name}", web::get().to(registry::handle_package_get))
+                );
         }
 
         // 添加 Cargo Registry 路由（如果启用）
+        // 使用 Host guard 确保只响应 registry_domain 的请求
         if let Some(ref cargo_data) = cargo_registry_state {
+            let registry_domain = config_data.registry_domain.clone().unwrap();
             app = app
                 .app_data(cargo_data.clone())
-                // Cargo Sparse Index API
-                .route("/cargo/{namespace}/index/config.json", web::get().to(registry::cargo::handle_config))
-                // Index 条目路径遵循 crate 名称长度规则
-                // 1 字符: /1/{name}
-                // 2 字符: /2/{name}
-                // 3 字符: /3/{first_char}/{name}
-                // 4+ 字符: /{first_two}/{next_two}/{name}
-                .route("/cargo/{namespace}/index/1/{name}", web::get().to(registry::cargo::handle_index_entry))
-                .route("/cargo/{namespace}/index/2/{name}", web::get().to(registry::cargo::handle_index_entry))
-                .route("/cargo/{namespace}/index/3/{prefix}/{name}", web::get().to(registry::cargo::handle_index_entry))
-                .route("/cargo/{namespace}/index/{prefix1}/{prefix2}/{name}", web::get().to(registry::cargo::handle_index_entry))
-                // Cargo Web API
                 .service(
-                    web::resource("/cargo/{namespace}/api/v1/crates/new")
-                        .app_data(web::PayloadConfig::new(registry_max_upload_size))
-                        .route(web::put().to(registry::cargo::handle_publish))
-                )
-                .route("/cargo/{namespace}/api/v1/crates/{name}/{version}/yank", web::delete().to(registry::cargo::handle_yank))
-                .route("/cargo/{namespace}/api/v1/crates/{name}/{version}/unyank", web::put().to(registry::cargo::handle_unyank))
-                .route("/cargo/{namespace}/api/v1/crates/{name}/owners", web::get().to(registry::cargo::handle_owners_list))
-                .route("/cargo/{namespace}/api/v1/crates/{name}/owners", web::put().to(registry::cargo::handle_owners_add))
-                .route("/cargo/{namespace}/api/v1/crates/{name}/owners", web::delete().to(registry::cargo::handle_owners_remove))
-                .route("/cargo/{namespace}/api/v1/crates/{name}/{version}/download", web::get().to(registry::cargo::handle_download))
-                .route("/cargo/{namespace}/api/v1/crates/{name}", web::get().to(registry::cargo::handle_crate_info))
-                .route("/cargo/{namespace}/api/v1/crates", web::get().to(registry::cargo::handle_search))
-                // Cargo 登录
-                .route("/cargo/{namespace}/me", web::get().to(registry::cargo::handle_login));
+                    web::scope("/cargo")
+                        .guard(guard::Host(registry_domain))
+                        // Cargo Sparse Index API
+                        .route("/{namespace}/index/config.json", web::get().to(registry::cargo::handle_config))
+                        // Index 条目路径遵循 crate 名称长度规则
+                        // 1 字符: /1/{name}
+                        // 2 字符: /2/{name}
+                        // 3 字符: /3/{first_char}/{name}
+                        // 4+ 字符: /{first_two}/{next_two}/{name}
+                        .route("/{namespace}/index/1/{name}", web::get().to(registry::cargo::handle_index_entry))
+                        .route("/{namespace}/index/2/{name}", web::get().to(registry::cargo::handle_index_entry))
+                        .route("/{namespace}/index/3/{prefix}/{name}", web::get().to(registry::cargo::handle_index_entry))
+                        .route("/{namespace}/index/{prefix1}/{prefix2}/{name}", web::get().to(registry::cargo::handle_index_entry))
+                        // Cargo Web API
+                        .service(
+                            web::resource("/{namespace}/api/v1/crates/new")
+                                .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                                .route(web::put().to(registry::cargo::handle_publish))
+                        )
+                        .route("/{namespace}/api/v1/crates/{name}/{version}/yank", web::delete().to(registry::cargo::handle_yank))
+                        .route("/{namespace}/api/v1/crates/{name}/{version}/unyank", web::put().to(registry::cargo::handle_unyank))
+                        .route("/{namespace}/api/v1/crates/{name}/owners", web::get().to(registry::cargo::handle_owners_list))
+                        .route("/{namespace}/api/v1/crates/{name}/owners", web::put().to(registry::cargo::handle_owners_add))
+                        .route("/{namespace}/api/v1/crates/{name}/owners", web::delete().to(registry::cargo::handle_owners_remove))
+                        .route("/{namespace}/api/v1/crates/{name}/{version}/download", web::get().to(registry::cargo::handle_download))
+                        .route("/{namespace}/api/v1/crates/{name}", web::get().to(registry::cargo::handle_crate_info))
+                        .route("/{namespace}/api/v1/crates", web::get().to(registry::cargo::handle_search))
+                        // Cargo 登录
+                        .route("/{namespace}/me", web::get().to(registry::cargo::handle_login))
+                );
+        }
+
+        // Registry domain catch-all 404
+        // 对于 registry_domain 的任何未匹配路径返回 404，防止 fallback 到主应用路由
+        if config_data.registry_enabled {
+            let registry_domain = config_data.registry_domain.clone().unwrap();
+            app = app.service(
+                web::scope("")
+                    .guard(guard::Host(registry_domain))
+                    .default_service(web::to(|| async {
+                        actix_web::HttpResponse::NotFound()
+                            .content_type("application/json")
+                            .body(r#"{"error": "Not Found"}"#)
+                    }))
+            );
         }
             
         // Git HTTP 协议 - 直接通过 GitLayer gRPC 处理（流式传输）

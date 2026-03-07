@@ -95,36 +95,27 @@ impl GitLayerClient {
         let env_clone = env_vars.clone();
         
         // Create request stream
+        // Git protocol requires server to send refs advertisement first, so we must
+        // send the initial request immediately to let GitLayer start the git process
         let request_stream = async_stream::stream! {
-            // First message with repository info
-            let mut first = true;
+            // First message with repository info - send immediately to start git process
+            yield SshPackRequest {
+                repository: Some(repo_clone.clone()),
+                stdin: Vec::new(),
+                env_vars: env_clone.clone(),
+            };
             
+            // Forward stdin data from SSH client to GitLayer
             tokio::pin!(stdin_stream);
             
             while let Some(data) = stdin_stream.next().await {
-                if first {
-                    yield SshPackRequest {
-                        repository: Some(repo_clone.clone()),
-                        stdin: data,
-                        env_vars: env_clone.clone(),
-                    };
-                    first = false;
-                } else {
+                if !data.is_empty() {
                     yield SshPackRequest {
                         repository: None,
                         stdin: data,
                         env_vars: HashMap::new(),
                     };
                 }
-            }
-            
-            // Send final request if nothing was sent
-            if first {
-                yield SshPackRequest {
-                    repository: Some(repo_clone.clone()),
-                    stdin: Vec::new(),
-                    env_vars: env_clone.clone(),
-                };
             }
         };
         
@@ -163,34 +154,28 @@ impl GitLayerClient {
         let repo_clone = repository.clone();
         let env_clone = env_vars.clone();
         
+        // Create request stream
+        // Git protocol requires server to send refs advertisement first, so we must
+        // send the initial request immediately to let GitLayer start the git process
         let request_stream = async_stream::stream! {
-            let mut first = true;
+            // First message with repository info - send immediately to start git process
+            yield SshPackRequest {
+                repository: Some(repo_clone.clone()),
+                stdin: Vec::new(),
+                env_vars: env_clone.clone(),
+            };
             
+            // Forward stdin data from SSH client to GitLayer
             tokio::pin!(stdin_stream);
             
             while let Some(data) = stdin_stream.next().await {
-                if first {
-                    yield SshPackRequest {
-                        repository: Some(repo_clone.clone()),
-                        stdin: data,
-                        env_vars: env_clone.clone(),
-                    };
-                    first = false;
-                } else {
+                if !data.is_empty() {
                     yield SshPackRequest {
                         repository: None,
                         stdin: data,
                         env_vars: HashMap::new(),
                     };
                 }
-            }
-            
-            if first {
-                yield SshPackRequest {
-                    repository: Some(repo_clone.clone()),
-                    stdin: Vec::new(),
-                    env_vars: env_clone.clone(),
-                };
             }
         };
         
@@ -229,34 +214,26 @@ impl GitLayerClient {
         let repo_clone = repository.clone();
         let env_clone = env_vars.clone();
         
+        // Create request stream for upload-archive
         let request_stream = async_stream::stream! {
-            let mut first = true;
+            // First message with repository info - send immediately
+            yield SshPackRequest {
+                repository: Some(repo_clone.clone()),
+                stdin: Vec::new(),
+                env_vars: env_clone.clone(),
+            };
             
+            // Forward stdin data from SSH client to GitLayer
             tokio::pin!(stdin_stream);
             
             while let Some(data) = stdin_stream.next().await {
-                if first {
-                    yield SshPackRequest {
-                        repository: Some(repo_clone.clone()),
-                        stdin: data,
-                        env_vars: env_clone.clone(),
-                    };
-                    first = false;
-                } else {
+                if !data.is_empty() {
                     yield SshPackRequest {
                         repository: None,
                         stdin: data,
                         env_vars: HashMap::new(),
                     };
                 }
-            }
-            
-            if first {
-                yield SshPackRequest {
-                    repository: Some(repo_clone.clone()),
-                    stdin: Vec::new(),
-                    env_vars: env_clone.clone(),
-                };
             }
         };
         

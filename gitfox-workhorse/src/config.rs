@@ -96,7 +96,7 @@ pub struct Config {
     pub registry_enabled: bool,
 
     /// Registry 独立域名（如 registry.gitfox.studio）
-    /// 为空则使用主域名的 /v2/ 和 /npm/ 路径
+    /// 启用 Registry 时必须配置，不支持使用主域名
     #[serde(default)]
     pub registry_domain: Option<String>,
 
@@ -304,6 +304,16 @@ impl Config {
         // 如果使用 HTTP URL，验证格式
         if self.backend_socket.is_none() && !self.backend_url.starts_with("http://") && !self.backend_url.starts_with("https://") {
             anyhow::bail!("backend_url must start with http:// or https://");
+        }
+        
+        // 如果启用 Package Registry，必须配置独立域名
+        // 不允许 registry 使用主域名，会有兼容性问题（如 /v2/ 可能与其他路由冲突）
+        if self.registry_enabled && self.registry_domain.is_none() {
+            anyhow::bail!(
+                "registry_domain is required when registry is enabled. \
+                Package registry must use a dedicated domain (e.g., registry.gitfox.studio) \
+                to avoid path conflicts with the main application."
+            );
         }
 
         if !self.frontend_dist_path.exists() {
