@@ -33,6 +33,10 @@ service AuthService {
     
     // FindGpgKey - 通过key ID或指纹查找GPG密钥
     rpc FindGpgKey(FindGpgKeyRequest) returns (FindGpgKeyResponse);
+    
+    // GetSshHostKey - 获取 SSH Host Key (用于 gitfox-shell 集群部署)
+    // Shell 节点启动时从 main app 获取统一的 host key
+    rpc GetSshHostKey(GetSshHostKeyRequest) returns (GetSshHostKeyResponse);
 }
 
 // SSH访问检查请求
@@ -275,4 +279,21 @@ message FindGpgKeyResponse {
     bool revoked = 9;
     // 密钥是否已过期
     bool expired = 10;
+}
+
+// 获取 SSH Host Key 请求
+message GetSshHostKeyRequest {
+    // 空请求，需要通过 shell_token 认证
+}
+
+// 获取 SSH Host Key 响应
+message GetSshHostKeyResponse {
+    // 是否找到有效的 host key
+    bool found = 1;
+    // PEM 编码的私钥 (Ed25519 PKCS8 格式)
+    string private_key_pem = 2;
+    // OpenSSH 格式的公钥 (用于显示和验证)
+    string public_key = 3;
+    // SHA256 指纹
+    string fingerprint = 4;
 }

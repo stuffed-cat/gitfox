@@ -506,8 +506,7 @@ export interface PatScopeInfo {
 
 export interface PersonalAccessToken {
   id: number
-  name: string
-  token_last_four: string  // Also known as token_prefix
+  token_prefix: string  // Token prefix for identification (first 8 chars)
   scopes: PatScope[]
   expires_at?: string
   last_used_at?: string

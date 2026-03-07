@@ -1054,6 +1054,66 @@ impl AuthService for AuthServiceImpl {
             ..Default::default()
         }))
     }
+
+    /// 获取 SSH Host Key
+    /// 
+    /// 用于 gitfox-shell 集群部署时从 main app 获取统一的 host key。
+    /// 保证所有 shell 节点使用相同的 host key，避免客户端连接时报 host key 变化警告。
+    async fn get_ssh_host_key(
+        &self,
+        request: Request<GetSshHostKeyRequest>,
+    ) -> Result<Response<GetSshHostKeyResponse>, Status> {
+        self.verify_internal_token(&request)?;
+
+        debug!("GetSshHostKey: fetching SSH host key from database");
+
+        // 从 system_configs 读取 host key
+        let private_key: Option<String> = sqlx::query_scalar(
+            r#"SELECT value::text FROM system_configs WHERE key = 'ssh_host_key_private'"#
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?
+        .and_then(|v: String| {
+            // JSONB 存储的是带引号的字符串，需要解析
+            serde_json::from_str::<String>(&v).ok()
+        });
+
+        let public_key: Option<String> = sqlx::query_scalar(
+            r#"SELECT value::text FROM system_configs WHERE key = 'ssh_host_key_public'"#
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?
+        .and_then(|v: String| serde_json::from_str::<String>(&v).ok());
+
+        let fingerprint: Option<String> = sqlx::query_scalar(
+            r#"SELECT value::text FROM system_configs WHERE key = 'ssh_host_key_fingerprint'"#
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("Database error: {}", e)))?
+        .and_then(|v: String| serde_json::from_str::<String>(&v).ok());
+
+        match (private_key, public_key, fingerprint) {
+            (Some(priv_key), Some(pub_key), Some(fp)) if !priv_key.is_empty() => {
+                info!("Returning SSH host key with fingerprint: {}", fp);
+                Ok(Response::new(GetSshHostKeyResponse {
+                    found: true,
+                    private_key_pem: priv_key,
+                    public_key: pub_key,
+                    fingerprint: fp,
+                }))
+            }
+            _ => {
+                debug!("SSH host key not found or empty in database");
+                Ok(Response::new(GetSshHostKeyResponse {
+                    found: false,
+                    ..Default::default()
+                }))
+            }
+        }
+    }
 }
 
 impl AuthServiceImpl {

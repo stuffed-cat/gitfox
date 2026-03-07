@@ -156,6 +156,8 @@ pub struct Config {
     pub ssh_public_port: u16,
     /// Path to gitfox-shell binary
     pub gitfox_shell_path: String,
+    /// Path to SSH host key file (for synchronization between main app and shell nodes)
+    pub ssh_host_key_path: String,
     /// Initial admin username (only used on first startup when no admin exists)
     pub initial_admin_username: Option<String>,
     /// Initial admin email
@@ -269,6 +271,8 @@ impl Config {
                 .expect("Invalid SSH_PUBLIC_PORT"),
             gitfox_shell_path: env::var("GITFOX_SHELL_PATH")
                 .unwrap_or_else(|_| "./gitfox-shell/target/debug/gitfox-shell".to_string()),
+            ssh_host_key_path: env::var("SSH_HOST_KEY_PATH")
+                .unwrap_or_else(|_| "./data/ssh/host_key".to_string()),
             initial_admin_username: env::var("INITIAL_ADMIN_USERNAME").ok(),
             initial_admin_email: env::var("INITIAL_ADMIN_EMAIL").ok(),
             initial_admin_password: env::var("INITIAL_ADMIN_PASSWORD").ok(),

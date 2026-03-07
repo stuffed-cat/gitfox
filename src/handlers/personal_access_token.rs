@@ -95,13 +95,14 @@ pub async fn create_token(
     // Generate token
     let raw_token = generate_token();
     let token_hash = hash_token(&raw_token);
-    let token_last_four = raw_token.chars().skip(raw_token.len() - 4).collect::<String>();
+    // Extract first 8 characters as token prefix for identification (e.g., "gfpat_ab")
+    let token_prefix = raw_token.chars().take(8).collect::<String>();
 
     // Insert into database
     let pat = sqlx::query_as::<_, PersonalAccessToken>(
         r#"
         INSERT INTO personal_access_tokens 
-            (user_id, name, token_hash, token_last_four, scopes, expires_at, created_at)
+            (user_id, name, token_hash, token_prefix, scopes, expires_at, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, NOW())
         RETURNING *
         "#
@@ -109,7 +110,7 @@ pub async fn create_token(
     .bind(auth.user_id)
     .bind(&req.name)
     .bind(&token_hash)
-    .bind(&token_last_four)
+    .bind(&token_prefix)
     .bind(&scopes)
     .bind(expires_at)
     .fetch_one(pool.get_ref())

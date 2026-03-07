@@ -68,6 +68,16 @@ async fn main() -> std::io::Result<()> {
         log::error!("Failed to auto-configure WebIDE OAuth2: {}", e);
     }
 
+    // Ensure SSH host key is synchronized (file <-> database)
+    // This is critical for cluster deployments where all shell nodes need the same host key
+    if config.ssh_enabled {
+        let ssh_key_path = std::path::Path::new(&config.ssh_host_key_path);
+        match services::SshHostKeyService::ensure_host_key(&pg_pool, ssh_key_path).await {
+            Ok(key) => log::info!("SSH host key ready (fingerprint: {})", key.fingerprint),
+            Err(e) => log::error!("Failed to initialize SSH host key: {}", e),
+        }
+    }
+
     // Start instance heartbeat in Redis (for multi-instance coordination)
     let heartbeat_redis = redis_pool.clone();
     let heartbeat_instance_id = config.instance_id.clone();

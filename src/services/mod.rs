@@ -10,6 +10,7 @@ pub mod runner_usage;
 pub mod oauth;
 pub mod gitlayer;
 pub mod gpg_key;
+pub mod ssh_host_key;
 
 pub use user::UserService;
 pub use project::ProjectService;
@@ -21,3 +22,4 @@ pub use ci::{CiService, PipelineTriggerResult};
 pub use runner_usage::RunnerUsageService;
 pub use oauth::OAuthService;
 pub use gpg_key::GpgKeyService;
+pub use ssh_host_key::SshHostKeyService;

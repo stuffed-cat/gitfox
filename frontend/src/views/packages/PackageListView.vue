@@ -209,7 +209,7 @@ docker push {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:lates
           </div>
           <div class="code-block">
             <div class="code-label">配置 .cargo/config.toml</div>
-            <pre><code>[registries.{{ namespace }}]
+            <pre><code>[registries.{{ cargoRegistryName }}]
 index = "sparse+https://{{ registryDomain }}/cargo/{{ namespace }}/index/"
 
 [net]
@@ -217,16 +217,16 @@ git-fetch-with-cli = true</code></pre>
           </div>
           <div class="code-block">
             <div class="code-label">发布 crate</div>
-            <pre><code>cargo publish --registry {{ namespace }}</code></pre>
+            <pre><code>cargo publish --registry {{ cargoRegistryName }}</code></pre>
           </div>
           <div class="code-block">
             <div class="code-label">在 Cargo.toml 中使用</div>
             <pre><code>[dependencies]
-your-crate = { version = "0.1.0", registry = "{{ namespace }}" }</code></pre>
+your-crate = { version = "0.1.0", registry = "{{ cargoRegistryName }}" }</code></pre>
           </div>
           <div class="code-block">
             <div class="code-label">登录认证</div>
-            <pre><code>cargo login --registry {{ namespace }} YOUR_PERSONAL_ACCESS_TOKEN</code></pre>
+            <pre><code>cargo login --registry {{ cargoRegistryName }} YOUR_PERSONAL_ACCESS_TOKEN</code></pre>
           </div>
         </div>
       </div>
@@ -289,6 +289,11 @@ const projectName = computed(() => {
   return props.project?.name 
     || (route.meta.projectName as string)
     || (route.params.project as string)
+})
+
+// Cargo Registry 名称（将 / 替换为 - 以符合 Cargo 规范）
+const cargoRegistryName = computed(() => {
+  return namespace.value?.replace(/\//g, '-') || ''
 })
 
 // Registry 域名 - 从后端配置获取
@@ -486,7 +491,7 @@ function copyInstallCommand(pkg: Package) {
   } else if (pkg.package_type === 'npm') {
     command = `npm install @${namespace.value}/${pkg.name}@${pkg.version}`
   } else if (pkg.package_type === 'cargo') {
-    command = `cargo add ${pkg.name}@${pkg.version} --registry ${namespace.value}`
+    command = `cargo add ${pkg.name}@${pkg.version} --registry ${cargoRegistryName.value}`
   }
   
   navigator.clipboard.writeText(command)

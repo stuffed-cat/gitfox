@@ -282,6 +282,33 @@ impl AuthClient {
             Ok(None)
         }
     }
+
+    /// 获取 SSH Host Key
+    /// 
+    /// 用于集群部署时从 main app 获取统一的 host key
+    pub async fn get_ssh_host_key(
+        &mut self,
+    ) -> Result<Option<SshHostKeyInfo>, Box<dyn std::error::Error>> {
+        debug!("GetSshHostKey: fetching host key from main app");
+        
+        let mut request = Request::new(GetSshHostKeyRequest {});
+        self.add_auth(&mut request);
+        
+        let response = self.client.get_ssh_host_key(request).await?;
+        let resp = response.into_inner();
+        
+        if resp.found {
+            info!("Received SSH host key with fingerprint: {}", resp.fingerprint);
+            Ok(Some(SshHostKeyInfo {
+                private_key_pem: resp.private_key_pem,
+                public_key: resp.public_key,
+                fingerprint: resp.fingerprint,
+            }))
+        } else {
+            debug!("SSH host key not found in main app");
+            Ok(None)
+        }
+    }
 }
 
 /// SSH Key 信息
@@ -317,4 +344,12 @@ pub struct GpgKeyInfo {
     pub verified: bool,
     pub revoked: bool,
     pub expired: bool,
+}
+
+/// SSH Host Key 信息
+#[derive(Debug, Clone)]
+pub struct SshHostKeyInfo {
+    pub private_key_pem: String,
+    pub public_key: String,
+    pub fingerprint: String,
 }

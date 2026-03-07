@@ -47,7 +47,7 @@ impl SshServer {
 
     /// Start the SSH server
     pub async fn run(self) -> Result<(), ShellError> {
-        let host_key = load_or_generate_host_key(&self.config.host_key_path).await?;
+        let host_key = load_host_key(&self.config).await?;
         
         let russh_config = Arc::new(russh::server::Config {
             auth_rejection_time: std::time::Duration::from_secs(3),
@@ -91,34 +91,75 @@ impl SshServer {
     }
 }
 
-/// Load or generate SSH host key
-async fn load_or_generate_host_key(path: &PathBuf) -> Result<russh_keys::key::KeyPair, ShellError> {
+/// Load SSH host key with fallback to gRPC fetch from main app
+///
+/// 加载逻辑（集群部署优化）：
+/// 1. 优先读取本地文件
+/// 2. 如果文件不存在，从 main app gRPC 获取并缓存到本地
+/// 3. 都失败则报错退出（不自动生成，确保集群一致性）
+async fn load_host_key(config: &SshServerConfig) -> Result<russh_keys::key::KeyPair, ShellError> {
+    let path = &config.host_key_path;
+    
+    // 1. 尝试从本地文件加载
     if path.exists() {
-        // Load existing key
+        info!("Loading SSH host key from: {:?}", path);
         let key_data = tokio::fs::read(path)
             .await
             .map_err(|e| ShellError::Ssh(format!("Failed to read host key: {}", e)))?;
         
-        russh_keys::decode_secret_key(&String::from_utf8_lossy(&key_data), None)
-            .map_err(|e| ShellError::Ssh(format!("Failed to decode host key: {}", e)))
-    } else {
-        // Generate new key
-        info!("Generating new SSH host key at {:?}", path);
-        let key = russh_keys::key::KeyPair::generate_ed25519()
-            .ok_or_else(|| ShellError::Ssh("Failed to generate host key".to_string()))?;
-        
-        // Save the key - for now just warn that key should be pre-generated
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| ShellError::Ssh(format!("Failed to create key directory: {}", e)))?;
-        }
-        
-        // Note: In production, pre-generate the key using ssh-keygen
-        warn!("Generated ephemeral host key - pre-generate with ssh-keygen for production");
-        
-        Ok(key)
+        return russh_keys::decode_secret_key(&String::from_utf8_lossy(&key_data), None)
+            .map_err(|e| ShellError::Ssh(format!("Failed to decode host key: {}", e)));
     }
+    
+    // 2. 本地文件不存在，从 main app gRPC 获取
+    info!("Local host key not found, fetching from main app via gRPC...");
+    
+    let auth_addr = config.app_config.auth_grpc_address.as_ref()
+        .ok_or_else(|| ShellError::Config("AUTH_GRPC_ADDRESS not configured".to_string()))?;
+    
+    let mut auth_client = crate::auth_client::AuthClient::connect(
+        auth_addr,
+        config.app_config.api_secret.clone()
+    )
+    .await
+    .map_err(|e| ShellError::Ssh(format!("Failed to connect to Auth service: {}", e)))?;
+    
+    let host_key_info = auth_client
+        .get_ssh_host_key()
+        .await
+        .map_err(|e| ShellError::Ssh(format!("Failed to fetch host key from main app: {}", e)))?
+        .ok_or_else(|| ShellError::Ssh(
+            "SSH host key not found in main app database. \
+             Please ensure the main app has started at least once to generate the key.".to_string()
+        ))?;
+    
+    info!("Received SSH host key from main app (fingerprint: {})", host_key_info.fingerprint);
+    
+    // 缓存到本地文件
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ShellError::Ssh(format!("Failed to create key directory: {}", e)))?;
+    }
+    
+    tokio::fs::write(path, &host_key_info.private_key_pem)
+        .await
+        .map_err(|e| ShellError::Ssh(format!("Failed to cache host key to file: {}", e)))?;
+    
+    // 设置文件权限为 0600
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(path, perms)
+            .map_err(|e| ShellError::Ssh(format!("Failed to set host key permissions: {}", e)))?;
+    }
+    
+    info!("Cached SSH host key to: {:?}", path);
+    
+    // 解析并返回密钥
+    russh_keys::decode_secret_key(&host_key_info.private_key_pem, None)
+        .map_err(|e| ShellError::Ssh(format!("Failed to decode host key from main app: {}", e)))
 }
 
 /// Per-connection SSH handler
@@ -152,8 +193,8 @@ impl Handler for SshHandler {
     ) -> Result<Auth, Self::Error> {
         debug!("Public key auth attempt for user: {}", user);
         
-        // Extract key fingerprint for lookup
-        let key_fingerprint = public_key.fingerprint();
+        // Extract key fingerprint for lookup (with SHA256: prefix for logging)
+        let key_fingerprint = format!("SHA256:{}", public_key.fingerprint());
         debug!("Key fingerprint: {}", key_fingerprint);
         
         // Check with auth service
@@ -331,7 +372,9 @@ impl SshHandler {
     ) -> Result<String, ShellError> {
         let config = &self.config.app_config;
         
-        let key_fingerprint = public_key.fingerprint();
+        // russh_keys fingerprint() returns base64 hash without prefix
+        // Database stores in format "SHA256:xxxxx" (same as ssh-keygen output)
+        let key_fingerprint = format!("SHA256:{}", public_key.fingerprint());
         
         // 这些地址在 Config::load() 中已验证为必需
         let auth_addr = config.auth_grpc_address.as_ref().unwrap();

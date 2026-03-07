@@ -75,7 +75,7 @@
               <span v-for="scope in token.scopes" :key="scope" class="scope-badge">{{ getScopeLabel(scope) }}</span>
             </div>
             <div class="token-meta">
-              <span class="token-prefix">前缀: {{ token.token_last_four }}</span>
+              <span class="token-prefix">前缀: {{ token.token_prefix }}</span>
               <span v-if="token.last_used_at">· 最后使用: {{ formatDate(token.last_used_at) }}</span>
               <span v-else class="never-used">· 从未使用</span>
               <span v-if="token.expires_at">· 过期: {{ formatDate(token.expires_at) }}</span>
