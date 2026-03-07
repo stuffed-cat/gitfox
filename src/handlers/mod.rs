@@ -61,6 +61,8 @@ pub struct ServerConfigResponse {
     pub registry_docker_enabled: bool,
     /// Cargo Registry enabled
     pub registry_cargo_enabled: bool,
+    /// Personal Access Token prefix (e.g., "gfpat_")
+    pub pat_token_prefix: String,
 }
 
 /// GET /api/v1/config - Get public server configuration
@@ -147,6 +149,7 @@ pub async fn get_server_config(
         vscode_marketplace_service_url: get_string_config("vscode_marketplace_service_url"),
         vscode_marketplace_item_url: get_string_config("vscode_marketplace_item_url"),
         vscode_marketplace_resource_url: get_string_config("vscode_marketplace_resource_url"),
+        pat_token_prefix: crate::models::personal_access_token::PAT_PREFIX.to_string(),
     })
 }
 

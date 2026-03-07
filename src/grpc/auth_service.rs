@@ -1279,10 +1279,12 @@ impl AuthServiceImpl {
 
     /// 验证 Personal Access Token 并返回 TokenInfo
     /// 
-    /// PAT 格式: gitfox-pat_xxxx 或 glpat-xxxx (兼容旧格式)
+    /// PAT 格式: gfpat_xxxx
     async fn authenticate_pat(&self, token: &str) -> Result<Option<TokenInfo>, Status> {
+        use crate::models::personal_access_token::PAT_PREFIX;
+        
         // PAT 格式检查
-        if !token.starts_with("gitfox-pat_") && !token.starts_with("glpat-") {
+        if !token.starts_with(PAT_PREFIX) {
             return Ok(None);
         }
 
@@ -1421,10 +1423,12 @@ impl AuthServiceImpl {
         }
     }
 
-    /// 验证 Personal Access Token
+    /// 验证 Personal Access Token（用于 SSH/Git Basic Auth）
     async fn verify_pat(&self, token: &str) -> Result<Option<(i64, String)>, Status> {
-        // PAT 格式: glpat-xxxx
-        if !token.starts_with("glpat-") {
+        use crate::models::personal_access_token::PAT_PREFIX;
+        
+        // PAT 格式检查
+        if !token.starts_with(PAT_PREFIX) {
             return Ok(None);
         }
 

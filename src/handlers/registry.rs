@@ -1985,11 +1985,13 @@ pub async fn verify_cargo_token(
     let token_info = match token_info {
         Some(info) => Some(info),
         None => {
-            // 检查是否是 PAT (格式: gitfox-pat_xxx)
-            if body.token.starts_with("gitfox-pat_") {
-                let token_part = body.token.trim_start_matches("gitfox-pat_");
+            use crate::models::personal_access_token::PAT_PREFIX;
+            
+            // 检查是否是 PAT (格式: gfpat_xxx)
+            if body.token.starts_with(PAT_PREFIX) {
+                // PAT token 直接哈希（包含前缀）
                 use sha2::{Sha256, Digest};
-                let hashed = format!("{:x}", Sha256::digest(token_part.as_bytes()));
+                let hashed = format!("{:x}", Sha256::digest(body.token.as_bytes()));
                 
                 let pat_info = sqlx::query_as::<_, (uuid::Uuid, String, Vec<String>)>(
                     r#"

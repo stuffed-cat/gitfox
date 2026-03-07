@@ -380,24 +380,18 @@ fn extract_user_id_from_request(req: &HttpRequest) -> Option<String> {
     if auth_str.starts_with("Bearer ") {
         let token = &auth_str[7..];
         
-        // 尝试解析为 JWT token
+        // 尝试解析为 JWT token（如果能成功解析，使用其中的用户名）
         if let Some(user_id) = parse_jwt_user_info(token) {
             return Some(user_id);
         }
         
-        // 检查是否是 PAT token
-        if token.starts_with("gitfox-pat_") {
-            // 返回脱敏的 PAT 标识符（保留前缀 + 部分字符）
-            let safe_len = token.len().min(20);
-            return Some(format!("pat:{}", &token[..safe_len]));
-        }
-        
-        // 其他 token（如 OAuth access token）：返回 SHA-256 哈希前缀
+        // 对于其他 token（PAT/OAuth），返回 SHA-256 哈希前缀用于日志记录
+        // 注意：不检查 token 类型，所有验证由 gRPC Auth 服务处理
         use sha2::{Sha256, Digest};
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());
         let hash = hex::encode(hasher.finalize());
-        return Some(format!("oauth:{}", &hash[..16]));
+        return Some(format!("token:{}", &hash[..16]));
     }
     
     None

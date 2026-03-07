@@ -664,9 +664,10 @@ pub async fn delete_deploy_key(
 
 /// Generate a project access token
 fn generate_project_access_token() -> String {
+    use crate::models::personal_access_token::PAT_PREFIX;
     let mut rng = rand::thread_rng();
     let bytes: [u8; 20] = rng.gen();
-    format!("gitfox-pat_{}", URL_SAFE_NO_PAD.encode(&bytes))
+    format!("{}{}", PAT_PREFIX, URL_SAFE_NO_PAD.encode(&bytes))
 }
 
 /// List all project access tokens

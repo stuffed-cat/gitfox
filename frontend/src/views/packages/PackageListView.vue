@@ -186,7 +186,7 @@ docker push {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:lates
           </div>
           <div class="code-block">
             <div class="code-label">配置 .npmrc</div>
-            <pre><code>@{{ namespace }}:registry=https://{{ registryDomain }}/npm/
+            <pre><code>@{{ topLevelNamespace }}:registry=https://{{ registryDomain }}/npm/
 //{{ registryDomain }}/npm/:_authToken=YOUR_PERSONAL_ACCESS_TOKEN</code></pre>
           </div>
           <div class="code-block">
@@ -195,7 +195,7 @@ docker push {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:lates
           </div>
           <div class="code-block">
             <div class="code-label">安装包</div>
-            <pre><code>npm install @{{ namespace }}/package-name</code></pre>
+            <pre><code>npm install @{{ topLevelNamespace }}/package-name</code></pre>
           </div>
         </div>
 
@@ -210,7 +210,7 @@ docker push {{ registryDomain }}/{{ namespace }}/{{ projectName }}/myimage:lates
           <div class="code-block">
             <div class="code-label">配置 .cargo/config.toml</div>
             <pre><code>[registries.{{ cargoRegistryName }}]
-index = "sparse+https://{{ registryDomain }}/cargo/{{ namespace }}/index/"
+index = "sparse+https://{{ registryDomain }}/cargo/{{ topLevelNamespace }}/index/"
 
 [net]
 git-fetch-with-cli = true</code></pre>
@@ -291,9 +291,16 @@ const projectName = computed(() => {
     || (route.params.project as string)
 })
 
-// Cargo Registry 名称（将 / 替换为 - 以符合 Cargo 规范）
+// 顶级命名空间（第一个 / 之前的部分，用于 Cargo registry）
+// 例如：gitfox/sdk/oa2 → gitfox
+const topLevelNamespace = computed(() => {
+  const ns = namespace.value || ''
+  return ns.split('/')[0]
+})
+
+// Cargo Registry 名称（顶级命名空间，必须是有效的标识符）
 const cargoRegistryName = computed(() => {
-  return namespace.value?.replace(/\//g, '-') || ''
+  return topLevelNamespace.value
 })
 
 // Registry 域名 - 从后端配置获取
@@ -387,11 +394,11 @@ async function loadPackages() {
 
     if (typesToLoad.includes('npm') && serverConfig.value?.registry_npm_enabled !== false) {
       loadPromises.push(
-        api.registry.searchNpm(registryDomainValue, namespace.value)
+        api.registry.searchNpm(registryDomainValue, topLevelNamespace.value)
           .then((response: NpmSearchResponse) => {
             // 过滤出属于当前项目的包（按 scope 匹配）
             const npmPackages: Package[] = response.objects
-              .filter(obj => obj.package.scope === namespace.value)
+              .filter(obj => obj.package.scope === topLevelNamespace.value)
               .map((obj, idx) => ({
                 id: idx + 10000, // 临时 ID
                 project_id: props.project?.id || 0,
@@ -434,7 +441,7 @@ async function loadPackages() {
 
     if (typesToLoad.includes('cargo') && serverConfig.value?.registry_cargo_enabled !== false) {
       loadPromises.push(
-        api.registry.searchCargo(registryDomainValue, namespace.value)
+        api.registry.searchCargo(registryDomainValue, topLevelNamespace.value)
           .then((response: CargoSearchResponse) => {
             const cargoPackages: Package[] = response.crates.map((crate, idx) => ({
               id: idx + 30000, // 临时 ID
@@ -489,7 +496,7 @@ function copyInstallCommand(pkg: Package) {
   if (pkg.package_type === 'docker') {
     command = `docker pull ${registryDomain.value}/${namespace.value}/${projectName.value}/${pkg.name}:${pkg.version}`
   } else if (pkg.package_type === 'npm') {
-    command = `npm install @${namespace.value}/${pkg.name}@${pkg.version}`
+    command = `npm install @${topLevelNamespace.value}/${pkg.name}@${pkg.version}`
   } else if (pkg.package_type === 'cargo') {
     command = `cargo add ${pkg.name}@${pkg.version} --registry ${cargoRegistryName.value}`
   }
