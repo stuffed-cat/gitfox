@@ -1121,15 +1121,18 @@ pub struct CreateCargoPackageRequest {
     pub file_size: i64,
 }
 
-/// Cargo 包响应
+/// Cargo 包响应（对应 Main App 的 Package 结构体）
 #[derive(Debug, Deserialize)]
 pub struct CargoPackage {
     pub id: i64,
-    pub namespace_id: i64,
+    pub project_id: i64,
     pub name: String,
+    pub package_type: String,
     pub version: String,
-    pub yanked: bool,
+    pub status: String,
+    pub metadata: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// 验证 Cargo token 请求

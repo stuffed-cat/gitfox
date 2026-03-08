@@ -1142,6 +1142,7 @@ fn init_config(data_dir: &Path) -> Result<()> {
         registry_domain: String::new(),
         registry_docker_enabled: true,  // Docker Registry 默认启用（如果 registry_enabled=true）
         registry_npm_enabled: true,     // npm Registry 默认启用（如果 registry_enabled=true）
+        registry_cargo_enabled: true,   // Cargo Registry 默认启用（如果 registry_enabled=true）
         registry_storage_path: data_dir.join("registry").display().to_string(),
         registry_max_size: 536870912,   // 512MB
         registry_jwt_secret: String::new(),  // 使用主 JWT 密钥

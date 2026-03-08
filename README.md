@@ -201,39 +201,6 @@ GitFox Workhorse (端口 8080)
 - `POST /api/v1/auth/register` - 用户注册
 - `POST /api/v1/auth/login` - 用户登录
 - `GET /api/v1/auth/me` - 获取当前用户
-
-### 项目
-- `GET /api/v1/projects` - 项目列表
-- `POST /api/v1/projects` - 创建项目
-- `GET /api/v1/projects/:slug` - 项目详情
-- `PUT /api/v1/projects/:slug` - 更新项目
-- `DELETE /api/v1/projects/:slug` - 删除项目
-
-### 仓库
-- `GET /api/v1/projects/:slug/repository` - 仓库信息
-- `GET /api/v1/projects/:slug/repository/tree` - 文件树
-- `GET /api/v1/projects/:slug/repository/files` - 文件内容
-
-### 分支
-- `GET /api/v1/projects/:slug/branches` - 分支列表
-- `POST /api/v1/projects/:slug/branches` - 创建分支
-- `DELETE /api/v1/projects/:slug/branches/:name` - 删除分支
-
-### 提交
-- `GET /api/v1/projects/:slug/commits` - 提交列表
-- `GET /api/v1/projects/:slug/commits/:sha` - 提交详情
-
-### 合并请求
-- `GET /api/v1/projects/:slug/merge-requests` - 合并请求列表
-- `POST /api/v1/projects/:slug/merge-requests` - 创建合并请求
-- `GET /api/v1/projects/:slug/merge-requests/:iid` - 合并请求详情
-- `POST /api/v1/projects/:slug/merge-requests/:iid/merge` - 合并
-
-### 流水线
-- `GET /api/v1/projects/:slug/pipelines` - 流水线列表
-- `POST /api/v1/projects/:slug/pipelines` - 触发流水线
-- `GET /api/v1/projects/:slug/pipelines/:id` - 流水线详情
-
 ## 许可证
 
 MIT License

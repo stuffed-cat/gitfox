@@ -85,9 +85,9 @@ impl CargoRegistryState {
         )
     }
 
-    /// 生成 API URL
+    /// 生成 API URL (Cargo 会自动追加 /api/v1/... 路径)
     fn api_url(&self, namespace: &str) -> String {
-        format!("{}/api/v1", self.registry_url(namespace))
+        self.registry_url(namespace)
     }
 
     /// 获取注册表 URL

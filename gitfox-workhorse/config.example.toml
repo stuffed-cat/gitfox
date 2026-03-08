@@ -60,6 +60,9 @@ registry_docker_enabled = {{REGISTRY_DOCKER_ENABLED}}
 # 是否启用 npm Registry  
 registry_npm_enabled = {{REGISTRY_NPM_ENABLED}}
 
+# 是否启用 Cargo Registry
+registry_cargo_enabled = {{REGISTRY_CARGO_ENABLED}}
+
 # Registry 存储路径
 registry_storage_path = "{{REGISTRY_STORAGE_PATH}}"
 

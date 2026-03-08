@@ -1596,6 +1596,7 @@ impl GitFoxConfig {
             registry_domain: self.registry.domain.clone(),
             registry_docker_enabled: self.registry.docker_enabled,
             registry_npm_enabled: self.registry.npm_enabled,
+            registry_cargo_enabled: self.registry.cargo_enabled,
             registry_storage_path: self.registry.storage_path.clone(),
             registry_max_size: self.registry.max_package_size,
             registry_jwt_secret: registry_jwt.clone(),
@@ -1765,6 +1766,7 @@ impl GitFoxConfig {
             registry_domain: self.registry.domain.clone(),
             registry_docker_enabled: self.registry.docker_enabled,
             registry_npm_enabled: self.registry.npm_enabled,
+            registry_cargo_enabled: self.registry.cargo_enabled,
             registry_storage_path: self.registry.storage_path.clone(),
             registry_max_size: self.registry.max_package_size,
             registry_jwt_secret: if self.registry.jwt_secret.is_empty() {
@@ -1935,6 +1937,7 @@ pub struct ConfigVars {
     pub registry_domain: String,
     pub registry_docker_enabled: bool,
     pub registry_npm_enabled: bool,
+    pub registry_cargo_enabled: bool,
     pub registry_storage_path: String,
     pub registry_max_size: u64,
     pub registry_jwt_secret: String,
@@ -2070,6 +2073,7 @@ impl ConfigVars {
         result = result.replace("{{REGISTRY_DOMAIN}}", &self.registry_domain);
         result = result.replace("{{REGISTRY_DOCKER_ENABLED}}", &self.registry_docker_enabled.to_string());
         result = result.replace("{{REGISTRY_NPM_ENABLED}}", &self.registry_npm_enabled.to_string());
+        result = result.replace("{{REGISTRY_CARGO_ENABLED}}", &self.registry_cargo_enabled.to_string());
         result = result.replace("{{REGISTRY_STORAGE_PATH}}", &self.registry_storage_path);
         result = result.replace("{{REGISTRY_MAX_SIZE}}", &self.registry_max_size.to_string());
         result = result.replace("{{REGISTRY_JWT_SECRET}}", &self.registry_jwt_secret);

@@ -154,11 +154,12 @@ pub async fn get_server_config(
 }
 
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
+    // Internal API routes for Package Registry (Workhorse calls these)
+    // 必须在 internal 之前注册，因为 /api/internal/registry 比 /api/internal 更具体
+    registry::configure_routes(cfg);
+    
     // Internal API routes for GitFox Shell
     internal::configure_internal_routes(cfg);
-    
-    // Internal API routes for Package Registry (Workhorse calls these)
-    registry::configure_routes(cfg);
     
     // Standard OAuth2 endpoints (at root level, not under /api/v1)
     cfg.route("/oauth/authorize", web::get().to(oauth::authorize))
@@ -321,7 +322,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/fork_divergence", web::get().to(project::get_fork_divergence))
             .route("/projects/{namespace}/{project}/sync_fork", web::post().to(project::sync_fork))
             
-            // Repository routes 
+            // Repository routes (支持单一 ID/路径参数，用于嵌套命名空间)
+            .route("/projects/{id}/repository/tree", web::get().to(repository::browse_tree_by_id))
+            
+            // Repository routes (旧版双参数格式，保持向后兼容)
             .route("/projects/{namespace}/{project}/repository", web::get().to(repository::get_repository_info))
             .route("/projects/{namespace}/{project}/repository/tree", web::get().to(repository::browse_tree))
             .route("/projects/{namespace}/{project}/repository/files/{filepath:.*}", web::get().to(repository::get_file))

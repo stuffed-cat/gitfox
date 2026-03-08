@@ -162,6 +162,9 @@ docker_enabled = {{REGISTRY_DOCKER_ENABLED}}
 # 是否启用 npm Registry
 npm_enabled = {{REGISTRY_NPM_ENABLED}}
 
+# 是否启用 Cargo Registry
+cargo_enabled = {{REGISTRY_CARGO_ENABLED}}
+
 # 包存储目录
 storage_path = "{{REGISTRY_STORAGE_PATH}}"
 

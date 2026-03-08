@@ -1732,36 +1732,39 @@ pub async fn get_cargo_index(
 }
 
 /// 创建 Cargo 包请求
+/// 匹配 Workhorse 发送的结构
 #[derive(Debug, serde::Deserialize)]
 pub struct CreateCargoPackageRequest {
-    pub project_id: i64,
-    pub user_id: String,
+    pub namespace: String,  // Workhorse 发送 namespace，我们内部解析 project_id
+    pub user_id: i64,       // verify_cargo_token 返回的 user_id
     pub name: String,
     pub version: String,
-    pub checksum: String,
-    pub features: serde_json::Value,
+    pub cksum: String,      // Workhorse 使用 cksum 而不是 checksum
+    pub features: std::collections::HashMap<String, Vec<String>>,
+    pub deps: Vec<CreateCargoDependency>,  // Workhorse 使用 deps 而不是 dependencies
     pub links: Option<String>,
     pub rust_version: Option<String>,
     pub readme: Option<String>,
     pub readme_file: Option<String>,
-    pub keywords: Option<Vec<String>>,
-    pub categories: Option<Vec<String>>,
+    pub keywords: Vec<String>,
+    pub categories: Vec<String>,
+    pub authors: Vec<String>,
     pub license: Option<String>,
     pub license_file: Option<String>,
     pub repository: Option<String>,
     pub homepage: Option<String>,
     pub documentation: Option<String>,
     pub description: Option<String>,
-    pub dependencies: Vec<CreateCargoDependency>,
     pub file_path: String,
     pub file_size: i64,
 }
 
 /// 创建 Cargo 依赖
+/// 匹配 Workhorse 的 CargoIndexDependency 结构
 #[derive(Debug, serde::Deserialize)]
 pub struct CreateCargoDependency {
     pub name: String,
-    pub version_req: String,
+    pub req: String,  // Workhorse 使用 req 而不是 version_req
     pub features: Vec<String>,
     pub optional: bool,
     pub default_features: bool,
@@ -1781,43 +1784,95 @@ pub async fn create_cargo_package(
 ) -> AppResult<HttpResponse> {
     verify_internal_token(&req, &config)?;
 
-    // 检查版本是否已存在
-    let existing = sqlx::query_as::<_, (i64,)>(
-        "SELECT id FROM packages WHERE project_id = $1 AND package_type = 'cargo' AND name = $2 AND version = $3"
+    // 1. 解析 namespace 获取 project_id
+    // namespace 格式: "gitfox" 或 "gitfox/sdk"
+    // 每个 namespace 有一个默认项目用于 Cargo registry
+    let project = sqlx::query_as::<_, (i64, i64)>(
+        r#"
+        SELECT p.id::BIGINT AS id, p.namespace_id::BIGINT AS namespace_id
+        FROM projects p
+        JOIN namespaces ns ON p.namespace_id = ns.id
+        WHERE ns.path = $1
+        ORDER BY p.created_at ASC
+        LIMIT 1
+        "#
     )
-    .bind(body.project_id)
-    .bind(&body.name)
-    .bind(&body.version)
+    .bind(&body.namespace)
     .fetch_optional(pool.get_ref())
     .await?;
 
-    if existing.is_some() {
+    let (project_id, namespace_id) = match project {
+        Some(p) => p,
+        None => {
+            return Err(AppError::NotFound(format!(
+                "No project found for namespace: {}",
+                body.namespace
+            )));
+        }
+    };
+
+    // 2. 检查用户是否有项目的写权限
+    let has_permission = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM project_members pm
+            WHERE pm.project_id = $1 AND pm.user_id = $2
+              AND pm.role IN ('owner', 'maintainer', 'developer')
+            UNION
+            SELECT 1
+            FROM projects p
+            JOIN namespaces ns ON p.namespace_id = ns.id
+            WHERE p.id = $1 AND ns.owner_id = $2
+        )
+        "#
+    )
+    .bind(project_id)
+    .bind(body.user_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    if !has_permission {
+        return Err(AppError::Forbidden(format!(
+            "User {} does not have permission to publish to namespace {}",
+            body.user_id, body.namespace
+        )));
+    }
+
+    // 3. 检查版本是否已存在
+    let version_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM packages WHERE project_id = $1 AND package_type = 'cargo' AND name = $2 AND version = $3)"
+    )
+    .bind(project_id)
+    .bind(&body.name)
+    .bind(&body.version)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    if version_exists {
         return Err(AppError::Conflict(format!(
             "Crate {} version {} already exists",
             body.name, body.version
         )));
     }
 
-    let user_uuid = Uuid::parse_str(&body.user_id)
-        .map_err(|_| AppError::BadRequest("Invalid user_id UUID".to_string()))?;
-
     let mut tx = pool.begin().await?;
 
-    // 创建 package
+    // 4. 创建 package
     let package = sqlx::query_as::<_, Package>(
         r#"
         INSERT INTO packages (project_id, name, package_type, version, status, metadata, created_at, updated_at)
         VALUES ($1, $2, 'cargo', $3, 'default', '{}', NOW(), NOW())
-        RETURNING id, project_id, name, package_type, version, status, metadata, created_at, updated_at
+        RETURNING id::BIGINT AS id, project_id::BIGINT AS project_id, name, package_type, version, status, metadata, created_at, updated_at
         "#
     )
-    .bind(body.project_id)
+    .bind(project_id)
     .bind(&body.name)
     .bind(&body.version)
     .fetch_one(&mut *tx)
     .await?;
 
-    // 创建 package_file
+    // 5. 创建 package_file
     let file_name = format!("{}-{}.crate", body.name, body.version);
     sqlx::query(
         r#"
@@ -1829,23 +1884,25 @@ pub async fn create_cargo_package(
     .bind(&file_name)
     .bind(&body.file_path)
     .bind(body.file_size)
-    .bind(&body.checksum)
+    .bind(&body.cksum)
     .execute(&mut *tx)
     .await?;
 
-    // 创建 cargo_crate_metadata
+    // 6. 创建 cargo_crate_metadata
+    // features 需要转换为 JSON
+    let features_json = serde_json::to_value(&body.features).unwrap_or(serde_json::json!({}));
     sqlx::query(
         r#"
         INSERT INTO cargo_crate_metadata 
-            (package_id, checksum, yanked, features, links, rust_version,
+            (package_id, cksum, yanked, features, links, rust_version,
              readme, readme_file, keywords, categories, license, license_file,
-             repository, homepage, documentation, description, published_by, created_at)
+             repository, homepage, documentation, description, authors, created_at)
         VALUES ($1, $2, false, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
         "#
     )
     .bind(package.id)
-    .bind(&body.checksum)
-    .bind(&body.features)
+    .bind(&body.cksum)
+    .bind(&features_json)
     .bind(body.links.as_deref().unwrap_or(""))
     .bind(&body.rust_version)
     .bind(&body.readme)
@@ -1858,106 +1915,104 @@ pub async fn create_cargo_package(
     .bind(&body.homepage)
     .bind(&body.documentation)
     .bind(&body.description)
-    .bind(user_uuid)
+    .bind(&body.authors)
     .execute(&mut *tx)
     .await?;
 
-    // 创建依赖
-    for dep in &body.dependencies {
+    // 7. 创建依赖
+    for dep in &body.deps {
         sqlx::query(
             r#"
             INSERT INTO cargo_dependencies 
-                (package_id, name, version_req, features, optional, default_features, target, kind, registry, package)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                (package_id, name, version_req, features, optional, default_features, target, kind, registry)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#
         )
         .bind(package.id)
         .bind(&dep.name)
-        .bind(&dep.version_req)
+        .bind(&dep.req)
         .bind(&dep.features)
         .bind(dep.optional)
         .bind(dep.default_features)
         .bind(&dep.target)
         .bind(&dep.kind)
         .bind(&dep.registry)
-        .bind(&dep.package)
         .execute(&mut *tx)
         .await?;
     }
 
-    // 添加发布者为 owner（如果是第一个版本）
-    let existing_owner = sqlx::query_as::<_, (i64,)>(
+    // 8. 添加发布者为 owner（如果是第一个版本）
+    let owner_exists = sqlx::query_scalar::<_, bool>(
         r#"
-        SELECT co.id
-        FROM cargo_crate_owners co
-        JOIN packages p ON co.crate_name = p.name
-        WHERE p.project_id = $1 AND p.name = $2
-        LIMIT 1
+        SELECT EXISTS(
+            SELECT 1 FROM cargo_crate_owners co
+            WHERE co.namespace_id = $1 AND co.crate_name = $2
+        )
         "#
     )
-    .bind(body.project_id)
+    .bind(namespace_id)
     .bind(&body.name)
-    .fetch_optional(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
 
-    if existing_owner.is_none() {
+    if !owner_exists {
         sqlx::query(
             r#"
-            INSERT INTO cargo_crate_owners (project_id, crate_name, user_id, added_by, created_at)
-            VALUES ($1, $2, $3, $3, NOW())
+            INSERT INTO cargo_crate_owners (namespace_id, crate_name, user_id, owner_kind, created_at)
+            VALUES ($1, $2, $3, 'user', NOW())
             "#
         )
-        .bind(body.project_id)
+        .bind(namespace_id)
         .bind(&body.name)
-        .bind(user_uuid)
+        .bind(body.user_id)
         .execute(&mut *tx)
         .await?;
     }
 
-    // 记录审计日志
+    // 9. 记录审计日志
     sqlx::query(
         r#"
-        INSERT INTO cargo_audit_log (project_id, crate_name, version, action, user_id, details, created_at)
+        INSERT INTO cargo_audit_log (namespace_id, crate_name, version, action, user_id, details, created_at)
         VALUES ($1, $2, $3, 'publish', $4, $5, NOW())
         "#
     )
-    .bind(body.project_id)
+    .bind(namespace_id)
     .bind(&body.name)
     .bind(&body.version)
-    .bind(user_uuid)
-    .bind(serde_json::json!({ "checksum": body.checksum, "file_size": body.file_size }))
+    .bind(body.user_id)
+    .bind(serde_json::json!({ "cksum": body.cksum, "file_size": body.file_size }))
     .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
 
     info!(
-        "Created Cargo crate: {}@{} for project {}",
-        body.name, body.version, body.project_id
+        "Created Cargo crate: {}@{} for namespace {} (project_id={})",
+        body.name, body.version, body.namespace, project_id
     );
 
     Ok(HttpResponse::Created().json(package))
 }
 
 /// Cargo Token 验证请求
+/// Workhorse 只发送 token，不知道 project_id（需要先解析 crate metadata）
 #[derive(Debug, serde::Deserialize)]
 pub struct VerifyCargoTokenRequest {
     pub token: String,
-    pub project_id: i64,
-    pub required_scope: String,  // "publish", "yank", "owners"
 }
 
 /// Cargo Token 验证响应
+/// 返回用户信息，供后续 create_cargo_package 使用
 #[derive(Debug, serde::Serialize)]
 pub struct VerifyCargoTokenResponse {
-    pub valid: bool,
-    pub user_id: Option<String>,
-    pub username: Option<String>,
+    pub user_id: i64,
+    pub username: String,
     pub scopes: Vec<String>,
 }
 
 /// POST /api/internal/registry/cargo/verify-token
-/// 验证 Cargo token
+/// 验证 Cargo token，返回用户信息
+/// 权限检查在 create_cargo_package 中进行
 pub async fn verify_cargo_token(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -1966,8 +2021,12 @@ pub async fn verify_cargo_token(
 ) -> AppResult<HttpResponse> {
     verify_internal_token(&req, &config)?;
 
-    // 查找有效的 Cargo token
-    let token_info = sqlx::query_as::<_, (uuid::Uuid, String, Vec<String>)>(
+    // 查找有效的 Cargo token（通过 token hash）
+    // 注意：Workhorse 发送的是原始 token，需要计算哈希
+    use sha2::{Sha256, Digest};
+    let token_hash = format!("{:x}", Sha256::digest(body.token.as_bytes()));
+    
+    let token_info = sqlx::query_as::<_, (i64, String, Vec<String>)>(
         r#"
         SELECT ct.user_id, u.username, ct.scopes
         FROM cargo_tokens ct
@@ -1977,7 +2036,7 @@ pub async fn verify_cargo_token(
           AND (ct.expires_at IS NULL OR ct.expires_at > NOW())
         "#
     )
-    .bind(&body.token)  // 前端应该已经计算了哈希
+    .bind(&token_hash)
     .fetch_optional(pool.get_ref())
     .await?;
 
@@ -1989,11 +2048,8 @@ pub async fn verify_cargo_token(
             
             // 检查是否是 PAT (格式: gfpat_xxx)
             if body.token.starts_with(PAT_PREFIX) {
-                // PAT token 直接哈希（包含前缀）
-                use sha2::{Sha256, Digest};
-                let hashed = format!("{:x}", Sha256::digest(body.token.as_bytes()));
-                
-                let pat_info = sqlx::query_as::<_, (uuid::Uuid, String, Vec<String>)>(
+                // PAT token 使用相同的哈希
+                let pat_info = sqlx::query_as::<_, (i64, String, Vec<String>)>(
                     r#"
                     SELECT pat.user_id, u.username, pat.scopes
                     FROM personal_access_tokens pat
@@ -2003,13 +2059,13 @@ pub async fn verify_cargo_token(
                       AND (pat.expires_at IS NULL OR pat.expires_at > NOW())
                     "#
                 )
-                .bind(&hashed)
+                .bind(&token_hash)
                 .fetch_optional(pool.get_ref())
                 .await?;
 
                 // 检查 PAT 是否有 write_registry scope
                 if let Some((user_id, username, scopes)) = pat_info {
-                    if scopes.contains(&"write_registry".to_string()) || scopes.contains(&"api".to_string()) {
+                    if scopes.contains(&"write_registry".to_string()) || scopes.contains(&"admin".to_string()) {
                         Some((user_id, username, vec!["publish".to_string(), "yank".to_string(), "owners".to_string()]))
                     } else {
                         None
@@ -2025,59 +2081,22 @@ pub async fn verify_cargo_token(
 
     match token_info {
         Some((user_id, username, scopes)) => {
-            // 检查是否有所需的 scope
-            let has_scope = scopes.iter().any(|s| s == &body.required_scope || s == "*");
-            
-            // 检查用户是否有项目权限
-            let has_project_access = sqlx::query_as::<_, (i64,)>(
-                r#"
-                SELECT 1
-                FROM project_members pm
-                WHERE pm.project_id = $1 AND pm.user_id = $2
-                  AND pm.role IN ('owner', 'maintainer', 'developer')
-                UNION
-                SELECT 1
-                FROM projects p
-                JOIN namespaces ns ON p.namespace_id = ns.id
-                WHERE p.id = $1 AND ns.owner_id = $2
-                "#
+            // 更新最后使用时间（异步，不阻塞响应）
+            let _ = sqlx::query(
+                "UPDATE cargo_tokens SET last_used_at = NOW() WHERE token_hash = $1"
             )
-            .bind(body.project_id)
-            .bind(user_id)
-            .fetch_optional(pool.get_ref())
-            .await?;
+            .bind(&token_hash)
+            .execute(pool.get_ref())
+            .await;
 
-            if has_scope && has_project_access.is_some() {
-                // 更新最后使用时间
-                let _ = sqlx::query(
-                    "UPDATE cargo_tokens SET last_used_at = NOW() WHERE token_hash = $1"
-                )
-                .bind(&body.token)
-                .execute(pool.get_ref())
-                .await;
-
-                Ok(HttpResponse::Ok().json(VerifyCargoTokenResponse {
-                    valid: true,
-                    user_id: Some(user_id.to_string()),
-                    username: Some(username),
-                    scopes,
-                }))
-            } else {
-                Ok(HttpResponse::Ok().json(VerifyCargoTokenResponse {
-                    valid: false,
-                    user_id: None,
-                    username: None,
-                    scopes: vec![],
-                }))
-            }
+            Ok(HttpResponse::Ok().json(VerifyCargoTokenResponse {
+                user_id,
+                username,
+                scopes,
+            }))
         }
         None => {
-            Ok(HttpResponse::Ok().json(VerifyCargoTokenResponse {
-                valid: false,
-                user_id: None,
-                username: None,
-                scopes: vec![],
-            }))
+            Err(AppError::Unauthorized("Invalid or expired token".to_string()))
         }
     }
 }
@@ -2716,6 +2735,7 @@ pub async fn get_cargo_crate_info(
 }
 
 /// 配置路由
+/// 使用 /api/internal/registry 前缀
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/internal/registry")

@@ -176,6 +176,59 @@ impl ProjectService {
         .ok_or_else(|| AppError::NotFound(format!("Project '{}/{}' not found", owner, name)))
     }
 
+    /// 通过完整路径获取项目（支持嵌套命名空间如 gitfox/sdk/oa2/rust）
+    /// full_path 格式: "namespace_path/project_name"
+    /// 例如: "gitfox/myproject" 或 "gitfox/sdk/oa2/rust"
+    pub async fn get_project_by_full_path(pool: &PgPool, full_path: &str) -> AppResult<ProjectWithOwner> {
+        // 最后一个 / 前的部分是 namespace，后面是项目名
+        if let Some(pos) = full_path.rfind('/') {
+            let namespace = &full_path[..pos];
+            let project = &full_path[pos + 1..];
+            Self::get_project_by_owner_and_name(pool, namespace, project).await
+        } else {
+            // 没有斜杠，可能是用户根目录下的项目？这种情况不太可能
+            Err(AppError::BadRequest(format!("Invalid project path: {}", full_path)))
+        }
+    }
+
+    /// 通过 ID 或完整路径获取项目
+    /// id_or_path 可以是：
+    /// - 数字 ID: "123"
+    /// - URL 编码的完整路径: "gitfox%2Fmyproject" 或 "gitfox%2Fsdk%2Foa2%2Frust"
+    pub async fn get_project_by_id_or_path(pool: &PgPool, id_or_path: &str) -> AppResult<ProjectWithOwner> {
+        // 先尝试解析为 ID
+        if let Ok(id) = id_or_path.parse::<i64>() {
+            // 通过 ID 获取
+            return sqlx::query_as::<_, ProjectWithOwner>(
+                r#"
+                SELECT p.id, p.name, p.description, p.visibility, p.owner_id, 
+                       p.namespace_id, p.default_branch, p.archived,
+                       p.issues_enabled, p.merge_requests_enabled, p.pipelines_enabled,
+                       p.packages_enabled, p.wiki_enabled,
+                       p.created_at, p.updated_at,
+                       n.path as owner_name, n.avatar_url as owner_avatar,
+                       p.stars_count, p.forks_count, p.forked_from_id,
+                       fn.path as forked_from_namespace, fp.name as forked_from_name
+                FROM projects p
+                JOIN namespaces n ON p.namespace_id = n.id
+                LEFT JOIN projects fp ON p.forked_from_id = fp.id
+                LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
+                WHERE p.id = $1
+                "#
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("Project with ID {} not found", id)));
+        }
+        
+        // URL 解码路径
+        let decoded_path = urlencoding::decode(id_or_path)
+            .map_err(|_| AppError::BadRequest(format!("Invalid URL encoding: {}", id_or_path)))?;
+        
+        Self::get_project_by_full_path(pool, &decoded_path).await
+    }
+
     pub async fn list_projects(
         pool: &PgPool,
         user_id: Option<i64>,
