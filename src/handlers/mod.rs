@@ -322,9 +322,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/projects/{namespace}/{project}/fork_divergence", web::get().to(project::get_fork_divergence))
             .route("/projects/{namespace}/{project}/sync_fork", web::post().to(project::sync_fork))
             
-            // Repository routes (支持单一 ID/路径参数，用于嵌套命名空间)
-            .route("/projects/{id}/repository/tree", web::get().to(repository::browse_tree_by_id))
-            
             // Repository routes (旧版双参数格式，保持向后兼容)
             .route("/projects/{namespace}/{project}/repository", web::get().to(repository::get_repository_info))
             .route("/projects/{namespace}/{project}/repository/tree", web::get().to(repository::browse_tree))

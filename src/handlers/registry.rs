@@ -2556,6 +2556,8 @@ pub struct CargoCrateSummary {
     pub name: String,
     pub max_version: String,
     pub description: Option<String>,
+    pub downloads: i64,
+    pub recent_downloads: i64,
 }
 
 /// GET /api/internal/registry/cargo/search/{namespace}
@@ -2573,12 +2575,12 @@ pub async fn search_cargo_crates(
     let search_term = query.q.as_deref().unwrap_or("");
     let limit = query.per_page.unwrap_or(10).min(100);
 
-    // 使用窗口函数获取每个 crate 的最新版本
-    let crates = sqlx::query_as::<_, (String, String, Option<String>)>(
+    // 使用窗口函数获取每个 crate 的最新版本，包含下载统计
+    let crates = sqlx::query_as::<_, (String, String, Option<String>, i64, i64)>(
         r#"
         WITH latest_versions AS (
             SELECT DISTINCT ON (p.name) 
-                p.name, p.version, cm.description
+                p.name, p.version, cm.description, p.id as package_id
             FROM packages p
             JOIN projects proj ON p.project_id = proj.id
             JOIN namespaces ns ON proj.namespace_id = ns.id
@@ -2588,9 +2590,24 @@ pub async fn search_cargo_crates(
               AND p.status = 'default'
               AND ($2 = '' OR p.name ILIKE '%' || $2 || '%')
             ORDER BY p.name, p.created_at DESC
+        ),
+        download_stats AS (
+            SELECT 
+                lv.name,
+                COALESCE(SUM(ds.download_count), 0)::BIGINT as total_downloads,
+                COALESCE(SUM(CASE WHEN ds.download_date >= CURRENT_DATE - INTERVAL '30 days' 
+                    THEN ds.download_count ELSE 0 END), 0)::BIGINT as recent_downloads
+            FROM latest_versions lv
+            LEFT JOIN packages all_versions ON all_versions.name = lv.name 
+                AND all_versions.package_type = 'cargo'
+            LEFT JOIN cargo_download_stats ds ON ds.package_id = all_versions.id
+            GROUP BY lv.name
         )
-        SELECT name, version, description
-        FROM latest_versions
+        SELECT lv.name, lv.version, lv.description, 
+               COALESCE(dst.total_downloads, 0) as downloads,
+               COALESCE(dst.recent_downloads, 0) as recent_downloads
+        FROM latest_versions lv
+        LEFT JOIN download_stats dst ON lv.name = dst.name
         LIMIT $3
         "#
     )
@@ -2600,11 +2617,13 @@ pub async fn search_cargo_crates(
     .fetch_all(pool.get_ref())
     .await?;
 
-    let results: Vec<CargoCrateSummary> = crates.into_iter().map(|(name, version, desc)| {
+    let results: Vec<CargoCrateSummary> = crates.into_iter().map(|(name, version, desc, downloads, recent_downloads)| {
         CargoCrateSummary {
             name,
             max_version: version,
             description: desc,
+            downloads,
+            recent_downloads,
         }
     }).collect();
 

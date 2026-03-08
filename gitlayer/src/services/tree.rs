@@ -55,11 +55,8 @@ impl tree_service_server::TreeService for TreeServiceImpl {
         
         let repo = RepositoryOps::open(&path)?;
         let tree_path = if req.path.is_empty() { "" } else { &req.path };
-        let revision = if let Some(ref r) = req.repository {
-            "HEAD"
-        } else {
-            "HEAD"
-        };
+        // 使用请求中的 revision，如果为空则使用 HEAD
+        let revision = if req.revision.is_empty() { "HEAD" } else { &req.revision };
         
         match TreeOps::get_tree(&repo, revision, tree_path, req.include_sizes) {
             Ok(Some(entries)) => {
@@ -92,8 +89,9 @@ impl tree_service_server::TreeService for TreeServiceImpl {
         
         let repo = RepositoryOps::open(&path)?;
         let tree_path = if req.path.is_empty() { "" } else { &req.path };
+        let revision = if req.revision.is_empty() { "HEAD" } else { &req.revision };
         
-        let entries = TreeOps::get_tree_recursive(&repo, "HEAD", tree_path, req.max_depth)?;
+        let entries = TreeOps::get_tree_recursive(&repo, revision, tree_path, req.max_depth)?;
         
         let entry_protos: Vec<TreeEntry> = entries.iter()
             .map(|e| Self::convert_entry(e))
@@ -128,8 +126,9 @@ impl tree_service_server::TreeService for TreeServiceImpl {
         
         let repo = RepositoryOps::open(&path)?;
         let tree_path = if req.path.is_empty() { "" } else { &req.path };
+        let revision = if req.revision.is_empty() { "HEAD" } else { &req.revision };
         
-        let entries = TreeOps::get_tree_with_commits(&repo, "HEAD", tree_path)?;
+        let entries = TreeOps::get_tree_with_commits(&repo, revision, tree_path)?;
         
         let entry_protos: Vec<TreeEntryWithCommit> = entries.iter()
             .map(|e| {
@@ -176,8 +175,9 @@ impl tree_service_server::TreeService for TreeServiceImpl {
         
         let repo = RepositoryOps::open(&path)?;
         let tree_path = if req.path.is_empty() { "" } else { &req.path };
+        let revision = if req.revision.is_empty() { "HEAD" } else { &req.revision };
         
-        let (total_size, file_count, dir_count) = TreeOps::get_tree_size(&repo, "HEAD", tree_path)?;
+        let (total_size, file_count, dir_count) = TreeOps::get_tree_size(&repo, revision, tree_path)?;
         
         Ok(Response::new(GetTreeSizeResponse {
             total_size,
