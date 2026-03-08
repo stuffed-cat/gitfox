@@ -2617,6 +2617,7 @@ pub async fn search_cargo_crates(
     .fetch_all(pool.get_ref())
     .await?;
 
+    let total = crates.len() as i64;
     let results: Vec<CargoCrateSummary> = crates.into_iter().map(|(name, version, desc, downloads, recent_downloads)| {
         CargoCrateSummary {
             name,
@@ -2627,12 +2628,10 @@ pub async fn search_cargo_crates(
         }
     }).collect();
 
-    // Cargo API 格式
+    // Workhorse 期望的格式: { crates: [...], total: i64 }
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "crates": results,
-        "meta": {
-            "total": results.len()
-        }
+        "total": total
     })))
 }
 
@@ -2705,7 +2704,7 @@ pub async fn get_cargo_crate_info(
     // 获取总下载量
     let total_downloads: (i64,) = sqlx::query_as(
         r#"
-        SELECT COALESCE(SUM(cds.downloads), 0)::bigint
+        SELECT COALESCE(SUM(cds.download_count), 0)::bigint
         FROM cargo_download_stats cds
         JOIN packages p ON cds.package_id = p.id
         JOIN projects proj ON p.project_id = proj.id
@@ -2722,7 +2721,7 @@ pub async fn get_cargo_crate_info(
     let mut version_infos = Vec::new();
     for (pkg_id, version, yanked, created_at, _, _, _, _, _, _) in &versions {
         let downloads: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(SUM(downloads), 0)::bigint FROM cargo_download_stats WHERE package_id = $1"
+            "SELECT COALESCE(SUM(download_count), 0)::bigint FROM cargo_download_stats WHERE package_id = $1"
         )
         .bind(pkg_id)
         .fetch_one(pool.get_ref())

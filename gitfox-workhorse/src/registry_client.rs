@@ -766,12 +766,13 @@ impl RegistryApiClient {
         namespace: &str,
         name: &str,
     ) -> Result<CargoCrateInfo, RegistryApiError> {
-        self.get(&format!(
+        let response: CargoCrateInfoResponse = self.get(&format!(
             "/api/internal/registry/cargo/crate/{}/{}",
             urlencoding::encode(namespace),
             urlencoding::encode(name)
         ))
-        .await
+        .await?;
+        Ok(response.crate_info)
     }
 }
 
@@ -1195,6 +1196,13 @@ pub struct CargoCrateSummary {
     pub recent_downloads: i64,
 }
 
+/// Cargo crate 详细信息响应包装
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CargoCrateInfoResponse {
+    #[serde(rename = "crate")]
+    pub crate_info: CargoCrateInfo,
+}
+
 /// Cargo crate 详细信息
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CargoCrateInfo {
@@ -1203,20 +1211,23 @@ pub struct CargoCrateInfo {
     pub homepage: Option<String>,
     pub repository: Option<String>,
     pub documentation: Option<String>,
-    pub keywords: Vec<String>,
-    pub categories: Vec<String>,
+    #[serde(default)]
+    pub keywords: Option<Vec<String>>,
+    #[serde(default)]
+    pub categories: Option<Vec<String>>,
+    pub max_version: String,
     pub versions: Vec<CargoCrateVersion>,
     pub downloads: i64,
-    pub recent_downloads: i64,
-    pub owners: Vec<CargoOwner>,
 }
 
 /// Cargo crate 版本信息
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CargoCrateVersion {
+    #[serde(alias = "num")]
     pub version: String,
     pub yanked: bool,
     pub downloads: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
     pub rust_version: Option<String>,
 }

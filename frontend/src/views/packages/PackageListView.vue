@@ -115,7 +115,7 @@
         <div class="col-info">
           <div class="package-name">
             <router-link
-              :to="{ name: 'PackageDetail', params: { ...route.params, packageId: pkg.id.toString() } }"
+              :to="`${route.path}/${pkg.package_type}/${pkg.name}`"
               class="name-link"
               @click.stop
             >
@@ -480,14 +480,7 @@ function debouncedSearch() {
 
 // 跳转到包详情
 function goToPackage(pkg: Package) {
-  router.push({
-    name: 'PackageDetail',
-    params: {
-      ...route.params,
-      packageType: pkg.package_type,
-      packageName: pkg.name
-    }
-  })
+  router.push(`${route.path}/${pkg.package_type}/${pkg.name}`)
 }
 
 // 复制安装命令

@@ -289,10 +289,34 @@ const copied = ref(false)
 const serverConfig = ref<{ registry_domain: string } | null>(null)
 
 // 从项目或路由获取信息
-const namespace = computed(() => props.project?.namespace?.path || route.params.namespace as string)
-const projectName = computed(() => props.project?.name || route.params.project as string)
+// 路由是 /:pathSegments+，所以需要从数组中解析 namespace 和 projectName
+const namespace = computed(() => {
+  if (props.project?.namespace?.path) return props.project.namespace.path
+  // 从 pathSegments 中解析：['gitfox', 'sdk', 'oa2', 'rust'] => 'gitfox/sdk/oa2'
+  const segments = route.params.pathSegments
+  if (Array.isArray(segments) && segments.length >= 2) {
+    return segments.slice(0, -1).join('/')
+  }
+  return route.params.namespace as string
+})
+const projectName = computed(() => {
+  if (props.project?.name) return props.project.name
+  // 从 pathSegments 中解析：['gitfox', 'sdk', 'oa2', 'rust'] => 'rust'
+  const segments = route.params.pathSegments
+  if (Array.isArray(segments) && segments.length >= 1) {
+    return segments[segments.length - 1]
+  }
+  return route.params.project as string
+})
 const packageType = computed(() => route.params.packageType as string)
 const packageName = computed(() => route.params.packageName as string)
+
+// 顶级命名空间（第一个 / 之前的部分，用于 Cargo registry）
+// 例如：gitfox/sdk/oa2 → gitfox
+const topLevelNamespace = computed(() => {
+  const ns = namespace.value || ''
+  return ns.split('/')[0]
+})
 
 // Registry 域名 - 从后端配置获取
 const registryDomain = computed(() => {
@@ -410,10 +434,10 @@ async function loadPackage() {
       }
       
     } else if (type === 'cargo') {
-      // Cargo: 使用 crates API
+      // Cargo: 使用 crates API（Cargo 使用顶级命名空间）
       const crateInfo: CargoCrateInfo = await api.registry.getCargoCrate(
         registryDomainValue,
-        namespace.value,
+        topLevelNamespace.value,
         packageName.value
       )
       

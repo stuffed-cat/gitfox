@@ -1075,7 +1075,28 @@ pub async fn handle_crate_info(
     
     match client.get_cargo_crate_info(&namespace, &name).await {
         Ok(info) => {
-            HttpResponse::Ok().json(info)
+            // 转换为前端期望的格式: { crate: {...}, versions: [...] }
+            HttpResponse::Ok().json(serde_json::json!({
+                "crate": {
+                    "name": info.name,
+                    "description": info.description,
+                    "homepage": info.homepage,
+                    "documentation": info.documentation,
+                    "repository": info.repository,
+                    "downloads": info.downloads,
+                    "recent_downloads": 0,
+                    "max_version": info.max_version,
+                    "created_at": info.versions.last().map(|v| v.created_at.to_rfc3339()).unwrap_or_default(),
+                    "updated_at": info.versions.first().map(|v| v.created_at.to_rfc3339()).unwrap_or_default(),
+                },
+                "versions": info.versions.iter().map(|v| serde_json::json!({
+                    "num": v.version,
+                    "yanked": v.yanked,
+                    "created_at": v.created_at.to_rfc3339(),
+                    "dl_path": format!("/cargo/{}/api/v1/crates/{}/{}/download", namespace, name, v.version),
+                    "crate_size": serde_json::Value::Null,
+                })).collect::<Vec<_>>()
+            }))
         }
         Err(crate::registry_client::RegistryApiError::NotFound) => {
             HttpResponse::NotFound()
