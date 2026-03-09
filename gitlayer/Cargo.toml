@@ -1,6 +1,6 @@
 [package]
 name = "gitlayer"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Git operations service via gRPC (similar to Gitaly)"
 authors = ["GitFox Team"]

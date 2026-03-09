@@ -1,6 +1,6 @@
 [package]
 name = "gitfox-omnibus"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "GitFox Omnibus - Packaging tool to create self-contained GitFox binary"
 authors = ["GitFox Team"]
