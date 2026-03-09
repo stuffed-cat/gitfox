@@ -470,6 +470,8 @@ async fn main() -> std::io::Result<()> {
                         .route("/{namespace}/api/v1/crates/{name}/{version}/download", web::get().to(registry::cargo::handle_download))
                         .route("/{namespace}/api/v1/crates/{name}", web::get().to(registry::cargo::handle_crate_info))
                         .route("/{namespace}/api/v1/crates", web::get().to(registry::cargo::handle_search))
+                        // Crate 下载（放在 /me 前避免冲突）
+                        .route("/{namespace}/{name}/{version}/download", web::get().to(registry::cargo::handle_download))
                         // Cargo 登录
                         .route("/{namespace}/me", web::get().to(registry::cargo::handle_login))
                 );

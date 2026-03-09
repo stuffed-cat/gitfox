@@ -1748,7 +1748,7 @@ pub async fn get_cargo_index(
     // 获取 crate 的所有版本
     let versions = sqlx::query_as::<_, (String, String, bool, String, serde_json::Value)>(
         r#"
-        SELECT p.version, cm.checksum, cm.yanked, cm.links, cm.features
+        SELECT p.version, cm.cksum, cm.yanked, cm.links, cm.features
         FROM packages p
         JOIN cargo_crate_metadata cm ON p.id = cm.package_id
         JOIN projects proj ON p.project_id = proj.id
@@ -1775,7 +1775,7 @@ pub async fn get_cargo_index(
         let deps = sqlx::query_as::<_, (String, String, Vec<String>, bool, bool, Option<String>, String, Option<String>, Option<String>)>(
             r#"
             SELECT cd.name, cd.version_req, cd.features, cd.optional, cd.default_features,
-                   cd.target, cd.kind, cd.registry, cd.package
+                   cd.target, cd.kind, cd.registry, cd.explicit_name_in_toml
             FROM cargo_dependencies cd
             JOIN packages p ON cd.package_id = p.id
             JOIN cargo_crate_metadata cm ON p.id = cm.package_id
@@ -2628,10 +2628,10 @@ pub async fn record_cargo_download(
         // 更新下载统计（按日聚合）
         sqlx::query(
             r#"
-            INSERT INTO cargo_download_stats (package_id, date, downloads)
+            INSERT INTO cargo_download_stats (package_id, download_date, download_count)
             VALUES ($1, CURRENT_DATE, 1)
-            ON CONFLICT (package_id, date) 
-            DO UPDATE SET downloads = cargo_download_stats.downloads + 1
+            ON CONFLICT (package_id, download_date) 
+            DO UPDATE SET download_count = cargo_download_stats.download_count + 1
             "#
         )
         .bind(package_id)

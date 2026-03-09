@@ -596,12 +596,48 @@ impl RegistryApiClient {
         namespace: &str,
         crate_name: &str,
     ) -> Result<Vec<CargoIndexEntry>, RegistryApiError> {
-        self.get(&format!(
-            "/api/internal/registry/cargo/index/{}/{}",
+        let url = format!(
+            "{}/api/internal/registry/cargo/index/{}/{}",
+            self.base_url,
             urlencoding::encode(namespace),
             urlencoding::encode(crate_name)
-        ))
-        .await
+        );
+        debug!("Registry API GET: {}", url);
+
+        let resp = self.client
+            .get(&url)
+            .header("X-GitFox-Shell-Token", &self.shell_token)
+            .send()
+            .await
+            .map_err(|e| RegistryApiError::Network(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                return Err(RegistryApiError::NotFound);
+            }
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            error!("Registry API error: {} - {}", status, text);
+            return Err(RegistryApiError::Api(format!("{}: {}", status, text)));
+        }
+
+        // Cargo sparse index 返回 JSON Lines 格式（每行一个 JSON 对象）
+        let text = resp.text()
+            .await
+            .map_err(|e| RegistryApiError::Parse(e.to_string()))?;
+
+        let mut entries = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let entry: CargoIndexEntry = serde_json::from_str(line)
+                .map_err(|e| RegistryApiError::Parse(format!("Failed to parse index line: {}", e)))?;
+            entries.push(entry);
+        }
+
+        Ok(entries)
     }
 
     /// 创建 Cargo 包

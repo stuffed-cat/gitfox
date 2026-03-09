@@ -480,20 +480,24 @@ pub async fn handle_config(
 /// Sparse Protocol: 返回 crate 的索引条目
 pub async fn handle_index_entry(
     req: HttpRequest,
-    path: web::Path<String>,
     state: web::Data<CargoRegistryState>,
 ) -> HttpResponse {
-    // 路径格式: {namespace}/index/.../{crate_name}
-    let full_path = path.into_inner();
-    let parts: Vec<&str> = full_path.split('/').collect();
+    // 从 match_info 获取所有路径参数
+    let namespace = match req.match_info().get("namespace") {
+        Some(ns) => ns,
+        None => {
+            return HttpResponse::NotFound()
+                .json(CargoError::new("namespace not found in path"));
+        }
+    };
     
-    if parts.len() < 3 {
-        return HttpResponse::NotFound()
-            .json(CargoError::new("invalid index path"));
-    }
-    
-    let namespace = parts[0];
-    let crate_name = parts.last().unwrap();
+    let crate_name = match req.match_info().get("name") {
+        Some(name) => name,
+        None => {
+            return HttpResponse::NotFound()
+                .json(CargoError::new("crate name not found in path"));
+        }
+    };
     
     debug!("Cargo index request: namespace={}, crate={}", namespace, crate_name);
     
