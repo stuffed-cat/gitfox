@@ -417,17 +417,22 @@ async fn main() -> std::io::Result<()> {
                         .route("/-/package/@{scope}/{name}/dist-tags/{tag}", web::get().to(registry::handle_dist_tags_get))
                         .route("/-/package/@{scope}/{name}/dist-tags/{tag}", web::put().to(registry::handle_dist_tag_put))
                         .route("/-/package/@{scope}/{name}/dist-tags/{tag}", web::delete().to(registry::handle_dist_tag_delete))
-                        // Scoped 包
-                        .route("/@{scope}/{name}", web::get().to(registry::handle_package_get_scoped))
+                        // Scoped 包（必须在通配符路由之前）
                         .service(
                             web::resource("/@{scope}/{name}")
                                 .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                                .route(web::get().to(registry::handle_package_get_scoped))
                                 .route(web::put().to(registry::handle_package_publish_scoped))
                         )
                         .route("/@{scope}/{name}/-/{tarball}", web::get().to(registry::handle_tarball_get_scoped))
                         .route("/@{scope}/{name}/-/{tarball}/-rev/{rev}", web::delete().to(registry::handle_tarball_delete_scoped))
-                        // 非 scoped 包（返回错误）
-                        .route("/{name}", web::get().to(registry::handle_package_get))
+                        // 非 scoped 包或 URL 编码的 scoped 包（@scope%2fname 格式）
+                        .service(
+                            web::resource("/{name}")
+                                .app_data(web::PayloadConfig::new(registry_max_upload_size))
+                                .route(web::get().to(registry::handle_package_get))
+                                .route(web::put().to(registry::handle_package_publish_encoded))
+                        )
                 );
         }
 

@@ -14,7 +14,7 @@ mod middleware;
 mod models;
 mod queue;
 mod services;
-
+ 
 use config::AppConfig;
 use db::{init_pg_pool, init_redis_pool};
 use queue::RedisMessageQueue;

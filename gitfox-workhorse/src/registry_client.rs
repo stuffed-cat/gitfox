@@ -562,6 +562,18 @@ impl RegistryApiClient {
     // ========================================================================
 
     /// 解析项目路径获取 project_id
+    /// 解析 namespace 到默认 registry 项目
+    pub async fn resolve_namespace_default_project(
+        &self,
+        namespace: &str,
+    ) -> Result<ResolveProjectResponse, RegistryApiError> {
+        self.get(&format!(
+            "/api/internal/registry/resolve-namespace/{}",
+            namespace
+        ))
+        .await
+    }
+
     pub async fn resolve_project(
         &self,
         namespace: &str,

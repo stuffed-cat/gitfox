@@ -260,10 +260,11 @@ impl ProjectService {
                 LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = $1
                 LEFT JOIN groups g ON n.namespace_type = 'group' AND n.id = g.namespace_id
                 LEFT JOIN group_members gm ON g.id = gm.group_id AND gm.user_id = $1
-                WHERE p.visibility = 'public'
+                WHERE (p.visibility = 'public'
                    OR p.owner_id = $1
                    OR pm.user_id IS NOT NULL
-                   OR gm.user_id IS NOT NULL
+                   OR gm.user_id IS NOT NULL)
+                   AND p.is_registry_shadow = FALSE
                 ORDER BY p.updated_at DESC
                 LIMIT $2 OFFSET $3
                 "#
@@ -289,6 +290,7 @@ impl ProjectService {
                 LEFT JOIN projects fp ON p.forked_from_id = fp.id
                 LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
                 WHERE p.visibility = 'public'
+                   AND p.is_registry_shadow = FALSE
                 ORDER BY p.updated_at DESC
                 LIMIT $1 OFFSET $2
                 "#
@@ -649,7 +651,7 @@ impl ProjectService {
             LEFT JOIN projects fp ON p.forked_from_id = fp.id
             LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
             JOIN project_forks pf ON pf.forked_project_id = p.id
-            WHERE pf.source_project_id = $1
+            WHERE pf.source_project_id = $1 AND p.is_registry_shadow = FALSE
             ORDER BY p.created_at DESC
             "#
         )

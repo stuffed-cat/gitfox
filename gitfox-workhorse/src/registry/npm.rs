@@ -139,18 +139,102 @@ pub async fn handle_package_get_scoped(
     }
 }
 
-/// GET /npm/{name} - 获取非 scoped 包信息（不推荐，但需要支持）
+/// GET /npm/{name} - 获取包信息（处理 URL 编码的 scoped 包名，如 @scope%2fname）
+///
+/// npm workspace 项目会将包名中的 / 编码为 %2f，导致整个包名成为单个路径段。
+/// 此 handler 解析这种格式并查找包信息。
 pub async fn handle_package_get(
-    req: HttpRequest,
+    _req: HttpRequest,
     path: web::Path<String>,
     state: web::Data<NpmRegistryState>,
 ) -> HttpResponse {
-    let name = path.into_inner();
-    debug!("npm package GET (unscoped): {}", name);
+    let encoded_name = path.into_inner();
+    
+    // URL 解码
+    let decoded_name = match urlencoding::decode(&encoded_name) {
+        Ok(d) => d.into_owned(),
+        Err(_) => encoded_name.clone(),
+    };
+    
+    debug!("npm package GET (encoded): {} -> {}", encoded_name, decoded_name);
+    
+    // 检查是否是 scoped 包
+    if !decoded_name.starts_with('@') {
+        // 非 scoped 包，返回 404 以便 npm fallback 到 npmjs.com
+        return HttpResponse::build(StatusCode::NOT_FOUND)
+            .json(NpmError::not_found(&decoded_name));
+    }
+    
+    // 解析 scoped 包名：@scope/name
+    let without_at = &decoded_name[1..];
+    let parts: Vec<&str> = without_at.splitn(2, '/').collect();
+    if parts.len() != 2 {
+        return HttpResponse::build(StatusCode::BAD_REQUEST)
+            .json(NpmError::bad_request("Invalid scoped package name format, expected @scope/name"));
+    }
+    
+    let scope = parts[0];
+    let name = parts[1];
+    let full_name = format!("@{}/{}", scope, name);
+    
+    debug!("Looking up scoped package: {}", full_name);
+    
+    // 调用 registry client 查找包
+    let client = match state.registry_client.as_ref() {
+        Some(c) => c,
+        None => {
+            error!("Registry client not initialized");
+            return HttpResponse::InternalServerError()
+                .json(NpmError::internal_error("Registry client not initialized"));
+        }
+    };
 
-    // GitFox 要求使用 scoped 包名
-    HttpResponse::build(StatusCode::BAD_REQUEST)
-        .json(NpmError::bad_request("GitFox npm registry requires scoped packages (@namespace/name)"))
+    // 使用 lookup_npm_package API 按 scope+name 查找包
+    match client.lookup_npm_package(scope, name).await {
+        Ok(doc) => {
+            // 构建标准 npm registry 响应格式
+            let mut versions_map = serde_json::Map::new();
+            let mut time_map = serde_json::Map::new();
+            
+            for ver in &doc.versions {
+                let tarball_filename = format!("{}-{}.tgz", name, ver.version);
+                let tarball_url = state.tarball_url(scope, name, &tarball_filename);
+                
+                let version_obj = serde_json::json!({
+                    "name": full_name,
+                    "version": ver.version,
+                    "dist": {
+                        "tarball": tarball_url,
+                        "integrity": ver.integrity
+                    }
+                });
+                versions_map.insert(ver.version.clone(), version_obj);
+                time_map.insert(ver.version.clone(), 
+                    serde_json::Value::String(ver.created_at.to_rfc3339()));
+            }
+            
+            let response = serde_json::json!({
+                "name": doc.name,
+                "versions": versions_map,
+                "time": time_map,
+                "dist-tags": doc.dist_tags
+            });
+            
+            HttpResponse::Ok()
+                .content_type("application/json")
+                .json(response)
+        }
+        Err(crate::registry_client::RegistryApiError::NotFound) => {
+            debug!("Package {} not found", full_name);
+            HttpResponse::build(StatusCode::NOT_FOUND)
+                .json(NpmError::not_found(&full_name))
+        }
+        Err(e) => {
+            error!("Failed to lookup npm package {}: {}", full_name, e);
+            HttpResponse::InternalServerError()
+                .json(NpmError::internal_error(&format!("Failed to lookup package: {}", e)))
+        }
+    }
 }
 
 /// PUT /npm/@{scope}/{name} - 发布 scoped 包
@@ -180,19 +264,17 @@ pub async fn handle_package_publish_scoped(
             .json(NpmError::bad_request("Package name in URL doesn't match body"));
     }
 
-    // 解析项目ID - scope 对应 namespace，尝试使用 scope 作为 namespace 和 project name
+    // 解析项目ID - scope 对应 namespace，选择该 namespace 下的默认项目（最早创建的）
     let project_id = if let Some(ref client) = state.registry_client {
-        match client.resolve_project(&scope, &name).await {
+        match client.resolve_namespace_default_project(&scope).await {
             Ok(resolved) => resolved.project_id,
             Err(crate::registry_client::RegistryApiError::NotFound) => {
-                // 尝试使用 scope 作为 namespace, 空项目名 (查找默认项目)
-                // 如果也找不到，则返回错误
-                warn!("Cannot resolve project for scope: {}, name: {}", scope, name);
+                warn!("No project found for namespace: {}", scope);
                 return HttpResponse::build(StatusCode::NOT_FOUND)
-                    .json(NpmError::not_found(&format!("Project not found for @{}/{}", scope, name)));
+                    .json(NpmError::not_found(&format!("No project found for namespace @{}", scope)));
             }
             Err(e) => {
-                error!("Failed to resolve project: {}", e);
+                error!("Failed to resolve namespace: {}", e);
                 return HttpResponse::InternalServerError().finish();
             }
         }
@@ -205,76 +287,85 @@ pub async fn handle_package_publish_scoped(
     for (version, version_info) in &publish_req.versions {
         debug!("Processing version: {}", version);
 
-        // 查找对应的 attachment
-        let tarball_name = format!("{}-{}.tgz", name, version);
-        let attachment = publish_req.attachments.get(&tarball_name);
+        // npm attachment key 格式: @scope/name-version.tgz
+        // 例如 @gitfox/oa2-browser 版本 0.1.0 → @gitfox/oa2-browser-0.1.0.tgz
+        let tarball_name = format!("{}-{}.tgz", publish_req.name, version);
         
-        if let Some(att) = attachment {
-            // 解码 base64 数据
-            let data = match base64::engine::general_purpose::STANDARD.decode(&att.data) {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!("Failed to decode tarball data: {}", e);
-                    return HttpResponse::build(StatusCode::BAD_REQUEST)
-                        .json(NpmError::bad_request("Invalid tarball data"));
-                }
+        let attachment = match publish_req.attachments.get(&tarball_name) {
+            Some(att) => att,
+            None => {
+                // 打印所有可用的 attachment keys 以帮助调试
+                let available_keys: Vec<&String> = publish_req.attachments.keys().collect();
+                error!("Attachment not found. Expected: {}, available: {:?}", tarball_name, available_keys);
+                return HttpResponse::build(StatusCode::BAD_REQUEST)
+                    .json(NpmError::bad_request(&format!("Missing attachment: {}", tarball_name)));
+            }
+        };
+
+        // 解码 base64 数据
+        let data = match base64::engine::general_purpose::STANDARD.decode(&attachment.data) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("Failed to decode tarball data: {}", e);
+                return HttpResponse::build(StatusCode::BAD_REQUEST)
+                    .json(NpmError::bad_request("Invalid tarball data"));
+            }
+        };
+
+        // 存储 tarball
+        let (file_path, integrity) = match state.storage.store_npm_tarball(
+            Some(&scope),
+            &name,
+            version,
+            &tarball_name,
+            &data,
+        ).await {
+            Ok((path, integrity)) => {
+                info!("Stored npm tarball: {} ({} bytes)", path.display(), data.len());
+                (path.to_string_lossy().to_string(), integrity)
+            }
+            Err(e) => {
+                error!("Failed to store tarball: {}", e);
+                return HttpResponse::InternalServerError().finish();
+            }
+        };
+
+        // 在数据库中创建包记录
+        if let Some(ref client) = state.registry_client {
+            // 获取第一个 dist-tag (通常是 latest)
+            let dist_tag = publish_req.dist_tags.keys().next()
+                .map(|s| s.as_str())
+                .unwrap_or("latest");
+
+            let create_req = crate::registry_client::CreateNpmPackageRequest {
+                project_id,
+                name: full_name.clone(),
+                version: version.clone(),
+                dist_tag: dist_tag.to_string(),
+                tarball_sha512: Some(integrity),
+                readme: None, // npm publish 请求中可能没有 readme
+                keywords: version_info.keywords.clone(),
+                license: version_info.license.clone(),
+                repository: version_info.repository.clone(),
+                dependencies: version_info.dependencies.clone(),
+                dev_dependencies: version_info.dev_dependencies.clone(),
+                peer_dependencies: version_info.peer_dependencies.clone(),
+                file_path,
+                file_size: data.len() as i64,
             };
 
-            // 存储 tarball
-            let (file_path, integrity) = match state.storage.store_npm_tarball(
-                Some(&scope),
-                &name,
-                version,
-                &tarball_name,
-                &data,
-            ).await {
-                Ok((path, integrity)) => {
-                    info!("Stored npm tarball: {} ({} bytes)", path.display(), data.len());
-                    (path.to_string_lossy().to_string(), integrity)
+            match client.create_npm_package(&create_req).await {
+                Ok(_pkg) => {
+                    info!("Created npm package record: {}@{}", full_name, version);
+                }
+                Err(crate::registry_client::RegistryApiError::Conflict) => {
+                    warn!("Package {}@{} already exists", full_name, version);
+                    return HttpResponse::Conflict()
+                        .json(NpmError::conflict(&format!("Version {} already exists", version)));
                 }
                 Err(e) => {
-                    error!("Failed to store tarball: {}", e);
+                    error!("Failed to create npm package record: {}", e);
                     return HttpResponse::InternalServerError().finish();
-                }
-            };
-
-            // 在数据库中创建包记录
-            if let Some(ref client) = state.registry_client {
-                // 获取第一个 dist-tag (通常是 latest)
-                let dist_tag = publish_req.dist_tags.keys().next()
-                    .map(|s| s.as_str())
-                    .unwrap_or("latest");
-
-                let create_req = crate::registry_client::CreateNpmPackageRequest {
-                    project_id,
-                    name: full_name.clone(),
-                    version: version.clone(),
-                    dist_tag: dist_tag.to_string(),
-                    tarball_sha512: Some(integrity),
-                    readme: None, // npm publish 请求中可能没有 readme
-                    keywords: version_info.keywords.clone(),
-                    license: version_info.license.clone(),
-                    repository: version_info.repository.clone(),
-                    dependencies: version_info.dependencies.clone(),
-                    dev_dependencies: version_info.dev_dependencies.clone(),
-                    peer_dependencies: version_info.peer_dependencies.clone(),
-                    file_path,
-                    file_size: data.len() as i64,
-                };
-
-                match client.create_npm_package(&create_req).await {
-                    Ok(_pkg) => {
-                        info!("Created npm package record: {}@{}", full_name, version);
-                    }
-                    Err(crate::registry_client::RegistryApiError::Conflict) => {
-                        warn!("Package {}@{} already exists", full_name, version);
-                        return HttpResponse::Conflict()
-                            .json(NpmError::conflict(&format!("Version {} already exists", version)));
-                    }
-                    Err(e) => {
-                        error!("Failed to create npm package record: {}", e);
-                        return HttpResponse::InternalServerError().finish();
-                    }
                 }
             }
         }
@@ -287,7 +378,189 @@ pub async fn handle_package_publish_scoped(
             
             if let Err(e) = client.update_npm_dist_tag(project_id, &full_name, tag, version).await {
                 error!("Failed to update dist-tag {}: {}", tag, e);
-                // 继续处理其他 dist-tags，不中断
+                return HttpResponse::InternalServerError()
+                    .json(NpmError::internal_error("Failed to update dist-tag, package record may be incomplete"));
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(NpmPublishResponse {
+        ok: true,
+        id: Some(full_name),
+        rev: Some("1-0".to_string()),
+    })
+}
+
+/// PUT /npm/{package} - 发布包（处理 URL 编码的包名，如 @scope%2fname）
+///
+/// npm workspace 项目会将包名中的 / 编码为 %2f，导致整个包名成为单个路径段。
+/// 此 handler 解析这种格式并调用标准发布逻辑。
+pub async fn handle_package_publish_encoded(
+    req: HttpRequest,
+    path: web::Path<String>,
+    body: web::Bytes,
+    state: web::Data<NpmRegistryState>,
+) -> HttpResponse {
+    let encoded_name = path.into_inner();
+    
+    // URL 解码
+    let decoded_name = match urlencoding::decode(&encoded_name) {
+        Ok(d) => d.into_owned(),
+        Err(_) => encoded_name.clone(),
+    };
+    
+    debug!("npm package PUBLISH (encoded): {} -> {}", encoded_name, decoded_name);
+    
+    // 解析 scoped 包名：@scope/name
+    if !decoded_name.starts_with('@') {
+        return HttpResponse::build(StatusCode::BAD_REQUEST)
+            .json(NpmError::bad_request("GitFox npm registry requires scoped packages (@namespace/name)"));
+    }
+    
+    let without_at = &decoded_name[1..];
+    let parts: Vec<&str> = without_at.splitn(2, '/').collect();
+    if parts.len() != 2 {
+        return HttpResponse::build(StatusCode::BAD_REQUEST)
+            .json(NpmError::bad_request("Invalid scoped package name format, expected @scope/name"));
+    }
+    
+    let scope = parts[0].to_string();
+    let name = parts[1].to_string();
+    let full_name = format!("@{}/{}", scope, name);
+    
+    debug!("Parsed scoped package: scope={}, name={}", scope, name);
+    
+    // 解析请求体
+    let publish_req: NpmPublishRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Failed to parse npm publish request: {}", e);
+            return HttpResponse::build(StatusCode::BAD_REQUEST)
+                .json(NpmError::bad_request(&format!("Invalid request body: {}", e)));
+        }
+    };
+
+    // 验证包名匹配
+    if publish_req.name != full_name {
+        return HttpResponse::build(StatusCode::BAD_REQUEST)
+            .json(NpmError::bad_request(&format!(
+                "Package name in URL ({}) doesn't match body ({})",
+                full_name, publish_req.name
+            )));
+    }
+
+    // 解析项目ID - scope 对应 namespace，选择该 namespace 下的默认项目（最早创建的）
+    let project_id = if let Some(ref client) = state.registry_client {
+        match client.resolve_namespace_default_project(&scope).await {
+            Ok(resolved) => resolved.project_id,
+            Err(crate::registry_client::RegistryApiError::NotFound) => {
+                warn!("No project found for namespace: {}", scope);
+                return HttpResponse::build(StatusCode::NOT_FOUND)
+                    .json(NpmError::not_found(&format!("No project found for namespace @{}", scope)));
+            }
+            Err(e) => {
+                error!("Failed to resolve namespace: {}", e);
+                return HttpResponse::InternalServerError().finish();
+            }
+        }
+    } else {
+        error!("Registry client not initialized");
+        return HttpResponse::InternalServerError().finish();
+    };
+
+    // 处理每个版本
+    for (version, version_info) in &publish_req.versions {
+        debug!("Processing version: {}", version);
+
+        // npm attachment key 格式: @scope/name-version.tgz
+        // 例如 @gitfox/oa2-browser 版本 0.1.0 → @gitfox/oa2-browser-0.1.0.tgz
+        let tarball_name = format!("{}-{}.tgz", publish_req.name, version);
+        
+        let attachment = match publish_req.attachments.get(&tarball_name) {
+            Some(att) => att,
+            None => {
+                // 打印所有可用的 attachment keys 以帮助调试
+                let available_keys: Vec<&String> = publish_req.attachments.keys().collect();
+                error!("Attachment not found. Expected: {}, available: {:?}", tarball_name, available_keys);
+                return HttpResponse::build(StatusCode::BAD_REQUEST)
+                    .json(NpmError::bad_request(&format!("Missing attachment: {}", tarball_name)));
+            }
+        };
+        
+        let data = match base64::engine::general_purpose::STANDARD.decode(&attachment.data) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("Failed to decode tarball data: {}", e);
+                return HttpResponse::build(StatusCode::BAD_REQUEST)
+                    .json(NpmError::bad_request("Invalid tarball data"));
+            }
+        };
+
+        let (file_path, integrity) = match state.storage.store_npm_tarball(
+            Some(&scope),
+            &name,
+            version,
+            &tarball_name,
+            &data,
+        ).await {
+            Ok((path, integrity)) => {
+                info!("Stored npm tarball: {} ({} bytes)", path.display(), data.len());
+                (path.to_string_lossy().to_string(), integrity)
+            }
+            Err(e) => {
+                error!("Failed to store tarball: {}", e);
+                return HttpResponse::InternalServerError().finish();
+            }
+        };
+
+        if let Some(ref client) = state.registry_client {
+            let dist_tag = publish_req.dist_tags.keys().next()
+                .map(|s| s.as_str())
+                .unwrap_or("latest");
+
+            let create_req = crate::registry_client::CreateNpmPackageRequest {
+                project_id,
+                name: full_name.clone(),
+                version: version.clone(),
+                dist_tag: dist_tag.to_string(),
+                tarball_sha512: Some(integrity),
+                readme: None,
+                keywords: version_info.keywords.clone(),
+                license: version_info.license.clone(),
+                repository: version_info.repository.clone(),
+                dependencies: version_info.dependencies.clone(),
+                dev_dependencies: version_info.dev_dependencies.clone(),
+                peer_dependencies: version_info.peer_dependencies.clone(),
+                file_path,
+                file_size: data.len() as i64,
+            };
+
+            match client.create_npm_package(&create_req).await {
+                Ok(_pkg) => {
+                    info!("Created npm package record: {}@{}", full_name, version);
+                }
+                Err(crate::registry_client::RegistryApiError::Conflict) => {
+                    warn!("Package {}@{} already exists", full_name, version);
+                    return HttpResponse::Conflict()
+                        .json(NpmError::conflict(&format!("Version {} already exists", version)));
+                }
+                Err(e) => {
+                    error!("Failed to create npm package record: {}", e);
+                    return HttpResponse::InternalServerError().finish();
+                }
+            }
+        }
+    }
+
+    // 处理 dist-tags
+    if let Some(ref client) = state.registry_client {
+        for (tag, version) in &publish_req.dist_tags {
+            debug!("Setting dist-tag: {} -> {}", tag, version);
+            
+            if let Err(e) = client.update_npm_dist_tag(project_id, &full_name, tag, version).await {
+                error!("Failed to update dist-tag {}: {}", tag, e);
+                return HttpResponse::InternalServerError()
+                    .json(NpmError::internal_error("Failed to update dist-tag, package record may be incomplete"));
             }
         }
     }
@@ -353,16 +626,16 @@ pub async fn handle_tarball_delete_scoped(
         .and_then(|s| s.strip_suffix(".tgz"))
         .unwrap_or("unknown");
 
-    // 解析项目ID
+    // 解析项目ID - scope 对应 namespace
     let project_id = if let Some(ref client) = state.registry_client {
-        match client.resolve_project(&scope, &name).await {
+        match client.resolve_namespace_default_project(&scope).await {
             Ok(resolved) => resolved.project_id,
             Err(crate::registry_client::RegistryApiError::NotFound) => {
                 return HttpResponse::build(StatusCode::NOT_FOUND)
-                    .json(NpmError::not_found(&format!("Project not found for @{}/{}", scope, name)));
+                    .json(NpmError::not_found(&format!("No project found for namespace @{}", scope)));
             }
             Err(e) => {
-                error!("Failed to resolve project: {}", e);
+                error!("Failed to resolve namespace: {}", e);
                 return HttpResponse::InternalServerError().finish();
             }
         }
@@ -412,16 +685,16 @@ pub async fn handle_dist_tags_get(
     let full_name = format!("@{}/{}", scope, name);
     debug!("npm dist-tags GET: @{}/{}", scope, name);
 
-    // 解析项目ID
+    // 解析项目ID - scope 对应 namespace
     let project_id = if let Some(ref client) = state.registry_client {
-        match client.resolve_project(&scope, &name).await {
+        match client.resolve_namespace_default_project(&scope).await {
             Ok(resolved) => resolved.project_id,
             Err(crate::registry_client::RegistryApiError::NotFound) => {
                 return HttpResponse::build(StatusCode::NOT_FOUND)
-                    .json(NpmError::not_found(&format!("Project not found for @{}/{}", scope, name)));
+                    .json(NpmError::not_found(&format!("No project found for namespace @{}", scope)));
             }
             Err(e) => {
-                error!("Failed to resolve project: {}", e);
+                error!("Failed to resolve namespace: {}", e);
                 return HttpResponse::InternalServerError().finish();
             }
         }
@@ -472,16 +745,16 @@ pub async fn handle_dist_tag_put(
         }
     };
 
-    // 解析项目ID
+    // 解析项目ID - scope 对应 namespace
     let project_id = if let Some(ref client) = state.registry_client {
-        match client.resolve_project(&scope, &name).await {
+        match client.resolve_namespace_default_project(&scope).await {
             Ok(resolved) => resolved.project_id,
             Err(crate::registry_client::RegistryApiError::NotFound) => {
                 return HttpResponse::build(StatusCode::NOT_FOUND)
-                    .json(NpmError::not_found(&format!("Project not found for @{}/{}", scope, name)));
+                    .json(NpmError::not_found(&format!("No project found for namespace @{}", scope)));
             }
             Err(e) => {
-                error!("Failed to resolve project: {}", e);
+                error!("Failed to resolve namespace: {}", e);
                 return HttpResponse::InternalServerError().finish();
             }
         }
@@ -518,16 +791,16 @@ pub async fn handle_dist_tag_delete(
             .json(NpmError::bad_request("Cannot delete 'latest' tag"));
     }
 
-    // 解析项目ID
+    // 解析项目ID - scope 对应 namespace
     let project_id = if let Some(ref client) = state.registry_client {
-        match client.resolve_project(&scope, &name).await {
+        match client.resolve_namespace_default_project(&scope).await {
             Ok(resolved) => resolved.project_id,
             Err(crate::registry_client::RegistryApiError::NotFound) => {
                 return HttpResponse::build(StatusCode::NOT_FOUND)
-                    .json(NpmError::not_found(&format!("Project not found for @{}/{}", scope, name)));
+                    .json(NpmError::not_found(&format!("No project found for namespace @{}", scope)));
             }
             Err(e) => {
-                error!("Failed to resolve project: {}", e);
+                error!("Failed to resolve namespace: {}", e);
                 return HttpResponse::InternalServerError().finish();
             }
         }

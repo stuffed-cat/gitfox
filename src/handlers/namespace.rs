@@ -36,7 +36,7 @@ pub async fn resolve_path(
             SELECT EXISTS(
                 SELECT 1 FROM projects p
                 JOIN namespaces n ON n.id = p.namespace_id
-                WHERE n.path = $1 AND p.name = $2
+                WHERE n.path = $1 AND p.name = $2 AND p.is_registry_shadow = FALSE
             )
             "#
         )
@@ -502,7 +502,7 @@ pub async fn list_group_projects(
         JOIN namespaces n ON p.namespace_id = n.id
         LEFT JOIN projects fp ON p.forked_from_id = fp.id
         LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
-        WHERE p.namespace_id = $1 
+        WHERE p.namespace_id = $1 AND p.is_registry_shadow = FALSE
         ORDER BY p.name
         "#
     )

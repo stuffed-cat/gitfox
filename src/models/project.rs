@@ -19,6 +19,7 @@ pub struct Project {
     pub pipelines_enabled: bool,
     pub packages_enabled: bool,
     pub wiki_enabled: bool,
+    pub is_registry_shadow: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

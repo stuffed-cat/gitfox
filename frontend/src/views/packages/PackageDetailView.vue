@@ -309,7 +309,15 @@ const projectName = computed(() => {
   return route.params.project as string
 })
 const packageType = computed(() => route.params.packageType as string)
-const packageName = computed(() => route.params.packageName as string)
+const packageName = computed(() => {
+  const name = route.params.packageName as string
+  // 确保 URL 编码的包名被正确解码（如 %40gitfox%2Foa2-server → @gitfox/oa2-server）
+  try {
+    return decodeURIComponent(name)
+  } catch {
+    return name
+  }
+})
 
 // 顶级命名空间（第一个 / 之前的部分，用于 Cargo registry）
 // 例如：gitfox/sdk/oa2 → gitfox
@@ -353,7 +361,8 @@ const fullImageName = computed(() => {
 // 完整包名（npm）
 const fullPackageName = computed(() => {
   if (!pkg.value || pkg.value.package_type !== 'npm') return ''
-  return `@${namespace.value}/${pkg.value.name}@${pkg.value.version}`
+  // pkg.name 已经是完整的包名（如 @gitfox/oa2-server）
+  return `${pkg.value.name}@${pkg.value.version}`
 })
 
 // 安装命令
@@ -389,11 +398,24 @@ async function loadPackage() {
     const type = packageType.value as PackageType
     
     if (type === 'npm') {
+      // NPM: packageName 已经是完整包名（如 @gitfox/oa2-server）
+      // 从包名中解析 scope 和 name
+      let scope = ''
+      let pkgName = packageName.value
+      
+      if (packageName.value.startsWith('@')) {
+        const parts = packageName.value.slice(1).split('/')
+        if (parts.length === 2) {
+          scope = parts[0]
+          pkgName = parts[1]
+        }
+      }
+      
       // NPM: 使用 npm registry 标准 API
       const npmPkg: NpmPackageInfo = await api.registry.getNpmPackage(
         registryDomainValue,
-        namespace.value,
-        packageName.value
+        scope,
+        pkgName
       )
       
       // 获取最新版本

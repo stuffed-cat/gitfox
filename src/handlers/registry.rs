@@ -1242,6 +1242,105 @@ pub struct ListPackagesQuery {
 }
 
 /// 解析项目路径获取 project_id
+/// GET /api/internal/registry/resolve-namespace/{namespace}
+/// 
+/// 解析 namespace 到 registry 影子项目，用于 npm/cargo/docker registry
+/// 影子项目是自动创建的隐藏项目，不会与用户创建的 registry 项目冲突
+pub async fn resolve_namespace_default_project(
+    req: HttpRequest,
+    pool: web::Data<PgPool>,
+    config: web::Data<Config>,
+    path: web::Path<String>,
+) -> AppResult<HttpResponse> {
+    verify_internal_token(&req, &config)?;
+
+    let namespace = path.into_inner();
+
+    // 1. 查找 namespace
+    let ns = sqlx::query_as::<_, (i64,)>(
+        "SELECT id FROM namespaces WHERE path = $1"
+    )
+    .bind(&namespace)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("Namespace {} not found", namespace)))?;
+
+    let namespace_id = ns.0;
+
+    // 2. 查找 registry 影子项目（is_registry_shadow = true）
+    let shadow_project = sqlx::query_as::<_, (i64, String)>(
+        r#"
+        SELECT id::BIGINT AS id, name
+        FROM projects
+        WHERE namespace_id = $1 AND is_registry_shadow = TRUE
+        LIMIT 1
+        "#
+    )
+    .bind(namespace_id)
+    .fetch_optional(pool.get_ref())
+    .await?;
+
+    if let Some((project_id, project_name)) = shadow_project {
+        // 影子项目已存在
+        return Ok(HttpResponse::Ok().json(serde_json::json!({
+            "project_id": project_id,
+            "project_name": project_name,
+            "namespace": namespace,
+        })));
+    }
+
+    // 3. 影子项目不存在，自动创建
+    // 需要找到一个有效的 owner_id：优先使用 namespace owner，其次使用 group member，最后使用 admin
+    let owner_id: Option<i64> = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(
+            ns.owner_id,
+            (SELECT user_id FROM group_members gm 
+             JOIN groups g ON g.id = gm.group_id 
+             WHERE g.namespace_id = ns.id 
+             LIMIT 1),
+            (SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1)
+        )
+        FROM namespaces ns
+        WHERE ns.id = $1
+        "#
+    )
+    .bind(namespace_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    let owner_id = owner_id.ok_or_else(|| {
+        AppError::InternalError(format!(
+            "Cannot create registry shadow project for namespace {}: no valid owner found", 
+            namespace
+        ))
+    })?;
+
+    let created_project = sqlx::query_as::<_, (i64, String)>(
+        r#"
+        INSERT INTO projects 
+            (namespace_id, name, description, visibility, owner_id, is_registry_shadow, 
+             archived, issues_enabled, merge_requests_enabled, pipelines_enabled, 
+             packages_enabled, wiki_enabled, created_at, updated_at)
+        VALUES ($1, 'registry', 'Package registry storage (auto-generated)', 'private', $2, TRUE,
+                FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, NOW(), NOW())
+        RETURNING id::BIGINT AS id, name
+        "#
+    )
+    .bind(namespace_id)
+    .bind(owner_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    info!("Created registry shadow project {} for namespace {}", created_project.0, namespace);
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "project_id": created_project.0,
+        "project_name": created_project.1,
+        "namespace": namespace,
+    })))
+}
+
 /// GET /api/internal/registry/resolve-project/{namespace}/{project}
 pub async fn resolve_project(
     req: HttpRequest,
@@ -2796,6 +2895,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/cargo/crate/{namespace}/{name}", web::get().to(get_cargo_crate_info))
             // 通用
             .route("/packages/{project_id}", web::get().to(list_project_packages))
+            .route("/resolve-namespace/{namespace}", web::get().to(resolve_namespace_default_project))
             .route("/resolve-project/{namespace}/{project}", web::get().to(resolve_project))
     );
 }

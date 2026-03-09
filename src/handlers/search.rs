@@ -143,6 +143,7 @@ pub async fn search(
             LEFT JOIN namespaces fn ON fp.namespace_id = fn.id
             WHERE (p.visibility = 'public' OR p.visibility = 'internal')
               AND (p.name ILIKE $1 OR p.description ILIKE $1)
+              AND p.is_registry_shadow = FALSE
             ORDER BY 
               CASE WHEN p.name ILIKE $1 THEN 1 ELSE 2 END,
               p.updated_at DESC

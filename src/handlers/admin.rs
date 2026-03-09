@@ -77,7 +77,7 @@ pub async fn dashboard(
     .fetch_one(pool.get_ref())
     .await?;
 
-    let total_projects = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects")
+    let total_projects = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects WHERE is_registry_shadow = FALSE")
         .fetch_one(pool.get_ref())
         .await?;
 
@@ -152,7 +152,7 @@ pub async fn list_users(
     let list_sql = format!(
         r#"SELECT u.id, u.username, u.email, u.display_name, u.avatar_url, 
                   u.role, u.is_active, u.created_at, u.updated_at, u.is_pro,
-                  COALESCE((SELECT COUNT(*) FROM projects p WHERE p.owner_id = u.id), 0) as projects_count
+                  COALESCE((SELECT COUNT(*) FROM projects p WHERE p.owner_id = u.id AND p.is_registry_shadow = FALSE), 0) as projects_count
            FROM users u {}
            ORDER BY u.created_at DESC
            LIMIT {} OFFSET {}"#,
@@ -271,7 +271,7 @@ pub async fn get_user(
     let user = sqlx::query_as::<_, AdminUserInfoRow>(
         r#"SELECT u.id, u.username, u.email, u.display_name, u.avatar_url, 
                   u.role, u.is_active, u.created_at, u.updated_at, u.is_pro,
-                  COALESCE((SELECT COUNT(*) FROM projects p WHERE p.owner_id = u.id), 0) as projects_count
+                  COALESCE((SELECT COUNT(*) FROM projects p WHERE p.owner_id = u.id AND p.is_registry_shadow = FALSE), 0) as projects_count
            FROM users u WHERE u.id = $1"#
     )
     .bind(user_id)

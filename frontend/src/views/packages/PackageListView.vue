@@ -115,7 +115,7 @@
         <div class="col-info">
           <div class="package-name">
             <router-link
-              :to="`${route.path}/${pkg.package_type}/${pkg.name}`"
+              :to="`${route.path}/${pkg.package_type}/${encodeURIComponent(pkg.name)}`"
               class="name-link"
               @click.stop
             >
@@ -402,7 +402,7 @@ async function loadPackages() {
               .map((obj, idx) => ({
                 id: idx + 10000, // 临时 ID
                 project_id: props.project?.id || 0,
-                name: obj.package.name.replace(`@${obj.package.scope}/`, ''),
+                name: obj.package.name, // 保留完整包名（如 @gitfox/oa2-server）
                 version: obj.package.version,
                 package_type: 'npm' as PackageType,
                 status: 'default' as const,
@@ -480,7 +480,7 @@ function debouncedSearch() {
 
 // 跳转到包详情
 function goToPackage(pkg: Package) {
-  router.push(`${route.path}/${pkg.package_type}/${pkg.name}`)
+  router.push(`${route.path}/${pkg.package_type}/${encodeURIComponent(pkg.name)}`)
 }
 
 // 复制安装命令
