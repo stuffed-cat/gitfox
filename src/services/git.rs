@@ -80,6 +80,35 @@ impl GitService {
         Ok(())
     }
 
+    /// 删除一个仓库
+    pub async fn delete_repository(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+    ) -> AppResult<()> {
+        let addr = get_gitlayer_address(config);
+        let mut client = RepositoryServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::DeleteRepositoryRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+        };
+
+        let response = client
+            .delete_repository(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to delete repository: {}", e)))?;
+
+        if !response.into_inner().success {
+            return Err(AppError::InternalError(
+                "Failed to delete repository".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Fork a repository by cloning it to a new location
     pub async fn fork_repository(
         config: &AppConfig,

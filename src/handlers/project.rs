@@ -153,6 +153,10 @@ pub async fn delete_project(
         return Err(AppError::Forbidden("Only the project owner can delete this project".to_string()));
     }
     
+    // 先删除 git 仓库
+    GitService::delete_repository(config.get_ref(), &project.owner_name, &project.name).await?;
+    
+    // 然后删除数据库记录
     ProjectService::delete_project(pool.get_ref(), project.id).await?;
     Ok(HttpResponse::NoContent().finish())
 }
