@@ -136,7 +136,12 @@ const inviteForm = ref({
 })
 
 const groupPath = computed(() => {
-  const ns = route.params.namespace
+  // 优先使用 route.meta.fullPath（由 beforeEach 设置）
+  if (route.meta.fullPath) {
+    return route.meta.fullPath as string
+  }
+  // fallback 到 pathSegments 或 namespace 参数
+  const ns = route.params.pathSegments || route.params.namespace
   return Array.isArray(ns) ? ns.join('/') : ns as string
 })
 

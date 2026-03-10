@@ -232,20 +232,7 @@ const routes = [
 
   // User/Group profile (single segment path - handles both users and groups)
   // 注意：这个路由被 /:pathSegments+ 替代，单段路径也由它处理
-
-  // Group sub-pages (supports multi-segment namespace like gitfox/mirror)
-  {
-    path: '/:namespace+/-/members',
-    name: 'GroupMembers',
-    component: () => import('@/views/groups/GroupMembersView.vue'),
-    meta: { requiresAuth: true, contextType: 'group' }
-  },
-  {
-    path: '/:namespace+/-/settings',
-    name: 'GroupSettings',
-    component: () => import('@/views/groups/GroupSettingsView.vue'),
-    meta: { requiresAuth: true, contextType: 'group' }
-  },
+  // Group 和 Project 的 settings/members 都由 DynamicSettingsView/DynamicMembersView 动态处理
 
   // Project routes (must be LAST - catches any path with 2+ segments)
   // 支持多段路径，如 gitfox/mirror/project（子组群下的项目）
@@ -385,9 +372,15 @@ const routes = [
         meta: { requiresAuth: false }
       },
       {
+        path: '-/members',
+        name: 'DynamicMembers',
+        component: () => import('@/views/DynamicMembersView.vue'),
+        meta: { requiresAuth: true }
+      },
+      {
         path: '-/settings',
-        name: 'ProjectSettings',
-        component: () => import('@/views/projects/settings/ProjectGeneralSettingsView.vue'),
+        name: 'DynamicSettings',
+        component: () => import('@/views/DynamicSettingsView.vue'),
         meta: { requiresAuth: true }
       },
       {
