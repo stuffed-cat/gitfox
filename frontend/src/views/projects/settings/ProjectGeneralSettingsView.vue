@@ -136,19 +136,20 @@
       <section class="settings-section">
         <h3>高级设置</h3>
         
-        <div class="form-group">
-          <label for="default_branch">默认分支</label>
-          <select id="default_branch" v-model="advancedForm.default_branch" class="form-control" @change="saveAdvanced">
-            <option v-for="branch in branches" :key="branch.name" :value="branch.name">
-              {{ branch.name }}
-            </option>
-          </select>
-          <p class="form-help">默认分支是合并请求和代码浏览的默认目标</p>
-        </div>
-      </section>
-      
-      <!-- 危险区域 -->
-      <section class="settings-section danger-zone">
+          <form @submit.prevent="saveAdvanced" class="settings-form">
+            <div class="form-group">
+              <label for="default_branch">默认分支</label>
+              <select id="default_branch" v-model="advancedForm.default_branch" class="form-control">
+                <option v-for="branch in branches" :key="branch.name" :value="branch.name">
+                  {{ branch.name }}
+                </option>
+              </select>
+              <p class="form-help">默认分支是合并请求和代码浏览的默认目标</p>
+            </div>
+            <button type="submit" class="btn btn-primary" :disabled="saving">
+              {{ saving ? '保存中...' : '保存更改' }}
+            </button>
+          </form>
         <h3>危险操作</h3>
         <p class="section-description">这些操作可能造成不可逆的影响，请谨慎操作</p>
         
@@ -331,14 +332,18 @@ async function saveFeatures() {
 
 async function saveAdvanced() {
   if (!projectPath.value) return
+  saving.value = true
   
   try {
     await api.projects.update(projectPath.value, {
       default_branch: advancedForm.default_branch
     })
+    alert('保存成功')
   } catch (error) {
     console.error('Failed to save advanced settings:', error)
     alert('保存高级设置失败')
+  } finally {
+    saving.value = false
   }
 }
 

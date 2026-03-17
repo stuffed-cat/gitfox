@@ -126,7 +126,24 @@ pub async fn update_project(
         return Err(AppError::Forbidden("You don't have permission to update this project".to_string()));
     }
     
-    let updated = ProjectService::update_project(pool.get_ref(), project.id, body.into_inner()).await?;
+    let body_inner = body.into_inner();
+    let new_default_branch = body_inner.default_branch.clone();
+
+    let updated = ProjectService::update_project(pool.get_ref(), project.id, body_inner).await?;
+
+    if let Some(branch) = new_default_branch {
+        if branch != project.default_branch {
+            let namespace = path.namespace.clone();
+            let project_name = path.project.clone();
+            let _ = GitService::set_default_branch(
+                config.get_ref(),
+                &namespace,
+                &project_name,
+                &branch,
+            ).await;
+        }
+    }
+
     Ok(HttpResponse::Ok().json(updated))
 }
 

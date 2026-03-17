@@ -109,6 +109,37 @@ impl GitService {
         Ok(())
     }
 
+    /// Set default branch (HEAD) for a repository
+    pub async fn set_default_branch(
+        config: &AppConfig,
+        owner_name: &str,
+        project_name: &str,
+        branch: &str,
+    ) -> AppResult<()> {
+        let addr = get_gitlayer_address(config);
+        let mut client = RepositoryServiceClient::connect(addr)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to connect to GitLayer: {}", e)))?;
+
+        let request = gitlayer::SetHeadRequest {
+            repository: Some(make_repository(config, owner_name, project_name)),
+            branch: branch.to_string(),
+        };
+
+        let response = client
+            .set_head(request)
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to set default branch: {}", e)))?;
+
+        if !response.into_inner().success {
+            return Err(AppError::InternalError(
+                "Failed to set default branch".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Fork a repository by cloning it to a new location
     pub async fn fork_repository(
         config: &AppConfig,

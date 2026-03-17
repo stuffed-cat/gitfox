@@ -15,19 +15,19 @@
         <h3>默认分支</h3>
         <p class="section-description">默认分支是合并请求和代码浏览的默认目标</p>
         
-        <div class="form-group">
-          <select v-model="defaultBranch" class="form-control" @change="setDefaultBranch">
-            <option v-for="branch in branches" :key="branch.name" :value="branch.name">
-              {{ branch.name }}
-              <template v-if="branch.is_default"> (当前默认)</template>
-            </option>
-          </select>
-        </div>
-      </section>
-
-      <!-- 分支保护规则 -->
-      <section class="settings-section">
-        <h3>分支保护规则</h3>
+          <form @submit.prevent="setDefaultBranch" class="settings-form">
+            <div class="form-group">
+              <select v-model="defaultBranch" class="form-control">
+                <option v-for="branch in branches" :key="branch.name" :value="branch.name">
+                  {{ branch.name }}
+                  <template v-if="branch.is_default"> (当前默认)</template>
+                </option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary" :disabled="savingBranch">
+              {{ savingBranch ? '保存中...' : '保存更改' }}
+            </button>
+          </form>
         <p class="section-description">保护重要分支免受意外删除或强制推送</p>
         
         <button class="btn btn-primary mb-3" @click="openAddProtectionModal">
@@ -311,6 +311,7 @@ const props = defineProps<{
 }>()
 
 const loading = ref(false)
+const savingBranch = ref(false)
 const branches = ref<BranchInfo[]>([])
 const defaultBranch = ref('main')
 const gcRunning = ref(false)
@@ -384,6 +385,7 @@ async function loadSettings() {
 
 async function setDefaultBranch() {
   if (!projectPath.value) return
+  savingBranch.value = true
   
   try {
     await api.projects.update(projectPath.value, {
@@ -393,6 +395,8 @@ async function setDefaultBranch() {
   } catch (error) {
     console.error('Failed to set default branch:', error)
     alert('设置默认分支失败')
+  } finally {
+    savingBranch.value = false
   }
 }
 
